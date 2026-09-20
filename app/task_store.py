@@ -1,3 +1,5 @@
+"""诊断任务和证据的 PostgreSQL 持久化操作。"""
+
 import json
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -42,6 +44,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_evidence (
 
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
+    """创建数据库连接池，并确保任务和证据表存在。"""
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
@@ -50,6 +53,7 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
 
 
 def _decode_task(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
+    """将 asyncpg 记录转换为可 JSON 序列化的任务字典。"""
     if row is None:
         return None
     task = dict(row)
@@ -70,6 +74,7 @@ async def insert_task(
     environment: str,
     created_by: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """插入一条排队状态的诊断任务记录。"""
     row = await pool.fetchrow(
         """
         INSERT INTO diagnostic_tasks
@@ -87,6 +92,7 @@ async def insert_task(
 
 
 async def get_task(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str, Any]]:
+    """根据任务 ID 查询任务，不存在时返回 None。"""
     row = await pool.fetchrow("SELECT * FROM diagnostic_tasks WHERE id = $1", task_id)
     return _decode_task(row)
 
@@ -101,6 +107,7 @@ async def update_task(
     result: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    """按需更新任务状态、进度、结果或错误信息。"""
     row = await pool.fetchrow(
         """
         UPDATE diagnostic_tasks
@@ -124,6 +131,7 @@ async def update_task(
 
 
 async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str, Any]]:
+    """将未结束任务原子地标记为已取消。"""
     row = await pool.fetchrow(
         """
         UPDATE diagnostic_tasks
@@ -137,6 +145,7 @@ async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str,
 
 
 async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, Any]) -> None:
+    """保存一条诊断证据，并记录其来源工具和上下文。"""
     await pool.execute(
         """
         INSERT INTO diagnostic_evidence

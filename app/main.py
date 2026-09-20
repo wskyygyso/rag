@@ -1,3 +1,5 @@
+"""FastAPI 应用入口和生命周期管理。"""
+
 from contextlib import asynccontextmanager
 from typing import Dict
 
@@ -13,6 +15,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    """启动时创建数据库连接池，关闭时释放连接资源。"""
     try:
         application.state.db_pool = await create_pool(settings)
     except Exception:
@@ -31,9 +34,11 @@ app.include_router(diagnosis_router)
 
 @app.get("/health")
 async def health() -> Dict:
+    """返回 API、Redis 和 PostgreSQL 的健康状态。"""
     return await get_health(settings)
 
 
 @app.get("/")
 async def root() -> Dict[str, str]:
+    """返回服务名称和运行状态，用于快速确认 API 已启动。"""
     return {"name": settings.app_name, "status": "running"}

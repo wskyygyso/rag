@@ -1,3 +1,5 @@
+"""Celery Worker 和诊断任务执行流程。"""
+
 from celery import Celery
 
 from app.task_store import create_pool, get_task, insert_evidence, update_task
@@ -22,10 +24,12 @@ celery_app.conf.update(
 
 @celery_app.task(name="app.worker.healthcheck_task")
 def healthcheck_task() -> dict:
+    """返回 Worker 可消费任务的最小健康检查结果。"""
     return {"status": "ok"}
 
 
 async def _execute_diagnosis(task_id: str) -> None:
+    """执行单个诊断任务的状态推进、代码检索和证据持久化。"""
     pool = await create_pool(settings)
     try:
         await update_task(
@@ -125,6 +129,7 @@ async def _execute_diagnosis(task_id: str) -> None:
 
 @celery_app.task(bind=True, name="app.worker.run_diagnosis_task", max_retries=2)
 def run_diagnosis_task(self, task_id: str) -> dict:
+    """Celery 同步入口：运行异步诊断流程并返回任务摘要。"""
     import asyncio
 
     asyncio.run(_execute_diagnosis(task_id))

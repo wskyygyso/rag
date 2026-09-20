@@ -1,3 +1,5 @@
+"""代码检索工具的安全边界和基本行为测试。"""
+
 from pathlib import Path
 
 import pytest
@@ -6,6 +8,7 @@ from app.code_tools import CodeToolError, extract_search_queries, read_file, sea
 
 
 def test_search_code_and_read_file(tmp_path: Path) -> None:
+    """验证搜索结果包含准确的相对路径、行号和文件内容。"""
     project = tmp_path / "waky3"
     php_file = project / "php" / "action" / "Guild.php"
     php_file.parent.mkdir(parents=True)
@@ -21,6 +24,7 @@ def test_search_code_and_read_file(tmp_path: Path) -> None:
 
 
 def test_code_tools_reject_path_escape(tmp_path: Path) -> None:
+    """验证相对路径不能逃逸项目仓库目录。"""
     project = tmp_path / "waky3"
     project.mkdir()
     with pytest.raises(CodeToolError):
@@ -28,6 +32,7 @@ def test_code_tools_reject_path_escape(tmp_path: Path) -> None:
 
 
 def test_extract_search_queries_deduplicates_terms() -> None:
+    """验证问题关键词提取会保留顺序并去重。"""
     queries = extract_search_queries("waky3 公会邀请 BD_GUILD_JOIN_DAY_LIMIT 公会")
     assert queries[:3] == ["waky3", "公会邀请", "BD_GUILD_JOIN_DAY_LIMIT"]
     assert queries.count("公会邀请") == 1

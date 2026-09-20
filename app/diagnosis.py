@@ -1,3 +1,5 @@
+"""诊断任务 HTTP 接口和 SSE 进度流。"""
+
 import asyncio
 import json
 import uuid
@@ -13,6 +15,8 @@ router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
 
 
 class CreateDiagnosisRequest(BaseModel):
+    """创建诊断任务时的请求参数模型。"""
+
     question: str = Field(min_length=1, max_length=10000)
     project: str = Field(min_length=1, max_length=100)
     environment: str = Field(default="development", max_length=100)
@@ -20,6 +24,7 @@ class CreateDiagnosisRequest(BaseModel):
 
 
 def _task_response(task: Dict) -> Dict:
+    """把数据库任务记录转换为稳定的 API 响应结构。"""
     return {
         "task_id": task["id"],
         "project": task["project"],
@@ -36,6 +41,7 @@ def _task_response(task: Dict) -> Dict:
 
 
 def _pool(request: Request):
+    """获取应用数据库连接池；依赖不可用时返回明确的 503 错误。"""
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="数据库暂不可用")
@@ -44,6 +50,7 @@ def _pool(request: Request):
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) -> Dict:
+    """创建诊断任务并投递到 Celery 队列。"""
     task_id = f"diag_{uuid.uuid4().hex}"
     task = await insert_task(
         _pool(request),
@@ -61,6 +68,7 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
 
 @router.get("/{task_id}")
 async def get_diagnosis(task_id: str, request: Request) -> Dict:
+    """按任务 ID 查询诊断状态、进度和结果。"""
     task = await get_task(_pool(request), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="诊断任务不存在")
@@ -69,6 +77,7 @@ async def get_diagnosis(task_id: str, request: Request) -> Dict:
 
 @router.post("/{task_id}/cancel")
 async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
+    """取消尚未结束的诊断任务。"""
     task = await mark_cancelled(_pool(request), task_id)
     if task is None:
         existing = await get_task(_pool(request), task_id)
@@ -79,6 +88,7 @@ async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
 
 
 async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
+    """轮询任务状态并生成 SSE 格式的进度事件。"""
     terminal_statuses = {"COMPLETED", "FAILED", "CANCELLED"}
     while True:
         if await request.is_disconnected():
@@ -96,6 +106,7 @@ async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
 
 @router.get("/{task_id}/events")
 async def diagnosis_events(task_id: str, request: Request) -> StreamingResponse:
+    """建立诊断任务的实时进度 SSE 响应。"""
     task = await get_task(_pool(request), task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="诊断任务不存在")

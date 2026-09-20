@@ -1,3 +1,9 @@
+"""受控代码检索工具。
+
+本模块只允许访问配置的项目仓库，并对项目标识、文件路径、文件大小、
+搜索结果数量和执行时间做限制，供 Agent 获取可审计的代码证据。
+"""
+
 import re
 import shutil
 import subprocess
@@ -6,11 +12,19 @@ from typing import Dict, Iterable, List, Optional
 
 
 class CodeToolError(ValueError):
-    """Raised when a code tool request is invalid or outside its allowlist."""
+    """代码工具请求非法或超出仓库白名单时抛出的业务异常。"""
 
 
 class CodeRepository:
+    """表示一个经过路径白名单校验的项目代码仓库。"""
+
     def __init__(self, root: str, project: str) -> None:
+        """校验项目标识并解析项目根目录。
+
+        Args:
+            root: 所有项目仓库的根目录。
+            project: 项目标识，对应根目录下的一级子目录。
+        """
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", project):
             raise CodeToolError("项目标识包含非法字符")
         base = Path(root).expanduser().resolve()
@@ -23,6 +37,7 @@ class CodeRepository:
         self.path = repository
 
     def safe_file(self, relative_path: str) -> Path:
+        """将项目内相对路径解析为安全文件路径并阻止路径穿越。"""
         candidate = (self.path / relative_path).resolve()
         if self.path not in candidate.parents and candidate != self.path:
             raise CodeToolError("文件路径超出项目目录")
@@ -39,6 +54,7 @@ def read_file(
     end_line: int = 200,
     max_bytes: int = 512_000,
 ) -> Dict:
+    """读取项目文件的指定行区间，并返回带行号的代码内容。"""
     if start_line < 1 or end_line < start_line or end_line - start_line > 1000:
         raise CodeToolError("行号范围无效，最多读取 1000 行")
     file_path = CodeRepository(root, project).safe_file(relative_path)
@@ -56,6 +72,7 @@ def read_file(
 
 
 def _iter_text_files(repository: Path, extensions: Iterable[str]) -> Iterable[Path]:
+    """遍历可检索的文本文件，跳过依赖、缓存和版本控制目录。"""
     allowed = set(extensions)
     ignored = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
     for path in repository.rglob("*"):
@@ -67,6 +84,7 @@ def _iter_text_files(repository: Path, extensions: Iterable[str]) -> Iterable[Pa
 
 
 def _python_search(repository: Path, query: str, max_results: int, extensions: List[str]) -> List[Dict]:
+    """在没有 ripgrep 时使用 Python 执行大小写不敏感的文本搜索。"""
     matches: List[Dict] = []
     for path in _iter_text_files(repository, extensions):
         try:
@@ -92,6 +110,7 @@ def search_code(
     max_results: int = 20,
     extensions: Optional[List[str]] = None,
 ) -> Dict:
+    """在项目仓库中搜索固定字符串并返回文件、行号和匹配内容。"""
     query = query.strip()
     if not query or len(query) > 200:
         raise CodeToolError("搜索关键词不能为空且不能超过 200 个字符")
@@ -135,6 +154,7 @@ def search_code(
 
 
 def extract_search_queries(question: str, max_queries: int = 8) -> List[str]:
+    """从用户问题提取中英文关键词，并按首次出现顺序去重。"""
     candidates = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", question)
     result: List[str] = []
     for candidate in candidates:
