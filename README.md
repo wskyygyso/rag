@@ -1,6 +1,6 @@
 # PHP 代码诊断 RAgent
 
-当前项目处于阶段 0：环境和项目初始化。
+当前项目已完成阶段 0 和阶段 1，正在推进阶段 2：代码检索 MVP。
 
 ## 本地启动
 
@@ -22,4 +22,19 @@ API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 
 ## 当前阶段说明
 
-本阶段只提供 API、Worker、Redis、PostgreSQL 和健康检查骨架，尚未实现诊断任务、代码搜索和 Agent 工具调用。
+当前已支持：
+
+- 创建、查询、取消诊断任务；
+- Celery/Redis 异步执行；
+- SSE 进度推送；
+- 代码关键词检索；
+- PHP/配置文件按行读取；
+- 代码仓库和目录白名单校验。
+
+当前的诊断报告仍是关键词检索报告，尚未接入 LLM、PHP AST 调用链分析、数据库验证和日志验证。
+
+代码仓库以只读方式挂载到 `repositories/<project>`，例如：
+
+```text
+repositories/waky3/php/action/BDCenterControl.php
+```

@@ -24,11 +24,28 @@ CREATE TABLE IF NOT EXISTS diagnostic_tasks (
 )
 """
 
+CREATE_EVIDENCE_SQL = """
+CREATE TABLE IF NOT EXISTS diagnostic_evidence (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(64) NOT NULL REFERENCES diagnostic_tasks(id) ON DELETE CASCADE,
+    evidence_type VARCHAR(30) NOT NULL,
+    project VARCHAR(100),
+    file_path TEXT,
+    line_start INT,
+    line_end INT,
+    query TEXT,
+    content TEXT,
+    source JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
+        await connection.execute(CREATE_EVIDENCE_SQL)
     return pool
 
 
@@ -117,3 +134,22 @@ async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str,
         task_id,
     )
     return _decode_task(row)
+
+
+async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, Any]) -> None:
+    await pool.execute(
+        """
+        INSERT INTO diagnostic_evidence
+            (task_id, evidence_type, project, file_path, line_start, line_end, query, content, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+        """,
+        task_id,
+        evidence.get("type", "code"),
+        evidence.get("project"),
+        evidence.get("file"),
+        evidence.get("line"),
+        evidence.get("end_line", evidence.get("line")),
+        evidence.get("query"),
+        evidence.get("content"),
+        json.dumps(evidence.get("source", {"tool": "search_code"}), ensure_ascii=False),
+    )
