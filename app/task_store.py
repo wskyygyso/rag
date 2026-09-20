@@ -42,6 +42,20 @@ CREATE TABLE IF NOT EXISTS diagnostic_evidence (
 )
 """
 
+CREATE_SYMBOLS_SQL = """
+CREATE TABLE IF NOT EXISTS code_symbols (
+    id BIGSERIAL PRIMARY KEY,
+    project VARCHAR(100) NOT NULL,
+    symbol_type VARCHAR(50) NOT NULL,
+    symbol_name VARCHAR(255) NOT NULL,
+    file_path TEXT NOT NULL,
+    line INT NOT NULL,
+    signature TEXT,
+    "references" JSONB,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
     """创建数据库连接池，并确保任务和证据表存在。"""
@@ -49,6 +63,7 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
         await connection.execute(CREATE_EVIDENCE_SQL)
+        await connection.execute(CREATE_SYMBOLS_SQL)
     return pool
 
 
