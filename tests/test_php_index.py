@@ -36,6 +36,7 @@ def test_index_repository_and_trace_call_chain(tmp_path: Path) -> None:
     assert len(indexed["symbols"]) == 3
     chain = trace_call_chain(str(tmp_path), "waky3", "GuildController::inviteGuild")
     assert chain["nodes"][0]["symbol_name"] == "GuildController::inviteGuild"
+    assert "GuildController::checkGuild" in {edge["to"] for edge in chain["edges"]}
 
 
 def test_symbol_tools_find_definitions_references_and_summary(tmp_path: Path) -> None:

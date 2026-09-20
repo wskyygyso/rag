@@ -38,6 +38,12 @@ def test_extract_search_queries_deduplicates_terms() -> None:
     assert queries.count("公会邀请") == 1
 
 
+def test_extract_search_queries_keeps_qualified_symbol() -> None:
+    """验证 Class::method 形式的 PHP 符号不会被拆成两个关键词。"""
+    queries = extract_search_queries("请检查 GuildController::inviteGuild 的调用链")
+    assert "GuildController::inviteGuild" in queries
+
+
 def test_php_repository_fixture_returns_real_context() -> None:
     """验证固定 PHP 仓库样例可以返回方法、配置和错误码所在行。"""
     root = Path(__file__).parent / "fixtures" / "php_repo"

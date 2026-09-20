@@ -28,6 +28,13 @@ def get_project_symbol_summary(root: str, project: str, limit: int = 100) -> Dic
     if limit < 1 or limit > 1000:
         raise ValueError("符号摘要数量必须在 1 到 1000 之间")
     index = index_repository(root, project)
+    return summarize_symbol_index(index, project, limit)
+
+
+def summarize_symbol_index(index: Dict[str, List[Dict]], project: str, limit: int = 100) -> Dict:
+    """从已有项目索引构建报告摘要，避免重复扫描项目代码。"""
+    if limit < 1 or limit > 1000:
+        raise ValueError("符号摘要数量必须在 1 到 1000 之间")
     return {
         "project": project,
         "symbols": index["symbols"][:limit],
@@ -37,4 +44,10 @@ def get_project_symbol_summary(root: str, project: str, limit: int = 100) -> Dic
     }
 
 
-__all__ = ["find_symbol", "find_references", "get_project_symbol_summary", "trace_call_chain"]
+__all__ = [
+    "find_symbol",
+    "find_references",
+    "get_project_symbol_summary",
+    "summarize_symbol_index",
+    "trace_call_chain",
+]

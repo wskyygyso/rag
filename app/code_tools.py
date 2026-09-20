@@ -164,8 +164,13 @@ def search_code(
 
 
 def extract_search_queries(question: str, max_queries: int = 8) -> List[str]:
-    """从用户问题提取中英文关键词，并按首次出现顺序去重。"""
-    candidates = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", question)
+    """从用户问题提取符号和中英文关键词，并按首次出现顺序去重。"""
+    candidates = re.findall(
+        r"[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*"
+        r"|[A-Za-z_][A-Za-z0-9_]{2,}"
+        r"|[\u4e00-\u9fff]{2,}",
+        question,
+    )
     result: List[str] = []
     for candidate in candidates:
         if candidate not in result:

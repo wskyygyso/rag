@@ -49,6 +49,14 @@ API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 - PHP/配置文件按行读取；
 - 代码仓库和目录白名单校验。
 
+代码分析只读接口：
+
+```text
+GET /api/code/{project}/symbols?name=Class::method
+GET /api/code/{project}/references?symbol=Class::method
+GET /api/code/{project}/call-chain?entry=Class::method&depth=5
+```
+
 当前的诊断报告仍是关键词检索报告，尚未接入 LLM、PHP AST 调用链分析、数据库验证和日志验证。
 
 代码仓库以只读方式挂载到 `repositories/<project>`，例如：

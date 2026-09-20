@@ -165,11 +165,24 @@ def trace_call_chain(
     if depth < 1 or depth > 10:
         raise ValueError("调用链深度必须在 1 到 10 之间")
     index = index_repository(root, project)
+    return trace_index_call_chain(index, entry, depth)
+
+
+def trace_index_call_chain(
+    index: Dict[str, List[Dict]],
+    entry: str,
+    depth: int = 5,
+) -> Dict[str, List[Dict]]:
+    """基于已有项目索引展开调用链，避免重复扫描 PHP 仓库。"""
+    if depth < 1 or depth > 10:
+        raise ValueError("调用链深度必须在 1 到 10 之间")
     symbols = {item["symbol_name"]: item for item in index["symbols"]}
-    edges = []
+    all_edges = []
     for reference in index["references"]:
-        edges.append({"from": reference.get("source"), "to": reference["target"], **reference})
+        all_edges.append({"from": reference.get("source"), "to": reference["target"], **reference})
     nodes: Dict[str, Dict] = {}
+    reached_edges: List[Dict] = []
+    seen_edges = set()
     queue = [(entry, 0)]
     while queue:
         current, current_depth = queue.pop(0)
@@ -178,7 +191,12 @@ def trace_call_chain(
         nodes[current] = {"symbol_name": current, **symbols.get(current, {})}
         if current_depth == depth:
             continue
-        for edge in edges:
+        for edge in all_edges:
             if edge["from"] == current and edge["to"] not in nodes:
                 queue.append((edge["to"], current_depth + 1))
-    return {"entry": entry, "nodes": list(nodes.values()), "edges": edges}
+            if edge["from"] == current:
+                edge_key = (edge["from"], edge["to"], edge["file"], edge["line"])
+                if edge_key not in seen_edges:
+                    seen_edges.add(edge_key)
+                    reached_edges.append(edge)
+    return {"entry": entry, "nodes": list(nodes.values()), "edges": reached_edges}

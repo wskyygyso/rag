@@ -3,9 +3,11 @@
 from celery import Celery
 
 from app.task_store import create_pool, get_task, insert_evidence, update_task
+from app.task_store import replace_symbol_index
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
-from app.symbol_tools import get_project_symbol_summary
+from app.php_index import index_repository, trace_index_call_chain
+from app.symbol_tools import summarize_symbol_index
 
 settings = get_settings()
 celery_app = Celery(
@@ -92,12 +94,17 @@ async def _execute_diagnosis(task_id: str) -> None:
             except CodeToolError as exc:
                 warnings.append(str(exc))
         symbol_summary = {"symbols": [], "references": [], "configs": [], "sql": []}
+        call_chains = []
         try:
-            symbol_summary = get_project_symbol_summary(
-                settings.code_repositories_root,
-                current["project"],
-                limit=100,
-            )
+            project_index = index_repository(settings.code_repositories_root, current["project"])
+            await replace_symbol_index(pool, current["project"], project_index)
+            symbol_summary = summarize_symbol_index(project_index, current["project"], limit=100)
+            symbol_names = {item["symbol_name"] for item in project_index["symbols"]}
+            call_chains = [
+                trace_index_call_chain(project_index, query, depth=5)
+                for query in queries
+                if query in symbol_names
+            ]
         except (CodeToolError, ValueError) as exc:
             warnings.append(str(exc))
         await update_task(
@@ -124,6 +131,7 @@ async def _execute_diagnosis(task_id: str) -> None:
                 "references": symbol_summary["references"],
                 "configs": symbol_summary["configs"],
                 "sql": symbol_summary["sql"],
+                "call_chains": call_chains,
                 "warnings": warnings,
             },
         )
