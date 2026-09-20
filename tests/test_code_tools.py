@@ -36,3 +36,12 @@ def test_extract_search_queries_deduplicates_terms() -> None:
     queries = extract_search_queries("waky3 公会邀请 BD_GUILD_JOIN_DAY_LIMIT 公会")
     assert queries[:3] == ["waky3", "公会邀请", "BD_GUILD_JOIN_DAY_LIMIT"]
     assert queries.count("公会邀请") == 1
+
+
+def test_php_repository_fixture_returns_real_context() -> None:
+    """验证固定 PHP 仓库样例可以返回方法、配置和错误码所在行。"""
+    root = Path(__file__).parent / "fixtures" / "php_repo"
+    result = search_code(str(root), "waky3", "BD_OP_FORBIDDEN")
+    assert result["total"] == 1
+    assert result["matches"][0]["file"] == "php/action/Guild.php"
+    assert result["matches"][0]["line"] == 8

@@ -121,6 +121,7 @@ def search_code(
     matches: List[Dict] = []
     rg = shutil.which("rg")
     if rg:
+        globs = [item if item.startswith("*") else f"*{item}" for item in extensions]
         command = [
             rg,
             "--line-number",
@@ -134,11 +135,20 @@ def search_code(
             "!vendor/**",
             "--glob",
             "!node_modules/**",
-            "-F",
-            query,
-            str(repository.path),
         ]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
+        for pattern in globs:
+            command.extend(["--glob", pattern])
+        command.extend(["-F", query, str(repository.path)])
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CodeToolError("代码搜索超时") from exc
         if completed.returncode not in (0, 1):
             raise CodeToolError(f"代码搜索失败: {completed.stderr.strip()}")
         for line in completed.stdout.splitlines()[:max_results]:
