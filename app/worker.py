@@ -5,6 +5,7 @@ from celery import Celery
 from app.task_store import create_pool, get_task, insert_evidence, update_task
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
+from app.symbol_tools import get_project_symbol_summary
 
 settings = get_settings()
 celery_app = Celery(
@@ -90,6 +91,15 @@ async def _execute_diagnosis(task_id: str) -> None:
                 })
             except CodeToolError as exc:
                 warnings.append(str(exc))
+        symbol_summary = {"symbols": [], "references": [], "configs": [], "sql": []}
+        try:
+            symbol_summary = get_project_symbol_summary(
+                settings.code_repositories_root,
+                current["project"],
+                limit=100,
+            )
+        except (CodeToolError, ValueError) as exc:
+            warnings.append(str(exc))
         await update_task(
             pool,
             task_id,
@@ -110,6 +120,10 @@ async def _execute_diagnosis(task_id: str) -> None:
                 "message": "已完成第一轮代码关键词检索。",
                 "queries": queries,
                 "evidence": deduplicated,
+                "symbols": symbol_summary["symbols"],
+                "references": symbol_summary["references"],
+                "configs": symbol_summary["configs"],
+                "sql": symbol_summary["sql"],
                 "warnings": warnings,
             },
         )

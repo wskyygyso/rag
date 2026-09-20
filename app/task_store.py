@@ -177,3 +177,35 @@ async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, 
         evidence.get("content"),
         json.dumps(evidence.get("source", {"tool": "search_code"}), ensure_ascii=False),
     )
+
+
+async def replace_symbol_index(
+    pool: asyncpg.Pool, project: str, index: Dict[str, Any]
+) -> int:
+    """原子替换项目符号索引，并返回写入的符号数量。"""
+    symbols = index.get("symbols", [])
+    references = index.get("references", [])
+    references_by_source: Dict[str, list] = {}
+    for reference in references:
+        source = reference.get("source")
+        if source:
+            references_by_source.setdefault(source, []).append(reference)
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute("DELETE FROM code_symbols WHERE project = $1", project)
+            for symbol in symbols:
+                await connection.execute(
+                    """
+                    INSERT INTO code_symbols
+                        (project, symbol_type, symbol_name, file_path, line, signature, "references")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                    """,
+                    project,
+                    symbol["symbol_type"],
+                    symbol["symbol_name"],
+                    symbol["file"],
+                    symbol["line"],
+                    symbol.get("signature"),
+                    json.dumps(references_by_source.get(symbol["symbol_name"], []), ensure_ascii=False),
+                )
+    return len(symbols)

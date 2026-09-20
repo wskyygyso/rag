@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from app.php_index import index_repository, parse_php_source, trace_call_chain
+from app.symbol_tools import find_references, find_symbol, get_project_symbol_summary
 
 
 SOURCE = """<?php
@@ -35,3 +36,16 @@ def test_index_repository_and_trace_call_chain(tmp_path: Path) -> None:
     assert len(indexed["symbols"]) == 3
     chain = trace_call_chain(str(tmp_path), "waky3", "GuildController::inviteGuild")
     assert chain["nodes"][0]["symbol_name"] == "GuildController::inviteGuild"
+
+
+def test_symbol_tools_find_definitions_references_and_summary(tmp_path: Path) -> None:
+    """验证符号定义、引用和项目摘要工具复用同一份索引。"""
+    project = tmp_path / "waky3" / "php"
+    project.mkdir(parents=True)
+    (project / "Guild.php").write_text(SOURCE, encoding="utf-8")
+    symbol = find_symbol(str(tmp_path), "waky3", "GuildController::checkGuild")
+    references = find_references(str(tmp_path), "waky3", "GuildController::checkGuild")
+    summary = get_project_symbol_summary(str(tmp_path), "waky3")
+    assert symbol["total"] == 1
+    assert references["total"] == 1
+    assert len(summary["symbols"]) == 3
