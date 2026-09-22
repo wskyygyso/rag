@@ -1,0 +1,79 @@
+"""数据库、配置和日志验证的只读 HTTP 接口。"""
+
+import logging
+from typing import Any, List, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from app.code_tools import CodeToolError
+from app.settings import get_settings
+from app.validation_tools import (
+    ValidationToolError,
+    query_database,
+    read_config,
+    search_logs,
+)
+
+router = APIRouter(prefix="/api/validation", tags=["validation"])
+settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+class DatabaseQueryRequest(BaseModel):
+    """只读数据库查询请求参数。"""
+
+    sql: str = Field(min_length=1, max_length=10000)
+    params: Optional[List[Any]] = Field(default=None, max_length=20)
+    max_rows: int = Field(default=100, ge=1, le=1000)
+
+
+class ConfigReadRequest(BaseModel):
+    """配置文件读取请求参数。"""
+
+    project: str = Field(min_length=1, max_length=100)
+    file: str = Field(min_length=1, max_length=500)
+
+
+class LogSearchRequest(BaseModel):
+    """日志关键词查询请求参数。"""
+
+    project: str = Field(min_length=1, max_length=100)
+    file: str = Field(min_length=1, max_length=500)
+    query: str = Field(min_length=1, max_length=200)
+    max_results: int = Field(default=100, ge=1, le=1000)
+
+
+@router.post("/database/query")
+async def database_query(payload: DatabaseQueryRequest) -> dict:
+    """执行只读 SQL，并记录查询审计摘要。"""
+    try:
+        result = await query_database(settings, payload.sql, payload.params, payload.max_rows)
+        logger.info("database_validation_query sql=%s rows=%s", result["sql"], result["total"])
+        return result
+    except ValidationToolError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/config/read")
+async def config_read(payload: ConfigReadRequest) -> dict:
+    """读取项目配置文件，返回已脱敏内容。"""
+    try:
+        return read_config(settings.code_repositories_root, payload.project, payload.file)
+    except (ValidationToolError, CodeToolError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/logs/search")
+async def logs_search(payload: LogSearchRequest) -> dict:
+    """检索项目日志关键词，返回已脱敏的匹配行。"""
+    try:
+        return search_logs(
+            settings.code_repositories_root,
+            payload.project,
+            payload.file,
+            payload.query,
+            payload.max_results,
+        )
+    except (ValidationToolError, CodeToolError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

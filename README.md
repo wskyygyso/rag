@@ -57,6 +57,16 @@ GET /api/code/{project}/references?symbol=Class::method
 GET /api/code/{project}/call-chain?entry=Class::method&depth=5
 ```
 
+只读验证接口：
+
+```text
+POST /api/validation/database/query
+POST /api/validation/config/read
+POST /api/validation/logs/search
+```
+
+数据库接口只允许 `SELECT` 或只读 `WITH` 查询，并限制参数数量、返回行数和查询时间；配置与日志响应会对常见 Token、密码和 Secret 做脱敏。
+
 建立 PHP 符号索引：
 
 ```bash

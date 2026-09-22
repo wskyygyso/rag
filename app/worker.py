@@ -95,6 +95,14 @@ async def _execute_diagnosis(task_id: str) -> None:
                 warnings.append(str(exc))
         symbol_summary = {"symbols": [], "references": [], "configs": [], "sql": []}
         call_chains = []
+        validation = {
+            "database": {
+                "status": "not_requested",
+                "message": "当前阶段仅提供只读验证工具，业务 SQL 由后续编排器按需生成。",
+            },
+            "configs": [],
+            "logs": [],
+        }
         try:
             project_index = index_repository(settings.code_repositories_root, current["project"])
             await replace_symbol_index(pool, current["project"], project_index)
@@ -132,6 +140,7 @@ async def _execute_diagnosis(task_id: str) -> None:
                 "configs": symbol_summary["configs"],
                 "sql": symbol_summary["sql"],
                 "call_chains": call_chains,
+                "validation": validation,
                 "warnings": warnings,
             },
         )
