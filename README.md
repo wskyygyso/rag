@@ -1,6 +1,6 @@
 # PHP 代码诊断 RAgent
 
-当前项目已完成阶段 0 和阶段 1，正在推进阶段 2：代码检索 MVP。
+当前项目已完成阶段 0 至阶段 3，正在推进阶段 4：数据库、配置和日志验证。
 
 ## 本地启动
 
@@ -64,6 +64,11 @@ POST /api/validation/database/query
 POST /api/validation/config/read
 POST /api/validation/logs/search
 ```
+
+验证接口支持可选 `task_id` 关联诊断任务。每次成功或失败操作都会写入
+`validation_audit` 审计表；审计仅保存文件名、行数、匹配数等摘要，并对敏感键值
+递归脱敏，不保存完整密码、Token、Cookie、SQL 参数或配置内容。审计写入失败不会
+覆盖原始验证结果。
 
 数据库接口只允许 `SELECT` 或只读 `WITH` 查询，并限制参数数量、返回行数和查询时间；配置与日志响应会对常见 Token、密码和 Secret 做脱敏。
 

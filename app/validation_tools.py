@@ -5,13 +5,13 @@ Worker 在代码分析之后验证候选原因。
 """
 
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import asyncpg
 
 from app.code_tools import CodeRepository, CodeToolError
 from app.settings import Settings
+from app.task_store import insert_validation_audit
 
 WRITE_SQL_PATTERN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|MERGE|CALL|COPY)\b",
@@ -24,6 +24,52 @@ SENSITIVE_PATTERN = re.compile(
 
 class ValidationToolError(ValueError):
     """验证工具参数非法、查询不安全或目标文件不可访问时的异常。"""
+
+
+async def record_validation_audit(
+    pool: asyncpg.Pool,
+    operation: str,
+    status: str,
+    *,
+    task_id: Optional[str] = None,
+    project: Optional[str] = None,
+    request_summary: Optional[Dict[str, Any]] = None,
+    result_summary: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """通过共享连接池写入验证审计记录，并在写入前递归脱敏摘要。"""
+    try:
+        await insert_validation_audit(
+            pool,
+            operation,
+            status,
+            task_id=task_id,
+            project=project,
+            request_summary=_redact_summary(request_summary or {}),
+            result_summary=_redact_summary(result_summary or {}),
+            error=redact_sensitive(error or ""),
+        )
+    except Exception:
+        # 审计系统故障不能掩盖原始诊断或验证结果。
+        return
+
+
+def _redact_summary(value: Any) -> Any:
+    """递归脱敏审计摘要，并限制长文本，避免意外写入密钥或大字段。"""
+    if isinstance(value, str):
+        return redact_sensitive(value)[:2000]
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if re.search(r"(?i)(password|passwd|token|secret|authorization|cookie)", key_text):
+                redacted[key_text] = "***"
+            else:
+                redacted[key_text] = _redact_summary(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_summary(item) for item in value[:100]]
+    return value
 
 
 def validate_readonly_sql(sql: str) -> str:

@@ -3,7 +3,7 @@
 import logging
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.code_tools import CodeToolError
@@ -11,6 +11,7 @@ from app.settings import get_settings
 from app.validation_tools import (
     ValidationToolError,
     query_database,
+    record_validation_audit,
     read_config,
     search_logs,
 )
@@ -26,6 +27,8 @@ class DatabaseQueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=10000)
     params: Optional[List[Any]] = Field(default=None, max_length=20)
     max_rows: int = Field(default=100, ge=1, le=1000)
+    task_id: Optional[str] = Field(default=None, max_length=64)
+    project: Optional[str] = Field(default=None, max_length=100)
 
 
 class ConfigReadRequest(BaseModel):
@@ -33,6 +36,7 @@ class ConfigReadRequest(BaseModel):
 
     project: str = Field(min_length=1, max_length=100)
     file: str = Field(min_length=1, max_length=500)
+    task_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class LogSearchRequest(BaseModel):
@@ -42,38 +46,122 @@ class LogSearchRequest(BaseModel):
     file: str = Field(min_length=1, max_length=500)
     query: str = Field(min_length=1, max_length=200)
     max_results: int = Field(default=100, ge=1, le=1000)
+    task_id: Optional[str] = Field(default=None, max_length=64)
+
+
+async def _audit(
+    request: Request,
+    operation: str,
+    status: str,
+    *,
+    task_id: Optional[str] = None,
+    project: Optional[str] = None,
+    request_summary: Optional[dict] = None,
+    result_summary: Optional[dict] = None,
+    error: Optional[str] = None,
+) -> None:
+    """向共享连接池写入审计；数据库不可用时跳过审计而不阻断验证接口。"""
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return
+    await record_validation_audit(
+        pool,
+        operation,
+        status,
+        task_id=task_id,
+        project=project,
+        request_summary=request_summary,
+        result_summary=result_summary,
+        error=error,
+    )
 
 
 @router.post("/database/query")
-async def database_query(payload: DatabaseQueryRequest) -> dict:
+async def database_query(payload: DatabaseQueryRequest, request: Request) -> dict:
     """执行只读 SQL，并记录查询审计摘要。"""
     try:
         result = await query_database(settings, payload.sql, payload.params, payload.max_rows)
+        await _audit(
+            request,
+            "database_query",
+            "SUCCESS",
+            task_id=payload.task_id,
+            project=payload.project,
+            request_summary={"max_rows": payload.max_rows, "param_count": len(payload.params or [])},
+            result_summary={"row_count": result["total"]},
+        )
         logger.info("database_validation_query sql=%s rows=%s", result["sql"], result["total"])
         return result
     except ValidationToolError as exc:
+        await _audit(
+            request,
+            "database_query",
+            "FAILED",
+            task_id=payload.task_id,
+            project=payload.project,
+            request_summary={"max_rows": payload.max_rows, "param_count": len(payload.params or [])},
+            error=str(exc),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/config/read")
-async def config_read(payload: ConfigReadRequest) -> dict:
+async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
     """读取项目配置文件，返回已脱敏内容。"""
     try:
-        return read_config(settings.code_repositories_root, payload.project, payload.file)
+        result = read_config(settings.code_repositories_root, payload.project, payload.file)
+        await _audit(
+            request,
+            "config_read",
+            "SUCCESS",
+            task_id=payload.task_id,
+            project=payload.project,
+            request_summary={"file": payload.file},
+            result_summary={"content_length": len(result["content"])},
+        )
+        return result
     except (ValidationToolError, CodeToolError) as exc:
+        await _audit(
+            request,
+            "config_read",
+            "FAILED",
+            task_id=payload.task_id,
+            project=payload.project,
+            request_summary={"file": payload.file},
+            error=str(exc),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/logs/search")
-async def logs_search(payload: LogSearchRequest) -> dict:
+async def logs_search(payload: LogSearchRequest, request: Request) -> dict:
     """检索项目日志关键词，返回已脱敏的匹配行。"""
     try:
-        return search_logs(
+        result = search_logs(
             settings.code_repositories_root,
             payload.project,
             payload.file,
             payload.query,
             payload.max_results,
         )
+        await _audit(
+            request,
+            "logs_search",
+            "SUCCESS",
+            task_id=payload.task_id,
+            project=payload.project,
+            request_summary={"file": payload.file, "max_results": payload.max_results},
+            result_summary={"match_count": len(result["matches"])},
+        )
+        return result
     except (ValidationToolError, CodeToolError) as exc:
+        await _audit(
+            request,
+            "logs_search",
+            "FAILED",
+            task_id=payload.task_id,
+            project=payload.project,
+            request_summary={"file": payload.file, "max_results": payload.max_results},
+            error=str(exc),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc

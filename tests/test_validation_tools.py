@@ -1,16 +1,30 @@
 """数据库、配置和日志验证工具测试。"""
 
+import json
+
 from pathlib import Path
 
 import pytest
 
 from app.validation_tools import (
     ValidationToolError,
+    record_validation_audit,
     read_config,
     redact_sensitive,
     search_logs,
     validate_readonly_sql,
 )
+
+
+class _AuditPool:
+    """捕获审计 SQL 参数的最小异步连接池替身。"""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def execute(self, query: str, *args: object) -> None:
+        """记录一次数据库写入调用，供审计脱敏测试断言。"""
+        self.calls.append((query, args))
 
 
 def test_validate_readonly_sql_rejects_writes_and_multiple_statements() -> None:
@@ -47,3 +61,22 @@ def test_validation_tools_reject_invalid_files_and_limits(tmp_path: Path) -> Non
         search_logs(str(tmp_path), "waky3", "missing.log", "error")
     with pytest.raises(ValidationToolError):
         validate_readonly_sql("")
+
+
+@pytest.mark.asyncio
+async def test_validation_audit_uses_shared_pool_and_redacts_summary() -> None:
+    """验证审计写入复用连接池，且不会保存密码和超长摘要。"""
+    pool = _AuditPool()
+    await record_validation_audit(
+        pool,
+        "config_read",
+        "SUCCESS",
+        task_id="diag_1",
+        project="waky3",
+        request_summary={"file": "config.ini", "password": "secret"},
+        result_summary={"content": "x" * 3000},
+    )
+    assert len(pool.calls) == 1
+    args = pool.calls[0][1]
+    assert "secret" not in str(args)
+    assert len(json.loads(args[5])["content"]) == 2000

@@ -56,6 +56,25 @@ CREATE TABLE IF NOT EXISTS code_symbols (
 )
 """
 
+CREATE_VALIDATION_AUDIT_SQL = """
+CREATE TABLE IF NOT EXISTS validation_audit (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(64),
+    operation VARCHAR(50) NOT NULL,
+    project VARCHAR(100),
+    status VARCHAR(20) NOT NULL,
+    request_summary JSONB,
+    result_summary JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+CREATE_VALIDATION_AUDIT_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_validation_audit_task_created
+    ON validation_audit (task_id, created_at DESC)
+"""
+
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
     """创建数据库连接池，并确保任务和证据表存在。"""
@@ -64,6 +83,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_TASKS_SQL)
         await connection.execute(CREATE_EVIDENCE_SQL)
         await connection.execute(CREATE_SYMBOLS_SQL)
+        await connection.execute(CREATE_VALIDATION_AUDIT_SQL)
+        await connection.execute(CREATE_VALIDATION_AUDIT_INDEX_SQL)
     return pool
 
 
@@ -209,3 +230,31 @@ async def replace_symbol_index(
                     json.dumps(references_by_source.get(symbol["symbol_name"], []), ensure_ascii=False),
                 )
     return len(symbols)
+
+
+async def insert_validation_audit(
+    pool: asyncpg.Pool,
+    operation: str,
+    status: str,
+    *,
+    task_id: Optional[str] = None,
+    project: Optional[str] = None,
+    request_summary: Optional[Dict[str, Any]] = None,
+    result_summary: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """写入一条验证工具审计记录，调用方应传入已脱敏摘要。"""
+    await pool.execute(
+        """
+        INSERT INTO validation_audit
+            (task_id, operation, project, status, request_summary, result_summary, error)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
+        """,
+        task_id,
+        operation,
+        project,
+        status,
+        json.dumps(request_summary or {}, ensure_ascii=False),
+        json.dumps(result_summary or {}, ensure_ascii=False),
+        error,
+    )
