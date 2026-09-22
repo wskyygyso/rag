@@ -70,7 +70,7 @@ POST /api/validation/logs/search
 递归脱敏，不保存完整密码、Token、Cookie、SQL 参数或配置内容。审计写入失败不会
 覆盖原始验证结果。
 
-数据库接口只允许 `SELECT` 或只读 `WITH` 查询，并限制参数数量、返回行数和查询时间；配置与日志响应会对常见 Token、密码和 Secret 做脱敏。
+数据库接口只允许 `SELECT` 或只读 `WITH` 查询，并限制参数数量、返回行数、结果大小和查询时间；数据库结果、配置与日志响应会对常见 Token、密码和 Secret 做脱敏。
 
 建立 PHP 符号索引：
 

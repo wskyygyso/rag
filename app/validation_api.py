@@ -27,6 +27,7 @@ class DatabaseQueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=10000)
     params: Optional[List[Any]] = Field(default=None, max_length=20)
     max_rows: int = Field(default=100, ge=1, le=1000)
+    max_result_bytes: int = Field(default=512_000, ge=1, le=5_000_000)
     task_id: Optional[str] = Field(default=None, max_length=64)
     project: Optional[str] = Field(default=None, max_length=100)
 
@@ -80,14 +81,24 @@ async def _audit(
 async def database_query(payload: DatabaseQueryRequest, request: Request) -> dict:
     """执行只读 SQL，并记录查询审计摘要。"""
     try:
-        result = await query_database(settings, payload.sql, payload.params, payload.max_rows)
+        result = await query_database(
+            settings,
+            payload.sql,
+            payload.params,
+            payload.max_rows,
+            max_result_bytes=payload.max_result_bytes,
+        )
         await _audit(
             request,
             "database_query",
             "SUCCESS",
             task_id=payload.task_id,
             project=payload.project,
-            request_summary={"max_rows": payload.max_rows, "param_count": len(payload.params or [])},
+            request_summary={
+                "max_rows": payload.max_rows,
+                "max_result_bytes": payload.max_result_bytes,
+                "param_count": len(payload.params or []),
+            },
             result_summary={"row_count": result["total"]},
         )
         logger.info("database_validation_query sql=%s rows=%s", result["sql"], result["total"])
@@ -99,7 +110,11 @@ async def database_query(payload: DatabaseQueryRequest, request: Request) -> dic
             "FAILED",
             task_id=payload.task_id,
             project=payload.project,
-            request_summary={"max_rows": payload.max_rows, "param_count": len(payload.params or [])},
+            request_summary={
+                "max_rows": payload.max_rows,
+                "max_result_bytes": payload.max_result_bytes,
+                "param_count": len(payload.params or []),
+            },
             error=str(exc),
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc

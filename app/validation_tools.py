@@ -4,6 +4,8 @@
 Worker 在代码分析之后验证候选原因。
 """
 
+import asyncio
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +22,7 @@ WRITE_SQL_PATTERN = re.compile(
 SENSITIVE_PATTERN = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)\s*([=:])\s*([^\s,;]+)"
 )
+SENSITIVE_KEY_PATTERN = re.compile(r"(?i)(password|passwd|token|secret|authorization|cookie)")
 
 
 class ValidationToolError(ValueError):
@@ -97,18 +100,32 @@ def redact_sensitive(value: str) -> str:
     return SENSITIVE_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}***", value)
 
 
+def _redact_result_value(key: str, value: Any) -> str:
+    """按字段名和字段内容共同脱敏数据库结果，防止裸敏感列透出。"""
+    if SENSITIVE_KEY_PATTERN.search(key):
+        return "***"
+    return redact_sensitive(str(value))
+
+
 async def query_database(
     settings: Settings,
     sql: str,
     params: Optional[List[Any]] = None,
     max_rows: int = 100,
     timeout_seconds: float = 5,
+    max_result_bytes: int = 512_000,
 ) -> Dict[str, Any]:
-    """执行只读数据库查询并返回脱敏结果。"""
+    """执行只读数据库查询并返回脱敏结果。
+
+    ``max_rows`` 限制返回记录数，``max_result_bytes`` 限制序列化后的响应大小；
+    连接超时、查询超时和数据库异常统一转换为业务异常，避免泄露底层连接细节。
+    """
     if max_rows < 1 or max_rows > 1000:
         raise ValidationToolError("最大返回行数必须在 1 到 1000 之间")
     if timeout_seconds <= 0 or timeout_seconds > 30:
         raise ValidationToolError("查询超时时间必须在 0 到 30 秒之间")
+    if max_result_bytes < 1 or max_result_bytes > 5_000_000:
+        raise ValidationToolError("最大结果大小必须在 1 到 5000000 字节之间")
     safe_sql = validate_readonly_sql(sql)
     connection = None
     try:
@@ -119,11 +136,18 @@ async def query_database(
             timeout=timeout_seconds,
         )
         result_rows = [
-            {key: redact_sensitive(str(value)) for key, value in dict(row).items()}
+            {key: _redact_result_value(str(key), value) for key, value in dict(row).items()}
             for row in rows[:max_rows]
         ]
+        serialized_size = len(
+            json.dumps(result_rows, ensure_ascii=False, default=str).encode("utf-8")
+        )
+        if serialized_size > max_result_bytes:
+            raise ValidationToolError("数据库查询结果超过大小限制")
         return {"sql": safe_sql, "rows": result_rows, "total": len(result_rows)}
-    except asyncpg.PostgresError as exc:
+    except asyncio.TimeoutError as exc:
+        raise ValidationToolError("数据库查询超时") from exc
+    except (asyncpg.PostgresError, OSError) as exc:
         raise ValidationToolError(f"数据库查询失败: {exc}") from exc
     finally:
         if connection is not None:
