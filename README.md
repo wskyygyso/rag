@@ -72,6 +72,10 @@ POST /api/validation/logs/search
 
 数据库接口只允许 `SELECT` 或只读 `WITH` 查询，并限制参数数量、返回行数、结果大小和查询时间；数据库结果、配置与日志响应会对常见 Token、密码和 Secret 做脱敏。
 
+验证接口默认按调用方进行每分钟 60 次限流，可通过
+`VALIDATION_RATE_LIMIT_PER_MINUTE` 和 `VALIDATION_RATE_LIMIT_WINDOW_SECONDS` 调整。
+当前限流器是单进程实现；生产多实例部署应替换为 Redis 等共享计数器。
+
 建立 PHP 符号索引：
 
 ```bash

@@ -23,6 +23,7 @@ SENSITIVE_PATTERN = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)\s*([=:])\s*([^\s,;]+)"
 )
 SENSITIVE_KEY_PATTERN = re.compile(r"(?i)(password|passwd|token|secret|authorization|cookie)")
+SYSTEM_SCHEMA_PATTERN = re.compile(r"(?i)\b(pg_catalog|pg_toast|information_schema)\b")
 
 
 class ValidationToolError(ValueError):
@@ -88,6 +89,8 @@ def validate_readonly_sql(sql: str) -> str:
         normalized = normalized[:-1].rstrip()
     if ";" in normalized:
         raise ValidationToolError("不允许执行多条 SQL")
+    if SYSTEM_SCHEMA_PATTERN.search(normalized):
+        raise ValidationToolError("不允许访问数据库系统表")
     if WRITE_SQL_PATTERN.search(normalized):
         raise ValidationToolError("只允许执行只读 SQL")
     if not re.match(r"(?is)^(SELECT|WITH)\b", normalized):

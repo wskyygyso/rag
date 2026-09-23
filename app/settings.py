@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
     code_repositories_root: str = "/repositories"
+    validation_rate_limit_per_minute: int = 60
+    validation_rate_limit_window_seconds: int = 60
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"

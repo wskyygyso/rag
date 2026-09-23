@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import validation_api
+from app.rate_limit import RateLimiter
 
 
 def test_database_validation_api_rejects_write_sql() -> None:
@@ -67,3 +68,19 @@ def test_validation_api_records_failed_audit(monkeypatch) -> None:
     assert response.status_code == 400
     assert records[0][0:2] == ("database_query", "FAILED")
     assert records[0][2]["task_id"] == "diag_2"
+
+
+def test_validation_api_returns_429_when_rate_limited(monkeypatch) -> None:
+    """验证超出调用方限额时返回 429 和 Retry-After。"""
+    monkeypatch.setattr(validation_api, "rate_limiter", RateLimiter(1, 60))
+    first = TestClient(app).post(
+        "/api/validation/database/query",
+        json={"sql": "UPDATE guild SET name = 'x'"},
+    )
+    second = TestClient(app).post(
+        "/api/validation/database/query",
+        json={"sql": "SELECT 1"},
+    )
+    assert first.status_code == 400
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "60"

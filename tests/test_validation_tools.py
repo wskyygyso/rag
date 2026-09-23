@@ -61,6 +61,8 @@ def test_validate_readonly_sql_rejects_writes_and_multiple_statements() -> None:
         validate_readonly_sql("SELECT 1; SELECT 2")
     with pytest.raises(ValidationToolError):
         validate_readonly_sql("DELETE FROM guild")
+    with pytest.raises(ValidationToolError, match="系统表"):
+        validate_readonly_sql("SELECT * FROM pg_catalog.pg_tables")
 
 
 def test_config_and_log_tools_redact_sensitive_values(tmp_path: Path) -> None:
