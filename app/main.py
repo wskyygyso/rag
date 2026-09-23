@@ -10,6 +10,7 @@ from app.settings import get_settings
 from app.code_api import router as code_router
 from app.diagnosis import router as diagnosis_router
 from app.validation_api import router as validation_router
+from app.hybrid_api import router as hybrid_router
 from app.task_store import create_pool
 
 settings = get_settings()
@@ -34,6 +35,7 @@ app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.include_router(diagnosis_router)
 app.include_router(code_router)
 app.include_router(validation_router)
+app.include_router(hybrid_router)
 
 
 @app.get("/health")

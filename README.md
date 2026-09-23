@@ -65,6 +65,15 @@ POST /api/validation/config/read
 POST /api/validation/logs/search
 ```
 
+阶段 5 混合检索接口：
+
+```text
+GET /api/search/{project}/hybrid?query=关键词&limit=20
+```
+
+当前版本合并代码文本、PHP 符号和已完成诊断问题三类结果，统一返回来源类型、
+来源标识和相关性分数；历史问题只返回脱敏摘要，不能直接替代当前代码和事实证据。
+
 验证接口支持可选 `task_id` 关联诊断任务。每次成功或失败操作都会写入
 `validation_audit` 审计表；审计仅保存文件名、行数、匹配数等摘要，并对敏感键值
 递归脱敏，不保存完整密码、Token、Cookie、SQL 参数或配置内容。审计写入失败不会
