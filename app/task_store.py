@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_tasks (
     error TEXT,
     retry_count INT NOT NULL DEFAULT 0,
     created_by VARCHAR(100),
+    validation_plan JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
@@ -81,6 +82,9 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
+        await connection.execute(
+            "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS validation_plan JSONB"
+        )
         await connection.execute(CREATE_EVIDENCE_SQL)
         await connection.execute(CREATE_SYMBOLS_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_SQL)
@@ -95,6 +99,8 @@ def _decode_task(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
     task = dict(row)
     if isinstance(task.get("result"), str):
         task["result"] = json.loads(task["result"])
+    if isinstance(task.get("validation_plan"), str):
+        task["validation_plan"] = json.loads(task["validation_plan"])
     for key in ("created_at", "updated_at"):
         value = task.get(key)
         if isinstance(value, datetime):
@@ -109,13 +115,14 @@ async def insert_task(
     question: str,
     environment: str,
     created_by: Optional[str] = None,
+    validation_plan: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """插入一条排队状态的诊断任务记录。"""
+    """插入排队状态的诊断任务，并保存可选的只读验证计划。"""
     row = await pool.fetchrow(
         """
         INSERT INTO diagnostic_tasks
-            (id, project, question, environment, status, progress, current_step, created_by)
-        VALUES ($1, $2, $3, $4, 'QUEUED', 0, '等待 Worker 执行', $5)
+            (id, project, question, environment, status, progress, current_step, created_by, validation_plan)
+        VALUES ($1, $2, $3, $4, 'QUEUED', 0, '等待 Worker 执行', $5, $6::jsonb)
         RETURNING *
         """,
         task_id,
@@ -123,6 +130,7 @@ async def insert_task(
         question,
         environment,
         created_by,
+        json.dumps(validation_plan, ensure_ascii=False) if validation_plan is not None else None,
     )
     return _decode_task(row)  # type: ignore[return-value]
 

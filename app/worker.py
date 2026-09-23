@@ -8,6 +8,7 @@ from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
 from app.php_index import index_repository, trace_index_call_chain
 from app.symbol_tools import summarize_symbol_index
+from app.validation_runner import execute_validation_plan
 
 settings = get_settings()
 celery_app = Celery(
@@ -95,14 +96,6 @@ async def _execute_diagnosis(task_id: str) -> None:
                 warnings.append(str(exc))
         symbol_summary = {"symbols": [], "references": [], "configs": [], "sql": []}
         call_chains = []
-        validation = {
-            "database": {
-                "status": "not_requested",
-                "message": "当前阶段仅提供只读验证工具，业务 SQL 由后续编排器按需生成。",
-            },
-            "configs": [],
-            "logs": [],
-        }
         try:
             project_index = index_repository(settings.code_repositories_root, current["project"])
             await replace_symbol_index(pool, current["project"], project_index)
@@ -115,6 +108,22 @@ async def _execute_diagnosis(task_id: str) -> None:
             ]
         except (CodeToolError, ValueError) as exc:
             warnings.append(str(exc))
+        await update_task(
+            pool,
+            task_id,
+            status="VERIFYING",
+            progress=65,
+            current_step="正在执行按需只读验证",
+        )
+        current = await get_task(pool, task_id)
+        if current is None or current["status"] == "CANCELLED":
+            return
+        validation = await execute_validation_plan(
+            settings,
+            pool,
+            task_id,
+            current.get("validation_plan"),
+        )
         await update_task(
             pool,
             task_id,

@@ -86,6 +86,26 @@ POST /api/validation/logs/search
 
 当前的诊断报告仍是关键词检索报告，尚未接入 LLM、PHP AST 调用链分析、数据库验证和日志验证。
 
+创建诊断任务时可以通过 `validation` 提交按需验证计划。Worker 会在代码检索后执行
+只读数据库查询、配置读取和日志检索，并将每个步骤的成功、失败或未请求状态写入
+诊断报告；单个验证失败不会阻断其他验证步骤。例如：
+
+```json
+{
+  "question": "检查公会邀请失败原因",
+  "project": "waky3",
+  "validation": {
+    "database": {
+      "sql": "SELECT id, status FROM guild WHERE id = $1",
+      "params": [1001],
+      "max_rows": 10
+    },
+    "configs": [{"project": "waky3", "file": "config/app.php"}],
+    "logs": [{"project": "waky3", "file": "storage/app.log", "query": "invite"}]
+  }
+}
+```
+
 代码仓库以只读方式挂载到 `repositories/<project>`，例如：
 
 ```text

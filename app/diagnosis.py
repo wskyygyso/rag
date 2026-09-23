@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.task_store import get_task, insert_task, mark_cancelled
+from app.validation_plan import ValidationPlan, validation_plan_dict
 
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
 
@@ -21,6 +22,10 @@ class CreateDiagnosisRequest(BaseModel):
     project: str = Field(min_length=1, max_length=100)
     environment: str = Field(default="development", max_length=100)
     created_by: Optional[str] = Field(default=None, max_length=100)
+    validation: Optional[ValidationPlan] = Field(
+        default=None,
+        description="可选的只读数据库、配置和日志验证计划",
+    )
 
 
 def _task_response(task: Dict) -> Dict:
@@ -59,6 +64,7 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
         payload.question,
         payload.environment,
         payload.created_by,
+        validation_plan_dict(payload.validation),
     )
     from app.worker import run_diagnosis_task
 
