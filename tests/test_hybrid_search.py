@@ -12,8 +12,12 @@ from app.code_tools import CodeToolError
 class _Pool:
     """返回历史诊断记录的连接池替身。"""
 
-    async def fetch(self, query, project, keyword, limit):
+    def __init__(self) -> None:
+        self.arguments = None
+
+    async def fetch(self, query, project, keyword, since, limit, offset):
         """返回一条模拟历史记录。"""
+        self.arguments = (project, keyword, since, limit, offset)
         return [
             {
                 "id": "diag_old",
@@ -45,10 +49,15 @@ async def test_search_hybrid_merges_sources_and_redacts_history(tmp_path: Path, 
             "sql": [],
         },
     )
-    result = await hybrid_search.search_hybrid(str(tmp_path), "waky3", "invite", _Pool(), limit=10)
+    pool = _Pool()
+    result = await hybrid_search.search_hybrid(
+        str(tmp_path), "waky3", "invite", pool, limit=10, history_offset=2, history_days=30
+    )
     assert {item["source_type"] for item in result["results"]} == {"code", "symbol", "history"}
     assert "secret" not in str(result)
     assert result["results"][0]["score"] == 1.0
+    assert pool.arguments[0] == "waky3"
+    assert pool.arguments[3:] == (10, 2)
 
 
 @pytest.mark.asyncio
@@ -56,3 +65,7 @@ async def test_search_hybrid_rejects_invalid_limits(tmp_path: Path) -> None:
     """验证混合检索关键词和数量边界。"""
     with pytest.raises(CodeToolError):
         await hybrid_search.search_hybrid(str(tmp_path), "waky3", "", _Pool(), limit=10)
+    with pytest.raises(CodeToolError):
+        await hybrid_search.search_hybrid(str(tmp_path), "waky3", "invite", _Pool(), history_offset=-1)
+    with pytest.raises(CodeToolError):
+        await hybrid_search.search_hybrid(str(tmp_path), "waky3", "invite", _Pool(), history_days=0)

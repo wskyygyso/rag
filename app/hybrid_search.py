@@ -2,7 +2,8 @@
 
 import asyncio
 import re
-from typing import Any, Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 
@@ -17,19 +18,34 @@ def _tokens(query: str) -> List[str]:
     return list(dict.fromkeys(words))
 
 
-async def _search_history(pool: asyncpg.Pool, project: str, query: str, limit: int) -> List[Dict[str, Any]]:
+async def _search_history(
+    pool: asyncpg.Pool,
+    project: str,
+    query: str,
+    limit: int,
+    offset: int,
+    history_days: Optional[int],
+) -> List[Dict[str, Any]]:
     """从已完成诊断任务中召回包含关键词的问题，并仅返回安全摘要。"""
+    since = (
+        datetime.now(timezone.utc) - timedelta(days=history_days)
+        if history_days is not None
+        else None
+    )
     rows = await pool.fetch(
         """
         SELECT id, question, status, updated_at
         FROM diagnostic_tasks
         WHERE project = $1 AND status = 'COMPLETED' AND question ILIKE $2
+          AND ($3::timestamptz IS NULL OR updated_at >= $3)
         ORDER BY updated_at DESC
-        LIMIT $3
+        LIMIT $4 OFFSET $5
         """,
         project,
         f"%{query}%",
+        since,
         limit,
+        offset,
     )
     return [
         {
@@ -51,6 +67,8 @@ async def search_hybrid(
     query: str,
     pool: asyncpg.Pool,
     limit: int = 20,
+    history_offset: int = 0,
+    history_days: Optional[int] = None,
 ) -> Dict[str, Any]:
     """合并代码关键词、PHP 符号和历史问题召回结果并按分数排序。"""
     query = query.strip()
@@ -58,6 +76,10 @@ async def search_hybrid(
         raise CodeToolError("检索关键词不能为空且不能超过 200 个字符")
     if limit < 1 or limit > 100:
         raise CodeToolError("检索结果数量必须在 1 到 100 之间")
+    if history_offset < 0 or history_offset > 10_000:
+        raise CodeToolError("历史检索偏移量必须在 0 到 10000 之间")
+    if history_days is not None and (history_days < 1 or history_days > 3650):
+        raise CodeToolError("历史检索时间范围必须在 1 到 3650 天之间")
     tokens = _tokens(query) or [query.lower()]
     results: List[Dict[str, Any]] = []
     lexical = await asyncio.to_thread(search_code, root, project, query, max_results=limit)
@@ -80,7 +102,7 @@ async def search_hybrid(
                 "project": project,
                 **symbol,
             })
-    results.extend(await _search_history(pool, project, query, limit))
+    results.extend(await _search_history(pool, project, query, limit, history_offset, history_days))
     unique: Dict[str, Dict[str, Any]] = {}
     for item in results:
         unique.setdefault(f"{item['source_type']}:{item['source_id']}", item)
