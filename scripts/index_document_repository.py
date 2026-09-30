@@ -12,7 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.document_chunks import build_repository_chunks, index_repository_documents
 from app.settings import get_settings
-from app.task_store import create_pool, finish_document_index_run, start_document_index_run_with_revision
+from app.task_store import (
+    create_pool,
+    finish_document_index_run,
+    recover_stale_document_index_runs,
+    start_document_index_run_with_revision,
+)
 
 
 def _repository_revision(root: str, project: str) -> Optional[str]:
@@ -36,6 +41,7 @@ async def _run(project: str, dry_run: bool = False) -> int:
         return len(build_repository_chunks(settings.code_repositories_root, project))
     pool = await create_pool(settings)
     revision = _repository_revision(settings.code_repositories_root, project)
+    await recover_stale_document_index_runs(pool, project)
     run_id = await start_document_index_run_with_revision(pool, project, revision, "v1")
     try:
         count = await index_repository_documents(settings.code_repositories_root, project, pool)

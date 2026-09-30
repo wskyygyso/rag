@@ -332,6 +332,28 @@ async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
     return await start_document_index_run_with_revision(pool, project)
 
 
+async def recover_stale_document_index_runs(
+    pool: asyncpg.Pool, project: str, stale_minutes: int = 60
+) -> int:
+    """将项目超时未结束的索引运行标记为失败，并返回恢复数量。"""
+    if stale_minutes < 1 or stale_minutes > 7 * 24 * 60:
+        raise ValueError("索引超时窗口必须在 1 分钟到 7 天之间")
+    result = await pool.execute(
+        """
+        UPDATE document_index_runs
+        SET status = 'FAILED',
+            error = '索引运行超时，已由新运行恢复',
+            finished_at = NOW()
+        WHERE project = $1
+          AND status = 'RUNNING'
+          AND started_at < NOW() - ($2 * INTERVAL '1 minute')
+        """,
+        project,
+        stale_minutes,
+    )
+    return int(result.rsplit(" ", 1)[-1]) if result.rsplit(" ", 1)[-1].isdigit() else 0
+
+
 async def start_document_index_run_with_revision(
     pool: asyncpg.Pool,
     project: str,

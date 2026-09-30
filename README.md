@@ -88,6 +88,8 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 
 正式索引会在 `document_index_runs` 中记录 `RUNNING`、`COMPLETED` 或 `FAILED` 状态、
 分块数量、仓库提交 SHA、索引版本和错误信息，便于排查失败并重新执行。
+开始新索引前会自动恢复同项目超过 60 分钟仍处于 `RUNNING` 的历史记录，标记为失败并
+保留超时原因，避免悬挂运行长期占用状态。
 
 查询索引运行记录：
 
