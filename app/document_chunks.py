@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from app.code_tools import CodeRepository, CodeToolError
-from app.embeddings import embed_text, cosine_similarity
+from app.embeddings import EMBEDDING_DIMENSION, EMBEDDING_MODEL, embed_text, cosine_similarity
 
 TEXT_EXTENSIONS = {".php", ".inc", ".phtml", ".conf", ".ini", ".yaml", ".yml", ".json", ".md", ".txt"}
 IGNORED_DIRECTORIES = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
@@ -55,6 +55,8 @@ def chunk_text(
                 "content": text,
                 "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 "embedding": embed_text(text),
+                "embedding_model": EMBEDDING_MODEL,
+                "embedding_dimension": EMBEDDING_DIMENSION,
                 "metadata": {"parent_source_id": source_id},
             }
         )
@@ -110,6 +112,7 @@ async def search_document_chunks(
     rows = await pool.fetch(
         """
         SELECT source_type, source_id, file_path, line_start, line_end, content, embedding,
+               embedding_model, embedding_dimension,
                ts_rank(search_vector, plainto_tsquery('simple', $2)) AS lexical_score
         FROM document_chunks
         WHERE project = $1
@@ -142,6 +145,8 @@ async def search_document_chunks(
             "score": score,
             "lexical_score": lexical_score,
             "vector_score": vector_score,
+            "embedding_model": row.get("embedding_model") if hasattr(row, "get") else None,
+            "embedding_dimension": row.get("embedding_dimension") if hasattr(row, "get") else None,
         }
         for score, row, lexical_score, vector_score in scored[:limit]
     ]
@@ -167,12 +172,14 @@ async def sync_document_chunks(
                     """
                     INSERT INTO document_chunks
                         (project, source_type, source_id, file_path, line_start, line_end,
-                         content, content_hash, embedding, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
+                         content, content_hash, embedding, embedding_model, embedding_dimension, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb)
                     ON CONFLICT (project, source_type, source_id)
                     DO UPDATE SET content = EXCLUDED.content,
                                   content_hash = EXCLUDED.content_hash,
                                   embedding = EXCLUDED.embedding,
+                                  embedding_model = EXCLUDED.embedding_model,
+                                  embedding_dimension = EXCLUDED.embedding_dimension,
                                   metadata = EXCLUDED.metadata,
                                   updated_at = NOW()
                     """,
@@ -185,6 +192,8 @@ async def sync_document_chunks(
                     chunk["content"],
                     chunk["content_hash"],
                     json.dumps(chunk.get("embedding", []), ensure_ascii=False),
+                    chunk.get("embedding_model", EMBEDDING_MODEL),
+                    chunk.get("embedding_dimension", EMBEDDING_DIMENSION),
                     json.dumps(chunk.get("metadata", {}), ensure_ascii=False),
                 )
             if source_types:

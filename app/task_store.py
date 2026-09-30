@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     content TEXT NOT NULL,
     content_hash CHAR(64) NOT NULL,
     embedding JSONB,
+    embedding_model VARCHAR(64),
+    embedding_dimension SMALLINT,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -138,6 +140,12 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(
             "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding JSONB"
+        )
+        await connection.execute(
+            "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(64)"
+        )
+        await connection.execute(
+            "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding_dimension SMALLINT"
         )
         await connection.execute(CREATE_DOCUMENT_CHUNKS_INDEX_SQL)
         await connection.execute(CREATE_DOCUMENT_INDEX_RUNS_SQL)

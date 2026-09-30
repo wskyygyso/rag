@@ -20,6 +20,8 @@ class _Pool:
                 "line_end": 3,
                 "content": "Guild invite failed",
                 "embedding": embed_text("Guild invite failed"),
+                "embedding_model": "hash-v1",
+                "embedding_dimension": 64,
                 "lexical_score": 0.5,
             }
         ]
@@ -33,3 +35,4 @@ async def test_search_document_chunks_combines_lexical_and_vector_scores() -> No
     assert result[0]["lexical_score"] == 0.5
     assert result[0]["vector_score"] > 0
     assert result[0]["score"] > 0
+    assert result[0]["embedding_model"] == "hash-v1"

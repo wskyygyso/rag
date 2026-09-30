@@ -10,6 +10,7 @@ import re
 from typing import List, Optional
 
 EMBEDDING_DIMENSION = 64
+EMBEDDING_MODEL = "hash-v1"
 
 
 def embed_text(text: str, dimension: int = EMBEDDING_DIMENSION) -> List[float]:

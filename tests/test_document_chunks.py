@@ -4,6 +4,7 @@ import pytest
 
 from app.document_chunks import build_repository_chunks, chunk_text
 from app.embeddings import EMBEDDING_DIMENSION, cosine_similarity, embed_text
+from app.embeddings import EMBEDDING_MODEL
 
 
 def test_chunk_text_keeps_line_ranges_hashes_and_overlap() -> None:
@@ -26,6 +27,8 @@ def test_chunk_text_keeps_line_ranges_hashes_and_overlap() -> None:
     )[0]["content_hash"]
     assert chunks[1]["line_start"] <= chunks[0]["line_end"]
     assert len(chunks[0]["embedding"]) == EMBEDDING_DIMENSION
+    assert chunks[0]["embedding_model"] == EMBEDDING_MODEL
+    assert chunks[0]["embedding_dimension"] == EMBEDDING_DIMENSION
 
 
 def test_chunk_text_rejects_invalid_boundaries() -> None:

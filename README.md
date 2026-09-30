@@ -77,7 +77,8 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 
 阶段 5 已建立 `document_chunks` 统一分块表，保存来源类型、稳定来源标识、文件行号、
 内容哈希、MVP 文本向量和 PostgreSQL `tsvector` 全文索引，为后续替换真实 embedding
-服务提供基础。当前向量由确定性哈希特征生成，不依赖外部模型，生产环境可替换向量提供商。
+服务提供基础。当前向量由确定性哈希特征生成，不依赖外部模型；每个分块同时记录
+embedding 模型标识和维度，生产环境替换向量提供商时可避免新旧向量混用。
 
 建立项目分块索引：
 
