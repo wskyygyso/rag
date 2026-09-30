@@ -60,6 +60,7 @@ async def test_document_index_script_records_success(monkeypatch) -> None:
     monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
     monkeypatch.setattr(index_document_repository, "start_document_index_run_with_revision", start)
     monkeypatch.setattr(index_document_repository, "recover_stale_document_index_runs", _recover)
+    monkeypatch.setattr(index_document_repository, "cleanup_document_index_runs", _cleanup)
     monkeypatch.setattr(index_document_repository, "index_repository_documents", index)
     monkeypatch.setattr(index_document_repository, "finish_document_index_run", finish)
 
@@ -99,6 +100,7 @@ async def test_document_index_script_records_failure(monkeypatch) -> None:
     monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
     monkeypatch.setattr(index_document_repository, "start_document_index_run_with_revision", start)
     monkeypatch.setattr(index_document_repository, "recover_stale_document_index_runs", _recover)
+    monkeypatch.setattr(index_document_repository, "cleanup_document_index_runs", _cleanup)
     monkeypatch.setattr(index_document_repository, "index_repository_documents", index)
     monkeypatch.setattr(index_document_repository, "finish_document_index_run", finish)
 
@@ -110,6 +112,11 @@ async def test_document_index_script_records_failure(monkeypatch) -> None:
 
 async def _recover(current_pool, project):
     """模拟恢复历史悬挂索引。"""
+    return 0
+
+
+async def _cleanup(current_pool, project):
+    """模拟清理历史运行记录。"""
     return 0
 
 

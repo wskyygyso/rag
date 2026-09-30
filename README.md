@@ -102,6 +102,12 @@ embedding 模型标识和维度，生产环境替换向量提供商时可避免�
 GET /api/index/{project}/runs?limit=20
 ```
 
+失败索引可通过以下接口异步重试：
+
+```text
+POST /api/index/{project}/runs/{run_id}/retry
+```
+
 验证接口支持可选 `task_id` 关联诊断任务。每次成功或失败操作都会写入
 `validation_audit` 审计表；审计仅保存文件名、行数、匹配数等摘要，并对敏感键值
 递归脱敏，不保存完整密码、Token、Cookie、SQL 参数或配置内容。审计写入失败不会

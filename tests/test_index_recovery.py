@@ -26,6 +26,16 @@ async def test_recover_stale_index_runs_marks_timeout() -> None:
     assert pool.calls[0][1] == ("waky3", 30)
 
 
+@pytest.mark.asyncio
+async def test_cleanup_index_runs_returns_deleted_count() -> None:
+    """验证索引清理返回删除数量。"""
+    pool = _Pool("DELETE 3")
+    from app.task_store import cleanup_document_index_runs
+
+    assert await cleanup_document_index_runs(pool, "waky3", 20) == 3
+    assert pool.calls[0][1] == ("waky3", 20)
+
+
 def test_recover_stale_index_runs_rejects_invalid_window() -> None:
     """验证索引恢复窗口存在上下界。"""
     with pytest.raises(ValueError):

@@ -401,3 +401,25 @@ async def finish_document_index_run(
         chunk_count,
         error,
     )
+
+
+async def cleanup_document_index_runs(pool: asyncpg.Pool, project: str, keep: int = 50) -> int:
+    """保留项目最近若干条索引运行记录并删除更早的终态记录。"""
+    if keep < 1 or keep > 1000:
+        raise ValueError("索引运行保留数量必须在 1 到 1000 之间")
+    result = await pool.execute(
+        """
+        DELETE FROM document_index_runs
+        WHERE project = $1
+          AND status IN ('COMPLETED', 'FAILED')
+          AND id NOT IN (
+              SELECT id FROM document_index_runs
+              WHERE project = $1
+              ORDER BY started_at DESC
+              LIMIT $2
+          )
+        """,
+        project,
+        keep,
+    )
+    return int(result.rsplit(" ", 1)[-1]) if result.rsplit(" ", 1)[-1].isdigit() else 0

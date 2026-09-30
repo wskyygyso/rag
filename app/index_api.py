@@ -40,3 +40,26 @@ async def index_runs(
             for row in rows
         ],
     }
+
+
+@router.post("/{project}/runs/{run_id}/retry", status_code=202)
+async def retry_index_run(project: str, run_id: int, request: Request) -> Dict:
+    """将失败索引重新投递到 Worker，避免 API 进程阻塞执行。"""
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="数据库暂不可用")
+    row = await pool.fetchrow(
+        "SELECT id, status FROM document_index_runs WHERE id = $1 AND project = $2",
+        run_id,
+        project,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="索引运行记录不存在")
+    if row["status"] != "FAILED":
+        raise HTTPException(status_code=409, detail="只有失败的索引运行可以重试")
+    task_entry = globals().get("run_document_index_task")
+    if task_entry is None:
+        from app.worker import run_document_index_task as task_entry
+
+    queued = task_entry.delay(project)
+    return {"project": project, "run_id": run_id, "status": "QUEUED", "task_id": queued.id}

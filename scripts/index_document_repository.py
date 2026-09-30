@@ -14,6 +14,7 @@ from app.document_chunks import build_repository_chunks, index_repository_docume
 from app.settings import get_settings
 from app.task_store import (
     create_pool,
+    cleanup_document_index_runs,
     finish_document_index_run,
     recover_stale_document_index_runs,
     start_document_index_run_with_revision,
@@ -46,6 +47,7 @@ async def _run(project: str, dry_run: bool = False) -> int:
     try:
         count = await index_repository_documents(settings.code_repositories_root, project, pool)
         await finish_document_index_run(pool, run_id, "COMPLETED", count)
+        await cleanup_document_index_runs(pool, project)
         return count
     except Exception as exc:
         await finish_document_index_run(pool, run_id, "FAILED", error=str(exc)[:2000])

@@ -32,6 +32,17 @@ def healthcheck_task() -> dict:
     return {"status": "ok"}
 
 
+@celery_app.task(name="app.worker.run_document_index_task")
+def run_document_index_task(project: str) -> dict:
+    """在 Worker 中异步重试指定项目的文档分块索引。"""
+    import asyncio
+
+    from scripts.index_document_repository import _run
+
+    count = asyncio.run(_run(project))
+    return {"project": project, "status": "completed", "chunk_count": count}
+
+
 async def _execute_diagnosis(task_id: str) -> None:
     """执行单个诊断任务的状态推进、代码检索和证据持久化。"""
     pool = await create_pool(settings)
