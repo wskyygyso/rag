@@ -61,6 +61,7 @@ async def test_search_hybrid_merges_sources_and_redacts_history(tmp_path: Path, 
     assert {item["source_type"] for item in result["results"]} == {"code", "symbol", "history", "chunk"}
     assert "secret" not in str(result)
     assert result["results"][0]["score"] == 1.0
+    assert result["results"][0]["raw_score"] == 1.0
     assert pool.arguments[0] == "waky3"
     assert pool.arguments[3:] == (10, 2)
 
@@ -74,3 +75,30 @@ async def test_search_hybrid_rejects_invalid_limits(tmp_path: Path) -> None:
         await hybrid_search.search_hybrid(str(tmp_path), "waky3", "invite", _Pool(), history_offset=-1)
     with pytest.raises(CodeToolError):
         await hybrid_search.search_hybrid(str(tmp_path), "waky3", "invite", _Pool(), history_days=0)
+    with pytest.raises(CodeToolError):
+        await hybrid_search.search_hybrid(
+            str(tmp_path), "waky3", "invite", _Pool(), source_types=["unknown"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_filters_sources_and_applies_weights(monkeypatch, tmp_path: Path) -> None:
+    """验证来源筛选和统一权重排序。"""
+    project = tmp_path / "waky3"
+    project.mkdir()
+    monkeypatch.setattr(hybrid_search, "search_code", lambda *args, **kwargs: {"matches": []})
+    monkeypatch.setattr(hybrid_search, "index_repository", lambda *args, **kwargs: {
+        "symbols": [{"symbol_name": "Guild::invite", "file": "Guild.php", "line": 1}],
+    })
+    monkeypatch.setattr(hybrid_search, "search_document_chunks", lambda *args, **kwargs: _chunks())
+    pool = _Pool()
+    result = await hybrid_search.search_hybrid(
+        str(tmp_path), "waky3", "invite", pool, source_types=["symbol", "chunk"]
+    )
+    assert {item["source_type"] for item in result["results"]} == {"symbol", "chunk"}
+    assert result["results"][0]["source_type"] == "symbol"
+
+
+async def _chunks():
+    """返回固定全文分块结果。"""
+    return [{"source_type": "chunk", "source_id": "doc:1-2", "score": 0.8}]

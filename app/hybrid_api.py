@@ -19,6 +19,10 @@ async def hybrid_search(
     limit: int = Query(default=20, ge=1, le=100),
     history_offset: int = Query(default=0, ge=0, le=10_000),
     history_days: Optional[int] = Query(default=None, ge=1, le=3650),
+    source_types: Optional[list[str]] = Query(
+        default=None,
+        description="重复传入以筛选来源：code、symbol、chunk 或 history",
+    ),
 ) -> Dict:
     """合并代码、符号和历史诊断结果，返回带来源和分数的检索结果。"""
     pool = getattr(request.app.state, "db_pool", None)
@@ -33,6 +37,7 @@ async def hybrid_search(
             limit,
             history_offset,
             history_days,
+            source_types,
         )
     except (CodeToolError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

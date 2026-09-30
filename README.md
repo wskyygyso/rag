@@ -68,12 +68,12 @@ POST /api/validation/logs/search
 阶段 5 混合检索接口：
 
 ```text
-GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&history_days=365
+GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&history_days=365&source_types=code&source_types=symbol
 ```
 
 当前版本合并代码文本、PHP 符号和已完成诊断问题三类结果，统一返回来源类型、
-来源标识和相关性分数；历史结果支持偏移量和时间范围筛选，只返回脱敏摘要，不能直接
-替代当前代码和事实证据。
+来源标识、原始分数和加权分数；支持来源类型筛选、历史结果偏移量和时间范围筛选。
+历史结果只返回脱敏摘要，不能直接替代当前代码和事实证据。
 
 阶段 5 已建立 `document_chunks` 统一分块表，保存来源类型、稳定来源标识、文件行号、
 内容哈希和 PostgreSQL `tsvector` 全文索引，为后续增量索引和向量字段扩展提供基础。
