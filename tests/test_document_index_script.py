@@ -24,6 +24,11 @@ async def test_document_index_script_dry_run_does_not_connect_database(
     assert await index_document_repository._run("waky3", dry_run=True) == 1
 
 
+def test_repository_revision_returns_none_for_non_git_directory(tmp_path: Path) -> None:
+    """验证非 Git 项目不会阻断索引，版本标识返回空值。"""
+    assert index_document_repository._repository_revision(str(tmp_path), "waky3") is None
+
+
 @pytest.mark.asyncio
 async def test_document_index_script_records_success(monkeypatch) -> None:
     """验证正式索引成功后写入完成状态和分块数量。"""
@@ -34,7 +39,7 @@ async def test_document_index_script_records_success(monkeypatch) -> None:
         """记录连接池关闭。"""
         pool.closed = True
 
-    async def start(current_pool, project):
+    async def start(current_pool, project, *args):
         """返回模拟运行 ID。"""
         return 7
 
@@ -53,7 +58,7 @@ async def test_document_index_script_records_success(monkeypatch) -> None:
         lambda: SimpleNamespace(code_repositories_root="/repositories"),
     )
     monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
-    monkeypatch.setattr(index_document_repository, "start_document_index_run", start)
+    monkeypatch.setattr(index_document_repository, "start_document_index_run_with_revision", start)
     monkeypatch.setattr(index_document_repository, "index_repository_documents", index)
     monkeypatch.setattr(index_document_repository, "finish_document_index_run", finish)
 
@@ -72,7 +77,7 @@ async def test_document_index_script_records_failure(monkeypatch) -> None:
         """记录连接池关闭。"""
         pool.closed = True
 
-    async def start(current_pool, project):
+    async def start(current_pool, project, *args):
         """返回模拟运行 ID。"""
         return 8
 
@@ -91,7 +96,7 @@ async def test_document_index_script_records_failure(monkeypatch) -> None:
         lambda: SimpleNamespace(code_repositories_root="/repositories"),
     )
     monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
-    monkeypatch.setattr(index_document_repository, "start_document_index_run", start)
+    monkeypatch.setattr(index_document_repository, "start_document_index_run_with_revision", start)
     monkeypatch.setattr(index_document_repository, "index_repository_documents", index)
     monkeypatch.setattr(index_document_repository, "finish_document_index_run", finish)
 

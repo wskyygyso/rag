@@ -2,15 +2,31 @@
 
 import argparse
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 # 支持从项目根目录直接执行脚本。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.document_chunks import build_repository_chunks, index_repository_documents
 from app.settings import get_settings
-from app.task_store import create_pool, finish_document_index_run, start_document_index_run
+from app.task_store import create_pool, finish_document_index_run, start_document_index_run_with_revision
+
+
+def _repository_revision(root: str, project: str) -> Optional[str]:
+    """读取项目 Git HEAD，非 Git 仓库或命令失败时返回 None。"""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(Path(root) / project), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout.strip() or None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 
 async def _run(project: str, dry_run: bool = False) -> int:
@@ -19,7 +35,8 @@ async def _run(project: str, dry_run: bool = False) -> int:
     if dry_run:
         return len(build_repository_chunks(settings.code_repositories_root, project))
     pool = await create_pool(settings)
-    run_id = await start_document_index_run(pool, project)
+    revision = _repository_revision(settings.code_repositories_root, project)
+    run_id = await start_document_index_run_with_revision(pool, project, revision, "v1")
     try:
         count = await index_repository_documents(settings.code_repositories_root, project, pool)
         await finish_document_index_run(pool, run_id, "COMPLETED", count)

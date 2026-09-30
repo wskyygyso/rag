@@ -11,6 +11,7 @@ from app.code_api import router as code_router
 from app.diagnosis import router as diagnosis_router
 from app.validation_api import router as validation_router
 from app.hybrid_api import router as hybrid_router
+from app.index_api import router as index_router
 from app.task_store import create_pool
 
 settings = get_settings()
@@ -36,6 +37,7 @@ app.include_router(diagnosis_router)
 app.include_router(code_router)
 app.include_router(validation_router)
 app.include_router(hybrid_router)
+app.include_router(index_router)
 
 
 @app.get("/health")

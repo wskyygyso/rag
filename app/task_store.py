@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS document_index_runs (
     project VARCHAR(100) NOT NULL,
     status VARCHAR(20) NOT NULL,
     chunk_count INT NOT NULL DEFAULT 0,
+    repository_revision VARCHAR(128),
+    index_version VARCHAR(32) NOT NULL DEFAULT 'v1',
     error TEXT,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ
@@ -135,6 +137,12 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(CREATE_DOCUMENT_CHUNKS_INDEX_SQL)
         await connection.execute(CREATE_DOCUMENT_INDEX_RUNS_SQL)
+        await connection.execute(
+            "ALTER TABLE document_index_runs ADD COLUMN IF NOT EXISTS repository_revision VARCHAR(128)"
+        )
+        await connection.execute(
+            "ALTER TABLE document_index_runs ADD COLUMN IF NOT EXISTS index_version VARCHAR(32) NOT NULL DEFAULT 'v1'"
+        )
         await connection.execute(CREATE_DOCUMENT_INDEX_RUNS_INDEX_SQL)
     return pool
 
@@ -317,13 +325,25 @@ async def insert_validation_audit(
 
 async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
     """创建一条运行中的文档索引记录并返回运行 ID。"""
+    return await start_document_index_run_with_revision(pool, project)
+
+
+async def start_document_index_run_with_revision(
+    pool: asyncpg.Pool,
+    project: str,
+    repository_revision: Optional[str] = None,
+    index_version: str = "v1",
+) -> int:
+    """创建带仓库提交版本和索引版本的运行记录。"""
     row = await pool.fetchrow(
         """
-        INSERT INTO document_index_runs (project, status)
-        VALUES ($1, 'RUNNING')
+        INSERT INTO document_index_runs (project, status, repository_revision, index_version)
+        VALUES ($1, 'RUNNING', $2, $3)
         RETURNING id
         """,
         project,
+        repository_revision,
+        index_version,
     )
     return int(row["id"])
 
