@@ -102,6 +102,23 @@ CREATE INDEX IF NOT EXISTS idx_document_chunks_search_vector
     ON document_chunks USING GIN (search_vector)
 """
 
+CREATE_DOCUMENT_INDEX_RUNS_SQL = """
+CREATE TABLE IF NOT EXISTS document_index_runs (
+    id BIGSERIAL PRIMARY KEY,
+    project VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    chunk_count INT NOT NULL DEFAULT 0,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
+)
+"""
+
+CREATE_DOCUMENT_INDEX_RUNS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_document_index_runs_project_started
+    ON document_index_runs (project, started_at DESC)
+"""
+
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
     """创建数据库连接池，并确保任务和证据表存在。"""
@@ -117,6 +134,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_VALIDATION_AUDIT_INDEX_SQL)
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(CREATE_DOCUMENT_CHUNKS_INDEX_SQL)
+        await connection.execute(CREATE_DOCUMENT_INDEX_RUNS_SQL)
+        await connection.execute(CREATE_DOCUMENT_INDEX_RUNS_INDEX_SQL)
     return pool
 
 
@@ -292,5 +311,39 @@ async def insert_validation_audit(
         status,
         json.dumps(request_summary or {}, ensure_ascii=False),
         json.dumps(result_summary or {}, ensure_ascii=False),
+        error,
+    )
+
+
+async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
+    """创建一条运行中的文档索引记录并返回运行 ID。"""
+    row = await pool.fetchrow(
+        """
+        INSERT INTO document_index_runs (project, status)
+        VALUES ($1, 'RUNNING')
+        RETURNING id
+        """,
+        project,
+    )
+    return int(row["id"])
+
+
+async def finish_document_index_run(
+    pool: asyncpg.Pool,
+    run_id: int,
+    status: str,
+    chunk_count: int = 0,
+    error: Optional[str] = None,
+) -> None:
+    """完成文档索引运行记录，保存数量或受控错误信息。"""
+    await pool.execute(
+        """
+        UPDATE document_index_runs
+        SET status = $2, chunk_count = $3, error = $4, finished_at = NOW()
+        WHERE id = $1
+        """,
+        run_id,
+        status,
+        chunk_count,
         error,
     )

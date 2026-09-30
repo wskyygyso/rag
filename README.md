@@ -85,6 +85,9 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 .venv/bin/python scripts/index_document_repository.py waky3 --dry-run
 ```
 
+正式索引会在 `document_index_runs` 中记录 `RUNNING`、`COMPLETED` 或 `FAILED` 状态、
+分块数量和错误信息，便于排查失败并重新执行。
+
 验证接口支持可选 `task_id` 关联诊断任务。每次成功或失败操作都会写入
 `validation_audit` 审计表；审计仅保存文件名、行数、匹配数等摘要，并对敏感键值
 递归脱敏，不保存完整密码、Token、Cookie、SQL 参数或配置内容。审计写入失败不会

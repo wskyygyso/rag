@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.document_chunks import build_repository_chunks, index_repository_documents
 from app.settings import get_settings
-from app.task_store import create_pool
+from app.task_store import create_pool, finish_document_index_run, start_document_index_run
 
 
 async def _run(project: str, dry_run: bool = False) -> int:
@@ -19,8 +19,14 @@ async def _run(project: str, dry_run: bool = False) -> int:
     if dry_run:
         return len(build_repository_chunks(settings.code_repositories_root, project))
     pool = await create_pool(settings)
+    run_id = await start_document_index_run(pool, project)
     try:
-        return await index_repository_documents(settings.code_repositories_root, project, pool)
+        count = await index_repository_documents(settings.code_repositories_root, project, pool)
+        await finish_document_index_run(pool, run_id, "COMPLETED", count)
+        return count
+    except Exception as exc:
+        await finish_document_index_run(pool, run_id, "FAILED", error=str(exc)[:2000])
+        raise
     finally:
         await pool.close()
 
