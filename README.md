@@ -1,6 +1,6 @@
 # PHP 代码诊断 RAgent
 
-当前项目已完成阶段 0 至阶段 3，正在推进阶段 4：数据库、配置和日志验证。
+当前项目已完成阶段 0 至阶段 5，正在推进阶段 6：前端和协作能力。
 
 ## 本地启动
 
@@ -143,6 +143,16 @@ GET /api/diagnoses/{task_id}/report?format=markdown
 
 默认 JSON 响应与任务查询保持一致；Markdown 响应带有下载文件名，包含问题、状态、检索关键词、
 代码证据、调用链、事实验证和警告等章节。
+
+提交和查询诊断报告人工反馈：
+
+```text
+POST /api/diagnoses/{task_id}/feedback
+GET /api/diagnoses/{task_id}/feedback?limit=50
+```
+
+反馈类型为 `correct`、`inaccurate`、`insufficient_evidence` 或 `escalate`，可附带不超过
+2000 字的说明和提交者标识；反馈会与诊断任务级联保存，任务删除时自动清理。
 
 创建诊断任务时可以通过 `validation` 提交按需验证计划。Worker 会在代码检索后执行
 只读数据库查询、配置读取和日志检索，并将每个步骤的成功、失败或未请求状态写入

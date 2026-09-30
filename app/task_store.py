@@ -76,6 +76,22 @@ CREATE INDEX IF NOT EXISTS idx_validation_audit_task_created
     ON validation_audit (task_id, created_at DESC)
 """
 
+CREATE_FEEDBACK_SQL = """
+CREATE TABLE IF NOT EXISTS diagnostic_feedback (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(64) NOT NULL REFERENCES diagnostic_tasks(id) ON DELETE CASCADE,
+    rating VARCHAR(32) NOT NULL CHECK (rating IN ('correct', 'inaccurate', 'insufficient_evidence', 'escalate')),
+    comment TEXT,
+    submitted_by VARCHAR(100),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+CREATE_FEEDBACK_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_diagnostic_feedback_task_created
+    ON diagnostic_feedback (task_id, created_at DESC)
+"""
+
 CREATE_DOCUMENT_CHUNKS_SQL = """
 CREATE TABLE IF NOT EXISTS document_chunks (
     id BIGSERIAL PRIMARY KEY,
@@ -137,6 +153,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_SYMBOLS_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_INDEX_SQL)
+        await connection.execute(CREATE_FEEDBACK_SQL)
+        await connection.execute(CREATE_FEEDBACK_INDEX_SQL)
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(
             "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding JSONB"
@@ -333,6 +351,62 @@ async def insert_validation_audit(
         json.dumps(result_summary or {}, ensure_ascii=False),
         error,
     )
+
+
+def _decode_feedback(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
+    """将反馈记录转换为接口可返回的字典，并规范化创建时间。"""
+    if row is None:
+        return None
+    feedback = dict(row)
+    created_at = feedback.get("created_at")
+    if isinstance(created_at, datetime):
+        feedback["created_at"] = created_at.isoformat()
+    return feedback
+
+
+async def insert_feedback(
+    pool: asyncpg.Pool,
+    task_id: str,
+    rating: str,
+    comment: Optional[str] = None,
+    submitted_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """保存一条诊断任务人工反馈，并返回脱离数据库类型的记录。"""
+    row = await pool.fetchrow(
+        """
+        INSERT INTO diagnostic_feedback (task_id, rating, comment, submitted_by)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, task_id, rating, comment, submitted_by, created_at
+        """,
+        task_id,
+        rating,
+        comment,
+        submitted_by,
+    )
+    return _decode_feedback(row)  # type: ignore[return-value]
+
+
+async def list_feedback(
+    pool: asyncpg.Pool, task_id: str, limit: int = 50
+) -> list[Dict[str, Any]]:
+    """按时间倒序返回诊断任务反馈，并限制单次读取数量。"""
+    rows = await pool.fetch(
+        """
+        SELECT id, task_id, rating, comment, submitted_by, created_at
+        FROM diagnostic_feedback
+        WHERE task_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+        """,
+        task_id,
+        limit,
+    )
+    feedback_items = []
+    for row in rows:
+        feedback = _decode_feedback(row)
+        if feedback is not None:
+            feedback_items.append(feedback)
+    return feedback_items
 
 
 async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
