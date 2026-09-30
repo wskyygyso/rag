@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PHP 代码诊断 RAgent</title>
+    <style>
+      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; background: #f5f7fb; color: #202637; }
+      main { max-width: 980px; margin: 0 auto; padding: 32px 20px 60px; }
+      h1 { margin: 0 0 24px; font-size: 28px; }
+      h2 { margin-top: 28px; font-size: 20px; }
+      .card { background: #fff; border: 1px solid #e2e6ef; border-radius: 12px; padding: 20px; margin-bottom: 18px; box-shadow: 0 4px 16px #1e2a3a0d; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: #586174; }
+      textarea, input, select { box-sizing: border-box; width: 100%; border: 1px solid #cfd6e4; border-radius: 8px; padding: 10px; font: inherit; color: #202637; }
+      textarea { min-height: 100px; resize: vertical; }
+      .wide { grid-column: 1 / -1; }
+      button, a.button { display: inline-block; border: 0; border-radius: 8px; padding: 10px 15px; background: #315efb; color: #fff; cursor: pointer; text-decoration: none; font: inherit; }
+      button.secondary, a.secondary { background: #e9edf7; color: #26324a; }
+      button:disabled { opacity: .55; cursor: not-allowed; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+      .status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+      .metric { background: #f7f9fd; border-radius: 8px; padding: 12px; }
+      .metric small { display: block; color: #657087; margin-bottom: 5px; }
+      .metric strong { word-break: break-word; }
+      pre { overflow: auto; white-space: pre-wrap; background: #172033; color: #eff3fb; border-radius: 8px; padding: 14px; min-height: 80px; }
+      .muted { color: #657087; }
+      .error { color: #b42318; }
+      @media (max-width: 680px) { .grid, .status { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>PHP 代码诊断 RAgent</h1>
+      <section class="card">
+        <form id="diagnosis-form">
+          <div class="grid">
+            <label>项目<input id="project" name="project" value="waky3" required maxlength="100" /></label>
+            <label>环境<input id="environment" name="environment" value="development" maxlength="100" /></label>
+            <label class="wide">问题<textarea id="question" name="question" placeholder="例如：公会邀请失败可能是什么原因？" required maxlength="10000"></textarea></label>
+          </div>
+          <div class="actions">
+            <button id="submit" type="submit">开始诊断</button>
+            <span id="message" class="muted" role="status">等待输入问题</span>
+          </div>
+        </form>
+      </section>
+
+      <section class="card" aria-live="polite">
+        <h2>任务进度</h2>
+        <div class="status">
+          <div class="metric"><small>任务 ID</small><strong id="task-id">-</strong></div>
+          <div class="metric"><small>状态</small><strong id="task-status">-</strong></div>
+          <div class="metric"><small>进度</small><strong id="task-progress">-</strong></div>
+        </div>
+        <p id="task-step" class="muted">尚未创建任务</p>
+        <div class="actions">
+          <a id="report-link" class="button secondary" href="#" hidden>下载 Markdown 报告</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>报告预览</h2>
+        <pre id="report">完成诊断后可在这里预览 Markdown 报告。</pre>
+      </section>
+
+      <section class="card">
+        <h2>人工反馈</h2>
+        <form id="feedback-form">
+          <div class="grid">
+            <label>反馈类型
+              <select id="rating" required>
+                <option value="correct">正确</option>
+                <option value="inaccurate">不准确</option>
+                <option value="insufficient_evidence">证据不足</option>
+                <option value="escalate">转人工</option>
+              </select>
+            </label>
+            <label>提交者<input id="submitted-by" maxlength="100" placeholder="可选" /></label>
+            <label class="wide">说明<textarea id="comment" maxlength="2000" placeholder="可选，补充审阅意见"></textarea></label>
+          </div>
+          <div class="actions">
+            <button id="feedback-submit" type="submit" disabled>提交反馈</button>
+            <span id="feedback-message" class="muted" role="status">创建任务后可提交反馈</span>
+          </div>
+        </form>
+        <pre id="feedback-list">暂无反馈。</pre>
+      </section>
+    </main>
+
+    <script>
+      // 用于展示任务状态、报告和反馈的最小前端示例，不依赖外部 JavaScript 包。
+      const state = { taskId: null, events: null };
+      const $ = (id) => document.getElementById(id);
+
+      // 将 API 任务摘要同步到页面，避免把服务端文本作为 HTML 执行。
+      function renderTask(task) {
+        $("task-id").textContent = task.task_id || "-";
+        $("task-status").textContent = task.status || "-";
+        $("task-progress").textContent = `${task.progress ?? 0}%`;
+        $("task-step").textContent = task.current_step || "-";
+        $("feedback-submit").disabled = !task.task_id;
+        $("feedback-message").textContent = task.task_id ? "可以提交审阅意见" : "创建任务后可提交反馈";
+      }
+
+      // 拉取 Markdown 报告并在页面中以纯文本预览。
+      async function loadReport(taskId) {
+        const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
+        if (!response.ok) throw new Error(`报告获取失败（${response.status}）`);
+        $("report").textContent = await response.text();
+      }
+
+      // 拉取已有人工反馈，帮助审阅者确认提交结果。
+      async function loadFeedback(taskId) {
+        const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/feedback`);
+        if (!response.ok) throw new Error(`反馈获取失败（${response.status}）`);
+        const data = await response.json();
+        $("feedback-list").textContent = data.feedback.length
+          ? data.feedback.map((item) => `${item.rating}：${item.comment || "（无说明）"}`).join("\n")
+          : "暂无反馈。";
+      }
+
+      // 订阅 SSE 进度流，并在终态自动加载报告和反馈。
+      function watchTask(taskId) {
+        if (state.events) state.events.close();
+        state.events = new EventSource(`/api/diagnoses/${encodeURIComponent(taskId)}/events`);
+        state.events.addEventListener("progress", (event) => {
+          const task = JSON.parse(event.data);
+          renderTask(task);
+          if (["COMPLETED", "FAILED", "CANCELLED"].includes(task.status)) {
+            state.events.close();
+            loadReport(taskId).catch((error) => { $("report").textContent = error.message; });
+            loadFeedback(taskId).catch((error) => { $("feedback-list").textContent = error.message; });
+          }
+        });
+        state.events.onerror = () => { $("message").textContent = "进度连接已断开，可刷新页面重试"; };
+      }
+
+      // 创建诊断任务，并把返回的任务 ID 交给 SSE 进度订阅。
+      $("diagnosis-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        $("submit").disabled = true;
+        $("message").textContent = "正在创建任务…";
+        const payload = {
+          project: $("project").value.trim(),
+          environment: $("environment").value.trim() || "development",
+          question: $("question").value.trim(),
+        };
+        try {
+          const response = await fetch("/api/diagnoses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+          if (!response.ok) throw new Error(`任务创建失败（${response.status}）`);
+          const task = await response.json();
+          state.taskId = task.task_id;
+          $("report-link").href = `/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`;
+          $("report-link").hidden = false;
+          $("message").textContent = "任务已创建，正在等待进度…";
+          renderTask(task);
+          watchTask(state.taskId);
+        } catch (error) {
+          $("message").textContent = error.message;
+        } finally {
+          $("submit").disabled = false;
+        }
+      });
+
+      // 提交当前任务的人工反馈，并刷新反馈列表。
+      $("feedback-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!state.taskId) return;
+        $("feedback-submit").disabled = true;
+        try {
+          const response = await fetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/feedback`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rating: $("rating").value, comment: $("comment").value.trim() || null, submitted_by: $("submitted-by").value.trim() || null }),
+          });
+          if (!response.ok) throw new Error(`反馈提交失败（${response.status}）`);
+          $("feedback-message").textContent = "反馈已提交";
+          $("comment").value = "";
+          await loadFeedback(state.taskId);
+        } catch (error) {
+          $("feedback-message").textContent = error.message;
+        } finally {
+          $("feedback-submit").disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

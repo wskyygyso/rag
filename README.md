@@ -16,6 +16,10 @@
 
 API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 
+启动后访问 `http://127.0.0.1:8000/ui` 可打开轻量前端示例，页面支持创建诊断任务、查看 SSE
+进度、预览或下载 Markdown 报告，以及提交人工反馈。该页面使用原生 HTML、CSS 和 JavaScript，
+不需要额外的前端构建工具。
+
 ## 测试
 
 执行 `.venv/bin/pytest -q`。

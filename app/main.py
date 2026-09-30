@@ -10,6 +10,7 @@ from app.settings import get_settings
 from app.code_api import router as code_router
 from app.diagnosis import router as diagnosis_router
 from app.feedback_api import router as feedback_router
+from app.frontend import router as frontend_router
 from app.validation_api import router as validation_router
 from app.hybrid_api import router as hybrid_router
 from app.index_api import router as index_router
@@ -36,6 +37,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.include_router(diagnosis_router)
 app.include_router(feedback_router)
+app.include_router(frontend_router)
 app.include_router(code_router)
 app.include_router(validation_router)
 app.include_router(hybrid_router)
