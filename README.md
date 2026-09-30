@@ -81,6 +81,8 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 embedding 模型标识和维度，生产环境替换向量提供商时可避免新旧向量混用。
 召回时如果发现模型或维度不兼容，会自动关闭向量分数并降级使用全文分数，同时在结果
 中标记 `vector_compatible=false`。
+向量生成通过 `EmbeddingProvider` 契约隔离，当前默认实现为 `DeterministicEmbeddingProvider`；
+接入真实模型时只需实现同一 `embed(text)` 接口并更新模型标识。
 
 建立项目分块索引：
 

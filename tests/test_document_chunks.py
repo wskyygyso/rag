@@ -3,7 +3,7 @@
 import pytest
 
 from app.document_chunks import build_repository_chunks, chunk_text
-from app.embeddings import EMBEDDING_DIMENSION, cosine_similarity, embed_text
+from app.embeddings import EMBEDDING_DIMENSION, EMBEDDING_MODEL, cosine_similarity, embed_text, get_embedding_provider
 from app.embeddings import EMBEDDING_MODEL
 
 
@@ -62,3 +62,12 @@ def test_embedding_is_deterministic_and_similarity_is_bounded() -> None:
     assert first == second
     assert cosine_similarity(first, first) == pytest.approx(1.0)
     assert -1.0 <= cosine_similarity(first, other) <= 1.0
+
+
+def test_embedding_provider_contract_rejects_unknown_model() -> None:
+    """验证 provider 工厂能返回本地实现并拒绝未知模型。"""
+    provider = get_embedding_provider()
+    assert provider.model_name == EMBEDDING_MODEL
+    assert len(provider.embed("invite")) == EMBEDDING_DIMENSION
+    with pytest.raises(ValueError):
+        get_embedding_provider("unknown-model")
