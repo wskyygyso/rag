@@ -79,6 +79,8 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 内容哈希、MVP 文本向量和 PostgreSQL `tsvector` 全文索引，为后续替换真实 embedding
 服务提供基础。当前向量由确定性哈希特征生成，不依赖外部模型；每个分块同时记录
 embedding 模型标识和维度，生产环境替换向量提供商时可避免新旧向量混用。
+召回时如果发现模型或维度不兼容，会自动关闭向量分数并降级使用全文分数，同时在结果
+中标记 `vector_compatible=false`。
 
 建立项目分块索引：
 

@@ -127,11 +127,18 @@ async def search_document_chunks(
     for row in rows:
         lexical_score = min(1.0, max(0.0, float(row["lexical_score"] or 0)))
         embedding = row.get("embedding") if hasattr(row, "get") else None
-        vector_score = max(0.0, cosine_similarity(query_vector, embedding))
+        embedding_model = row.get("embedding_model") if hasattr(row, "get") else None
+        embedding_dimension = row.get("embedding_dimension") if hasattr(row, "get") else None
+        vector_compatible = (
+            embedding_model == EMBEDDING_MODEL
+            and embedding_dimension == EMBEDDING_DIMENSION
+            and bool(embedding)
+        )
+        vector_score = max(0.0, cosine_similarity(query_vector, embedding)) if vector_compatible else 0.0
         score = round(0.6 * lexical_score + 0.4 * vector_score, 6)
         if score <= 0:
             continue
-        scored.append((score, row, lexical_score, vector_score))
+        scored.append((score, row, lexical_score, vector_score, vector_compatible))
     scored.sort(key=lambda item: (-item[0], item[1]["source_id"]))
     return [
         {
@@ -147,8 +154,9 @@ async def search_document_chunks(
             "vector_score": vector_score,
             "embedding_model": row.get("embedding_model") if hasattr(row, "get") else None,
             "embedding_dimension": row.get("embedding_dimension") if hasattr(row, "get") else None,
+            "vector_compatible": vector_compatible,
         }
-        for score, row, lexical_score, vector_score in scored[:limit]
+        for score, row, lexical_score, vector_score, vector_compatible in scored[:limit]
     ]
 
 

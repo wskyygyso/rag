@@ -36,3 +36,32 @@ async def test_search_document_chunks_combines_lexical_and_vector_scores() -> No
     assert result[0]["vector_score"] > 0
     assert result[0]["score"] > 0
     assert result[0]["embedding_model"] == "hash-v1"
+    assert result[0]["vector_compatible"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_document_chunks_falls_back_to_lexical_for_incompatible_vector() -> None:
+    """验证模型或维度不兼容时不混算向量分数，仍保留全文结果。"""
+    class IncompatiblePool:
+        """返回旧模型分块的连接池替身。"""
+
+        async def fetch(self, query, project, keyword):
+            """返回旧模型向量和可用全文分数。"""
+            return [
+                {
+                    "source_id": "old:1-2",
+                    "file_path": "old.md",
+                    "line_start": 1,
+                    "line_end": 2,
+                    "content": "old content",
+                    "embedding": embed_text("old content"),
+                    "embedding_model": "legacy-v0",
+                    "embedding_dimension": 32,
+                    "lexical_score": 0.8,
+                }
+            ]
+
+    result = await search_document_chunks(IncompatiblePool(), "waky3", "old", limit=5)
+    assert result[0]["vector_score"] == 0
+    assert result[0]["vector_compatible"] is False
+    assert result[0]["score"] == 0.48
