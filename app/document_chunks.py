@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from app.code_tools import CodeRepository, CodeToolError
+from app.embeddings import embed_text, cosine_similarity
 
 TEXT_EXTENSIONS = {".php", ".inc", ".phtml", ".conf", ".ini", ".yaml", ".yml", ".json", ".md", ".txt"}
 IGNORED_DIRECTORIES = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
@@ -53,6 +54,7 @@ def chunk_text(
                 "line_end": end,
                 "content": text,
                 "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "embedding": embed_text(text),
                 "metadata": {"parent_source_id": source_id},
             }
         )
@@ -107,17 +109,27 @@ async def search_document_chunks(
     """使用 PostgreSQL 全文索引召回项目分块，并返回来源和相关性分数。"""
     rows = await pool.fetch(
         """
-        SELECT source_type, source_id, file_path, line_start, line_end, content,
-               ts_rank(search_vector, plainto_tsquery('simple', $2)) AS score
+        SELECT source_type, source_id, file_path, line_start, line_end, content, embedding,
+               ts_rank(search_vector, plainto_tsquery('simple', $2)) AS lexical_score
         FROM document_chunks
-        WHERE project = $1 AND search_vector @@ plainto_tsquery('simple', $2)
-        ORDER BY score DESC, source_id
-        LIMIT $3
+        WHERE project = $1
+        ORDER BY updated_at DESC, source_id
+        LIMIT 1000
         """,
         project,
         query,
-        limit,
     )
+    query_vector = embed_text(query)
+    scored = []
+    for row in rows:
+        lexical_score = min(1.0, max(0.0, float(row["lexical_score"] or 0)))
+        embedding = row.get("embedding") if hasattr(row, "get") else None
+        vector_score = max(0.0, cosine_similarity(query_vector, embedding))
+        score = round(0.6 * lexical_score + 0.4 * vector_score, 6)
+        if score <= 0:
+            continue
+        scored.append((score, row, lexical_score, vector_score))
+    scored.sort(key=lambda item: (-item[0], item[1]["source_id"]))
     return [
         {
             "source_type": "chunk",
@@ -127,9 +139,11 @@ async def search_document_chunks(
             "line_start": row["line_start"],
             "line_end": row["line_end"],
             "content": row["content"],
-            "score": float(row["score"]),
+            "score": score,
+            "lexical_score": lexical_score,
+            "vector_score": vector_score,
         }
-        for row in rows
+        for score, row, lexical_score, vector_score in scored[:limit]
     ]
 
 
@@ -153,11 +167,12 @@ async def sync_document_chunks(
                     """
                     INSERT INTO document_chunks
                         (project, source_type, source_id, file_path, line_start, line_end,
-                         content, content_hash, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+                         content, content_hash, embedding, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
                     ON CONFLICT (project, source_type, source_id)
                     DO UPDATE SET content = EXCLUDED.content,
                                   content_hash = EXCLUDED.content_hash,
+                                  embedding = EXCLUDED.embedding,
                                   metadata = EXCLUDED.metadata,
                                   updated_at = NOW()
                     """,
@@ -169,6 +184,7 @@ async def sync_document_chunks(
                     chunk.get("line_end"),
                     chunk["content"],
                     chunk["content_hash"],
+                    json.dumps(chunk.get("embedding", []), ensure_ascii=False),
                     json.dumps(chunk.get("metadata", {}), ensure_ascii=False),
                 )
             if source_types:

@@ -3,6 +3,7 @@
 import pytest
 
 from app.document_chunks import build_repository_chunks, chunk_text
+from app.embeddings import EMBEDDING_DIMENSION, cosine_similarity, embed_text
 
 
 def test_chunk_text_keeps_line_ranges_hashes_and_overlap() -> None:
@@ -24,6 +25,7 @@ def test_chunk_text_keeps_line_ranges_hashes_and_overlap() -> None:
         "waky3", "code", "Guild.php", chunks[0]["content"], max_chars=100
     )[0]["content_hash"]
     assert chunks[1]["line_start"] <= chunks[0]["line_end"]
+    assert len(chunks[0]["embedding"]) == EMBEDDING_DIMENSION
 
 
 def test_chunk_text_rejects_invalid_boundaries() -> None:
@@ -47,3 +49,13 @@ def test_build_repository_chunks_skips_dependencies_and_classifies_sources(tmp_p
     chunks = build_repository_chunks(str(tmp_path), "waky3", max_chars=100)
     assert {chunk["source_type"] for chunk in chunks} == {"code", "document"}
     assert all("vendor" not in chunk["file_path"] for chunk in chunks)
+
+
+def test_embedding_is_deterministic_and_similarity_is_bounded() -> None:
+    """验证 MVP 向量稳定，余弦相似度保持在合法范围。"""
+    first = embed_text("Guild invite failed")
+    second = embed_text("Guild invite failed")
+    other = embed_text("different question")
+    assert first == second
+    assert cosine_similarity(first, first) == pytest.approx(1.0)
+    assert -1.0 <= cosine_similarity(first, other) <= 1.0
