@@ -131,7 +131,18 @@ POST /api/index/{project}/runs/{run_id}/retry
 .venv/bin/python scripts/index_php_repository.py waky3 --dry-run
 ```
 
-当前的诊断报告仍是关键词检索报告，尚未接入 LLM、PHP AST 调用链分析、数据库验证和日志验证。
+当前诊断报告会汇总关键词检索、PHP 符号和调用链、按需数据库/配置/日志验证结果；仍未接入
+LLM 生成式结论，报告中的事实和建议应以代码证据及验证结果为准。
+
+查询诊断报告并导出 Markdown：
+
+```text
+GET /api/diagnoses/{task_id}/report
+GET /api/diagnoses/{task_id}/report?format=markdown
+```
+
+默认 JSON 响应与任务查询保持一致；Markdown 响应带有下载文件名，包含问题、状态、检索关键词、
+代码证据、调用链、事实验证和警告等章节。
 
 创建诊断任务时可以通过 `validation` 提交按需验证计划。Worker 会在代码检索后执行
 只读数据库查询、配置读取和日志检索，并将每个步骤的成功、失败或未请求状态写入

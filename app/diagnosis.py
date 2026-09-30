@@ -5,12 +5,13 @@ import json
 import uuid
 from typing import AsyncIterator, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.task_store import get_task, insert_task, mark_cancelled
 from app.validation_plan import ValidationPlan, validation_plan_dict
+from app.reporting import build_markdown_report
 
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
 
@@ -91,6 +92,26 @@ async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
             raise HTTPException(status_code=404, detail="诊断任务不存在")
         raise HTTPException(status_code=409, detail="任务已经结束，无法取消")
     return _task_response(task)
+
+
+@router.get("/{task_id}/report")
+async def get_report(
+    task_id: str,
+    request: Request,
+    format: str = Query(default="json", pattern="^(json|markdown)$"),
+):
+    """获取稳定诊断报告，支持 JSON 摘要或 Markdown 导出。"""
+    task = await get_task(_pool(request), task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    response = _task_response(task)
+    if format == "markdown":
+        return PlainTextResponse(
+            build_markdown_report(response),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{task_id}.md"'},
+        )
+    return response
 
 
 async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
