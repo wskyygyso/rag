@@ -49,11 +49,16 @@ async def test_search_hybrid_merges_sources_and_redacts_history(tmp_path: Path, 
             "sql": [],
         },
     )
+    async def fake_chunks(*args, **kwargs):
+        """返回一条全文分块结果。"""
+        return [{"source_type": "chunk", "source_id": "Guild.php:1-1", "score": 0.7}]
+
+    monkeypatch.setattr(hybrid_search, "search_document_chunks", fake_chunks)
     pool = _Pool()
     result = await hybrid_search.search_hybrid(
         str(tmp_path), "waky3", "invite", pool, limit=10, history_offset=2, history_days=30
     )
-    assert {item["source_type"] for item in result["results"]} == {"code", "symbol", "history"}
+    assert {item["source_type"] for item in result["results"]} == {"code", "symbol", "history", "chunk"}
     assert "secret" not in str(result)
     assert result["results"][0]["score"] == 1.0
     assert pool.arguments[0] == "waky3"

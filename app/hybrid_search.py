@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from app.code_tools import CodeToolError, search_code
+from app.document_chunks import search_document_chunks
 from app.php_index import index_repository
 from app.validation_tools import redact_sensitive
 
@@ -103,6 +104,9 @@ async def search_hybrid(
                 **symbol,
             })
     results.extend(await _search_history(pool, project, query, limit, history_offset, history_days))
+    for item in await search_document_chunks(pool, project, query, limit):
+        item["score"] = min(0.85, max(0.1, item["score"]))
+        results.append(item)
     unique: Dict[str, Dict[str, Any]] = {}
     for item in results:
         unique.setdefault(f"{item['source_type']}:{item['source_id']}", item)

@@ -76,6 +76,32 @@ CREATE INDEX IF NOT EXISTS idx_validation_audit_task_created
     ON validation_audit (task_id, created_at DESC)
 """
 
+CREATE_DOCUMENT_CHUNKS_SQL = """
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id BIGSERIAL PRIMARY KEY,
+    project VARCHAR(100) NOT NULL,
+    source_type VARCHAR(30) NOT NULL,
+    source_id VARCHAR(500) NOT NULL,
+    file_path TEXT,
+    line_start INT,
+    line_end INT,
+    content TEXT NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (project, source_type, source_id)
+)
+"""
+
+CREATE_DOCUMENT_CHUNKS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_document_chunks_project_type
+    ON document_chunks (project, source_type);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_search_vector
+    ON document_chunks USING GIN (search_vector)
+"""
+
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
     """创建数据库连接池，并确保任务和证据表存在。"""
@@ -89,6 +115,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_SYMBOLS_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_INDEX_SQL)
+        await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
+        await connection.execute(CREATE_DOCUMENT_CHUNKS_INDEX_SQL)
     return pool
 
 

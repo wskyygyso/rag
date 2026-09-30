@@ -75,6 +75,16 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 来源标识和相关性分数；历史结果支持偏移量和时间范围筛选，只返回脱敏摘要，不能直接
 替代当前代码和事实证据。
 
+阶段 5 已建立 `document_chunks` 统一分块表，保存来源类型、稳定来源标识、文件行号、
+内容哈希和 PostgreSQL `tsvector` 全文索引，为后续增量索引和向量字段扩展提供基础。
+
+建立项目分块索引：
+
+```bash
+.venv/bin/python scripts/index_document_repository.py waky3
+.venv/bin/python scripts/index_document_repository.py waky3 --dry-run
+```
+
 验证接口支持可选 `task_id` 关联诊断任务。每次成功或失败操作都会写入
 `validation_audit` 审计表；审计仅保存文件名、行数、匹配数等摘要，并对敏感键值
 递归脱敏，不保存完整密码、Token、Cookie、SQL 参数或配置内容。审计写入失败不会
