@@ -19,5 +19,8 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "retry-task" in response.text
     assert "cancel-task" in response.text
     assert "navigator.clipboard.writeText" in response.text
+    assert "history-status" in response.text
+    assert "/api/feedback/" in response.text
+    assert "loadProjectSummary" in response.text
     assert "EventSource" in response.text
     assert "提交反馈" in response.text

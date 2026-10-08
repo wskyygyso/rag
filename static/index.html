@@ -66,12 +66,25 @@
 
       <section class="card">
         <h2>历史任务</h2>
+        <div class="grid">
+          <label>状态
+            <select id="history-status">
+              <option value="">全部状态</option>
+              <option value="COMPLETED">已完成</option>
+              <option value="FAILED">失败</option>
+              <option value="CANCELLED">已取消</option>
+              <option value="RUNNING">执行中</option>
+            </select>
+          </label>
+          <label>最近天数<input id="history-days" type="number" min="1" max="3650" placeholder="不限" /></label>
+        </div>
         <div class="actions">
           <button id="history-load" class="secondary" type="button">加载最近任务</button>
           <button id="history-more" class="secondary" type="button" hidden>加载更多</button>
           <span id="history-message" class="muted" role="status">可按项目查看历史任务</span>
         </div>
         <div id="history-list" class="muted">暂无历史任务。</div>
+        <p id="project-summary" class="muted">项目反馈摘要：暂无数据</p>
       </section>
 
       <section class="card">
@@ -243,21 +256,34 @@
       // 分页加载历史任务，达到返回数量时显示下一页按钮。
       async function loadHistory(append) {
         const project = encodeURIComponent($("project").value.trim());
+        const status = encodeURIComponent($("history-status").value);
+        const days = encodeURIComponent($("history-days").value);
         $("history-message").textContent = "正在加载…";
         try {
-          const response = await fetch(`/api/diagnoses/history?project=${project}&offset=${state.historyOffset}&limit=20`);
+          const filters = `project=${project}&offset=${state.historyOffset}&limit=20${status ? `&status=${status}` : ""}${days ? `&days=${days}` : ""}`;
+          const response = await fetch(`/api/diagnoses/history?${filters}`);
           if (!response.ok) throw new Error(`历史任务获取失败（${response.status}）`);
           const data = await response.json();
           renderHistory(data.items, append);
           state.historyOffset += data.items.length;
           $("history-more").hidden = data.items.length < data.limit;
           $("history-message").textContent = `已加载 ${state.historyOffset} 条任务`;
+          if (!append) await loadProjectSummary();
         } catch (error) {
           $("history-message").textContent = error.message;
         }
       }
 
       $("history-more").addEventListener("click", () => loadHistory(true));
+
+      // 加载当前项目的反馈质量摘要，和历史任务筛选保持同一项目范围。
+      async function loadProjectSummary() {
+        const project = encodeURIComponent($("project").value.trim());
+        const response = await fetch(`/api/feedback/${project}/summary`);
+        if (!response.ok) throw new Error(`项目反馈摘要获取失败（${response.status}）`);
+        const data = await response.json();
+        $("project-summary").textContent = `项目反馈摘要：共 ${data.total} 条，涉及 ${data.task_count} 个任务；正确 ${data.counts.correct}，不准确 ${data.counts.inaccurate}，证据不足 ${data.counts.insufficient_evidence}，转人工 ${data.counts.escalate}`;
+      }
 
       // 将当前失败任务重新排队，并重新订阅执行进度。
       $("retry-task").addEventListener("click", async () => {
