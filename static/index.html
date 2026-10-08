@@ -26,6 +26,7 @@
       .metric strong { word-break: break-word; }
       pre { overflow: auto; white-space: pre-wrap; background: #172033; color: #eff3fb; border-radius: 8px; padding: 14px; min-height: 80px; }
       .muted { color: #657087; }
+      .history-item { display: block; width: 100%; margin: 6px 0; text-align: left; background: #f7f9fd; color: #26324a; }
       .error { color: #b42318; }
       @media (max-width: 680px) { .grid, .status { grid-template-columns: 1fr; } }
     </style>
@@ -64,9 +65,10 @@
         <h2>历史任务</h2>
         <div class="actions">
           <button id="history-load" class="secondary" type="button">加载最近任务</button>
+          <button id="history-more" class="secondary" type="button" hidden>加载更多</button>
           <span id="history-message" class="muted" role="status">可按项目查看历史任务</span>
         </div>
-        <pre id="history-list">暂无历史任务。</pre>
+        <div id="history-list" class="muted">暂无历史任务。</div>
       </section>
 
       <section class="card">
@@ -100,7 +102,7 @@
 
     <script>
       // 用于展示任务状态、报告和反馈的最小前端示例，不依赖外部 JavaScript 包。
-      const state = { taskId: null, events: null };
+      const state = { taskId: null, events: null, historyOffset: 0 };
       const $ = (id) => document.getElementById(id);
 
       // 将 API 任务摘要同步到页面，避免把服务端文本作为 HTML 执行。
@@ -199,20 +201,57 @@
 
       // 加载当前项目最近任务，便于从前端回看历史诊断。
       $("history-load").addEventListener("click", async () => {
+        state.historyOffset = 0;
+        await loadHistory(false);
+      });
+
+      // 根据历史摘要创建安全的纯文本按钮，点击后加载任务报告和反馈。
+      function renderHistory(items, append) {
+        const list = $("history-list");
+        if (!append) list.replaceChildren();
+        if (!items.length && !append) {
+          list.textContent = "暂无历史任务。";
+          return;
+        }
+        items.forEach((item) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "history-item";
+          button.textContent = `${item.id} | ${item.status} | ${item.question}`;
+          button.addEventListener("click", async () => {
+            state.taskId = item.id;
+            $("report-link").href = `/api/diagnoses/${encodeURIComponent(item.id)}/report?format=markdown`;
+            $("report-link").hidden = false;
+            renderTask({ task_id: item.id, status: item.status, progress: item.progress, current_step: item.current_step });
+            try {
+              await Promise.all([loadReport(item.id), loadFeedback(item.id)]);
+              $("message").textContent = "已加载历史任务报告";
+            } catch (error) {
+              $("message").textContent = error.message;
+            }
+          });
+          list.appendChild(button);
+        });
+      }
+
+      // 分页加载历史任务，达到返回数量时显示下一页按钮。
+      async function loadHistory(append) {
         const project = encodeURIComponent($("project").value.trim());
         $("history-message").textContent = "正在加载…";
         try {
-          const response = await fetch(`/api/diagnoses/history?project=${project}&limit=20`);
+          const response = await fetch(`/api/diagnoses/history?project=${project}&offset=${state.historyOffset}&limit=20`);
           if (!response.ok) throw new Error(`历史任务获取失败（${response.status}）`);
           const data = await response.json();
-          $("history-list").textContent = data.items.length
-            ? data.items.map((item) => `${item.id} | ${item.status} | ${item.question}`).join("\n")
-            : "暂无历史任务。";
-          $("history-message").textContent = `已加载 ${data.items.length} 条任务`;
+          renderHistory(data.items, append);
+          state.historyOffset += data.items.length;
+          $("history-more").hidden = data.items.length < data.limit;
+          $("history-message").textContent = `已加载 ${state.historyOffset} 条任务`;
         } catch (error) {
           $("history-message").textContent = error.message;
         }
-      });
+      }
+
+      $("history-more").addEventListener("click", () => loadHistory(true));
     </script>
   </body>
 </html>
