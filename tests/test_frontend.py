@@ -16,5 +16,6 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "/api/diagnoses/history" in response.text
     assert "history-more" in response.text
     assert "renderHistory" in response.text
+    assert "retry-task" in response.text
     assert "EventSource" in response.text
     assert "提交反馈" in response.text

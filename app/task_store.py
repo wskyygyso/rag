@@ -326,6 +326,34 @@ async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str,
     return _decode_task(row)
 
 
+async def prepare_task_retry(
+    pool: asyncpg.Pool, task_id: str, max_retries: int = 3
+) -> Optional[Dict[str, Any]]:
+    """将失败任务原子重置为排队状态，并限制人工重试次数。"""
+    row = await pool.fetchrow(
+        """
+        UPDATE diagnostic_tasks
+        SET status = 'QUEUED',
+            progress = 0,
+            current_step = '等待 Worker 重新执行',
+            result = NULL,
+            error = NULL,
+            retry_count = retry_count + 1,
+            updated_at = NOW()
+        WHERE id = $1 AND status = 'FAILED' AND retry_count < $2
+        RETURNING *
+        """,
+        task_id,
+        max_retries,
+    )
+    return _decode_task(row)
+
+
+async def clear_task_evidence(pool: asyncpg.Pool, task_id: str) -> None:
+    """清理任务旧证据，避免人工重试后重复保存相同上下文。"""
+    await pool.execute("DELETE FROM diagnostic_evidence WHERE task_id = $1", task_id)
+
+
 async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, Any]) -> None:
     """保存一条诊断证据，并记录其来源工具和上下文。"""
     await pool.execute(

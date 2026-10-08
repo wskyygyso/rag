@@ -2,7 +2,7 @@
 
 from celery import Celery
 
-from app.task_store import create_pool, get_task, insert_evidence, update_task
+from app.task_store import clear_task_evidence, create_pool, get_task, insert_evidence, update_task
 from app.task_store import replace_symbol_index
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
@@ -57,6 +57,8 @@ async def _execute_diagnosis(task_id: str) -> None:
         current = await get_task(pool, task_id)
         if current is None or current["status"] == "CANCELLED":
             return
+        if current.get("retry_count", 0) > 0:
+            await clear_task_evidence(pool, task_id)
         await update_task(
             pool,
             task_id,

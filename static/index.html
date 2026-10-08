@@ -58,6 +58,7 @@
         <p id="task-step" class="muted">尚未创建任务</p>
         <div class="actions">
           <a id="report-link" class="button secondary" href="#" hidden>下载 Markdown 报告</a>
+          <button id="retry-task" class="secondary" type="button" hidden>重新执行失败任务</button>
         </div>
       </section>
 
@@ -113,6 +114,7 @@
         $("task-step").textContent = task.current_step || "-";
         $("feedback-submit").disabled = !task.task_id;
         $("feedback-message").textContent = task.task_id ? "可以提交审阅意见" : "创建任务后可提交反馈";
+        $("retry-task").hidden = task.status !== "FAILED";
       }
 
       // 拉取 Markdown 报告并在页面中以纯文本预览。
@@ -252,6 +254,28 @@
       }
 
       $("history-more").addEventListener("click", () => loadHistory(true));
+
+      // 将当前失败任务重新排队，并重新订阅执行进度。
+      $("retry-task").addEventListener("click", async () => {
+        if (!state.taskId) return;
+        $("retry-task").disabled = true;
+        $("message").textContent = "正在重新投递任务…";
+        try {
+          const response = await fetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/retry`, { method: "POST" });
+          if (!response.ok) {
+            const body = await response.json();
+            throw new Error(body.detail || `任务重试失败（${response.status}）`);
+          }
+          const task = await response.json();
+          renderTask(task);
+          $("message").textContent = "任务已重新排队";
+          watchTask(state.taskId);
+        } catch (error) {
+          $("message").textContent = error.message;
+        } finally {
+          $("retry-task").disabled = false;
+        }
+      });
     </script>
   </body>
 </html>

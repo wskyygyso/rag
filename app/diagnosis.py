@@ -9,7 +9,14 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.task_store import get_task, insert_task, list_tasks, mark_cancelled
+from app.task_store import (
+    get_task,
+    insert_task,
+    list_tasks,
+    mark_cancelled,
+    prepare_task_retry,
+    update_task,
+)
 from app.validation_plan import ValidationPlan, validation_plan_dict
 from app.reporting import build_markdown_report
 
@@ -57,9 +64,10 @@ def _pool(request: Request):
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) -> Dict:
     """创建诊断任务并投递到 Celery 队列。"""
+    pool = _pool(request)
     task_id = f"diag_{uuid.uuid4().hex}"
     task = await insert_task(
-        _pool(request),
+        pool,
         task_id,
         payload.project,
         payload.question,
@@ -69,7 +77,18 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
     )
     from app.worker import run_diagnosis_task
 
-    run_diagnosis_task.delay(task_id)
+    try:
+        run_diagnosis_task.delay(task_id)
+    except Exception as exc:
+        await update_task(
+            pool,
+            task_id,
+            status="FAILED",
+            progress=100,
+            current_step="任务重新投递失败",
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="任务重新投递失败") from exc
     return _task_response(task)
 
 
@@ -114,6 +133,35 @@ async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
         if existing is None:
             raise HTTPException(status_code=404, detail="诊断任务不存在")
         raise HTTPException(status_code=409, detail="任务已经结束，无法取消")
+    return _task_response(task)
+
+
+@router.post("/{task_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_diagnosis(task_id: str, request: Request) -> Dict:
+    """将失败任务重新排队；非失败任务或达到上限时拒绝重试。"""
+    pool = _pool(request)
+    task = await prepare_task_retry(pool, task_id)
+    if task is None:
+        existing = await get_task(pool, task_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="诊断任务不存在")
+        if existing.get("retry_count", 0) >= 3:
+            raise HTTPException(status_code=409, detail="任务已达到人工重试上限")
+        raise HTTPException(status_code=409, detail="只有失败任务可以重新执行")
+    from app.worker import run_diagnosis_task
+
+    try:
+        run_diagnosis_task.delay(task_id)
+    except Exception as exc:
+        await update_task(
+            pool,
+            task_id,
+            status="FAILED",
+            progress=100,
+            current_step="任务重新投递失败",
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="任务重新投递失败") from exc
     return _task_response(task)
 
 
