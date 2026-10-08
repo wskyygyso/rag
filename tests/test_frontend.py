@@ -17,5 +17,7 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "history-more" in response.text
     assert "renderHistory" in response.text
     assert "retry-task" in response.text
+    assert "cancel-task" in response.text
+    assert "navigator.clipboard.writeText" in response.text
     assert "EventSource" in response.text
     assert "提交反馈" in response.text

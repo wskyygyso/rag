@@ -58,6 +58,8 @@
         <p id="task-step" class="muted">尚未创建任务</p>
         <div class="actions">
           <a id="report-link" class="button secondary" href="#" hidden>下载 Markdown 报告</a>
+          <button id="copy-report" class="secondary" type="button" disabled>复制报告</button>
+          <button id="cancel-task" class="secondary" type="button" hidden>取消任务</button>
           <button id="retry-task" class="secondary" type="button" hidden>重新执行失败任务</button>
         </div>
       </section>
@@ -114,6 +116,7 @@
         $("task-step").textContent = task.current_step || "-";
         $("feedback-submit").disabled = !task.task_id;
         $("feedback-message").textContent = task.task_id ? "可以提交审阅意见" : "创建任务后可提交反馈";
+        $("cancel-task").hidden = !["QUEUED", "RUNNING", "SEARCHING", "VERIFYING", "REPORTING"].includes(task.status);
         $("retry-task").hidden = task.status !== "FAILED";
       }
 
@@ -122,6 +125,7 @@
         const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
         if (!response.ok) throw new Error(`报告获取失败（${response.status}）`);
         $("report").textContent = await response.text();
+        $("copy-report").disabled = false;
       }
 
       // 拉取已有人工反馈，帮助审阅者确认提交结果。
@@ -274,6 +278,37 @@
           $("message").textContent = error.message;
         } finally {
           $("retry-task").disabled = false;
+        }
+      });
+
+      // 取消当前未结束任务，并立即刷新任务状态。
+      $("cancel-task").addEventListener("click", async () => {
+        if (!state.taskId) return;
+        $("cancel-task").disabled = true;
+        try {
+          const response = await fetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/cancel`, { method: "POST" });
+          if (!response.ok) {
+            const body = await response.json();
+            throw new Error(body.detail || `任务取消失败（${response.status}）`);
+          }
+          const task = await response.json();
+          if (state.events) state.events.close();
+          renderTask(task);
+          $("message").textContent = "任务已取消";
+        } catch (error) {
+          $("message").textContent = error.message;
+        } finally {
+          $("cancel-task").disabled = false;
+        }
+      });
+
+      // 将纯文本 Markdown 报告写入剪贴板，失败时给出明确提示。
+      $("copy-report").addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText($("report").textContent);
+          $("message").textContent = "报告已复制";
+        } catch (error) {
+          $("message").textContent = "复制失败，请手动选择报告内容";
         }
       });
     </script>
