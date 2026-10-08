@@ -12,5 +12,6 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert response.headers["content-type"].startswith("text/html")
     assert "开始诊断" in response.text
     assert "/api/diagnoses/" in response.text
+    assert "summaryResponse" in response.text
     assert "EventSource" in response.text
     assert "提交反馈" in response.text

@@ -409,6 +409,84 @@ async def list_feedback(
     return feedback_items
 
 
+async def summarize_feedback(pool: asyncpg.Pool, task_id: str) -> Dict[str, Any]:
+    """汇总任务反馈数量和最近反馈时间，供质量看板使用。"""
+    rows = await pool.fetch(
+        """
+        SELECT rating, COUNT(*) AS count, MAX(created_at) AS latest_at
+        FROM diagnostic_feedback
+        WHERE task_id = $1
+        GROUP BY rating
+        """,
+        task_id,
+    )
+    counts = {
+        "correct": 0,
+        "inaccurate": 0,
+        "insufficient_evidence": 0,
+        "escalate": 0,
+    }
+    latest_at = None
+    for row in rows:
+        rating = row["rating"]
+        if rating in counts:
+            counts[rating] = int(row["count"])
+        candidate = row["latest_at"]
+        if candidate is not None and (latest_at is None or candidate > latest_at):
+            latest_at = candidate
+    if latest_at is not None:
+        latest_at = latest_at.isoformat() if isinstance(latest_at, datetime) else str(latest_at)
+    return {"total": sum(counts.values()), "counts": counts, "latest_at": latest_at}
+
+
+async def summarize_project_feedback(pool: asyncpg.Pool, project: str) -> Dict[str, Any]:
+    """按项目汇总多个诊断任务的反馈数量、任务数和最近反馈时间。"""
+    rows = await pool.fetch(
+        """
+        SELECT f.rating, COUNT(*) AS count, COUNT(DISTINCT f.task_id) AS task_count,
+               (
+                   SELECT COUNT(DISTINCT f2.task_id)
+                   FROM diagnostic_feedback AS f2
+                   JOIN diagnostic_tasks AS t2 ON t2.id = f2.task_id
+                   WHERE t2.project = $1
+               ) AS project_task_count,
+               MAX(f.created_at) AS latest_at
+        FROM diagnostic_feedback AS f
+        JOIN diagnostic_tasks AS t ON t.id = f.task_id
+        WHERE t.project = $1
+        GROUP BY f.rating
+        """,
+        project,
+    )
+    counts = {
+        "correct": 0,
+        "inaccurate": 0,
+        "insufficient_evidence": 0,
+        "escalate": 0,
+    }
+    task_count = 0
+    latest_at = None
+    for row in rows:
+        rating = row["rating"]
+        if rating in counts:
+            counts[rating] = int(row["count"])
+        task_count = max(
+            task_count,
+            int(row.get("project_task_count", row.get("task_count", 0))),
+        )
+        candidate = row["latest_at"]
+        if candidate is not None and (latest_at is None or candidate > latest_at):
+            latest_at = candidate
+    if latest_at is not None:
+        latest_at = latest_at.isoformat() if isinstance(latest_at, datetime) else str(latest_at)
+    return {
+        "total": sum(counts.values()),
+        "task_count": task_count,
+        "counts": counts,
+        "latest_at": latest_at,
+    }
+
+
 async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
     """创建一条运行中的文档索引记录并返回运行 ID。"""
     return await start_document_index_run_with_revision(pool, project)

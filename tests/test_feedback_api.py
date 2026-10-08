@@ -25,8 +25,34 @@ class _Pool:
             "created_at": datetime(2026, 9, 30, tzinfo=timezone.utc),
         }
 
-    async def fetch(self, query, task_id, limit):
+    async def fetch(self, query, task_id, limit=None):
         """返回一条按时间排序的反馈记录。"""
+        if "JOIN diagnostic_tasks" in query:
+            return [
+                {
+                    "rating": "correct",
+                    "count": 2,
+                    "task_count": 2,
+                    "project_task_count": 2,
+                    "latest_at": datetime(2026, 9, 30, tzinfo=timezone.utc),
+                },
+                {
+                    "rating": "escalate",
+                    "count": 1,
+                    "task_count": 1,
+                    "project_task_count": 2,
+                    "latest_at": None,
+                },
+            ]
+        if "GROUP BY rating" in query:
+            return [
+                {
+                    "rating": "correct",
+                    "count": 2,
+                    "latest_at": datetime(2026, 9, 30, tzinfo=timezone.utc),
+                },
+                {"rating": "escalate", "count": 1, "latest_at": None},
+            ]
         return [
             {
                 "id": 8,
@@ -53,6 +79,8 @@ def test_feedback_endpoint_creates_and_lists_feedback() -> None:
             },
         )
         listed = client.get("/api/diagnoses/diag_1/feedback?limit=10")
+        summary = client.get("/api/diagnoses/diag_1/feedback/summary")
+        project_summary = client.get("/api/feedback/waky3/summary")
     finally:
         app.state.db_pool = None
     assert created.status_code == 201
@@ -60,6 +88,14 @@ def test_feedback_endpoint_creates_and_lists_feedback() -> None:
     assert created.json()["created_at"].startswith("2026-09-30T00:00:00")
     assert listed.status_code == 200
     assert listed.json()["feedback"][0]["comment"] == "证据充分"
+    assert summary.status_code == 200
+    assert summary.json()["total"] == 3
+    assert summary.json()["counts"]["correct"] == 2
+    assert summary.json()["latest_at"].startswith("2026-09-30T00:00:00")
+    assert project_summary.status_code == 200
+    assert project_summary.json()["project"] == "waky3"
+    assert project_summary.json()["task_count"] == 2
+    assert project_summary.json()["total"] == 3
 
 
 def test_feedback_endpoint_validates_task_and_rating() -> None:

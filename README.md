@@ -153,10 +153,14 @@ GET /api/diagnoses/{task_id}/report?format=markdown
 ```text
 POST /api/diagnoses/{task_id}/feedback
 GET /api/diagnoses/{task_id}/feedback?limit=50
+GET /api/diagnoses/{task_id}/feedback/summary
+GET /api/feedback/{project}/summary
 ```
 
 反馈类型为 `correct`、`inaccurate`、`insufficient_evidence` 或 `escalate`，可附带不超过
-2000 字的说明和提交者标识；反馈会与诊断任务级联保存，任务删除时自动清理。
+2000 字的说明和提交者标识；反馈会与诊断任务级联保存，任务删除时自动清理。`summary` 接口返回
+总反馈数、各类型数量和最近反馈时间。
+项目级汇总接口还返回产生反馈的任务数，可用于质量看板和后续反馈趋势分析。
 
 创建诊断任务时可以通过 `validation` 提交按需验证计划。Worker 会在代码检索后执行
 只读数据库查询、配置读取和日志检索，并将每个步骤的成功、失败或未请求状态写入

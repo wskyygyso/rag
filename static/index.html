@@ -113,12 +113,15 @@
 
       // 拉取已有人工反馈，帮助审阅者确认提交结果。
       async function loadFeedback(taskId) {
-        const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/feedback`);
-        if (!response.ok) throw new Error(`反馈获取失败（${response.status}）`);
+        const base = `/api/diagnoses/${encodeURIComponent(taskId)}/feedback`;
+        const [response, summaryResponse] = await Promise.all([fetch(base), fetch(`${base}/summary`)]);
+        if (!response.ok || !summaryResponse.ok) throw new Error("反馈获取失败");
         const data = await response.json();
+        const summary = await summaryResponse.json();
+        const header = `共 ${summary.total} 条反馈：正确 ${summary.counts.correct}，不准确 ${summary.counts.inaccurate}，证据不足 ${summary.counts.insufficient_evidence}，转人工 ${summary.counts.escalate}`;
         $("feedback-list").textContent = data.feedback.length
-          ? data.feedback.map((item) => `${item.rating}：${item.comment || "（无说明）"}`).join("\n")
-          : "暂无反馈。";
+          ? `${header}\n\n${data.feedback.map((item) => `${item.rating}：${item.comment || "（无说明）"}`).join("\n")}`
+          : `${header}\n\n暂无反馈。`;
       }
 
       // 订阅 SSE 进度流，并在终态自动加载报告和反馈。
