@@ -226,6 +226,59 @@ async def get_task(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str, Any]]
     return _decode_task(row)
 
 
+async def list_tasks(
+    pool: asyncpg.Pool,
+    *,
+    project: Optional[str] = None,
+    status: Optional[str] = None,
+    query: Optional[str] = None,
+    days: Optional[int] = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> list[Dict[str, Any]]:
+    """按筛选条件分页读取历史诊断任务，并仅返回报告列表所需字段。"""
+    conditions = []
+    values: list[Any] = []
+
+    def add_condition(sql: str, value: Any) -> None:
+        """追加带位置参数的安全筛选条件。"""
+        values.append(value)
+        conditions.append(sql.replace("$VALUE", f"${len(values)}"))
+
+    if project:
+        add_condition("project = $VALUE", project)
+    if status:
+        add_condition("status = $VALUE", status)
+    if query:
+        add_condition("question ILIKE '%' || $VALUE || '%'", query)
+    if days is not None:
+        add_condition("created_at >= NOW() - ($VALUE * INTERVAL '1 day')", days)
+    offset_position = len(values) + 1
+    limit_position = len(values) + 2
+    values.extend([offset, limit])
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    rows = await pool.fetch(
+        f"""
+        SELECT id, project, question, environment, status, progress, current_step,
+               error, created_at, updated_at
+        FROM diagnostic_tasks
+        {where}
+        ORDER BY created_at DESC, id DESC
+        OFFSET ${offset_position} LIMIT ${limit_position}
+        """,
+        *values,
+    )
+    tasks = []
+    for row in rows:
+        task = dict(row)
+        for key in ("created_at", "updated_at"):
+            value = task.get(key)
+            if isinstance(value, datetime):
+                task[key] = value.isoformat()
+        tasks.append(task)
+    return tasks
+
+
 async def update_task(
     pool: asyncpg.Pool,
     task_id: str,

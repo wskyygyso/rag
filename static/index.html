@@ -61,6 +61,15 @@
       </section>
 
       <section class="card">
+        <h2>历史任务</h2>
+        <div class="actions">
+          <button id="history-load" class="secondary" type="button">加载最近任务</button>
+          <span id="history-message" class="muted" role="status">可按项目查看历史任务</span>
+        </div>
+        <pre id="history-list">暂无历史任务。</pre>
+      </section>
+
+      <section class="card">
         <h2>报告预览</h2>
         <pre id="report">完成诊断后可在这里预览 Markdown 报告。</pre>
       </section>
@@ -185,6 +194,23 @@
           $("feedback-message").textContent = error.message;
         } finally {
           $("feedback-submit").disabled = false;
+        }
+      });
+
+      // 加载当前项目最近任务，便于从前端回看历史诊断。
+      $("history-load").addEventListener("click", async () => {
+        const project = encodeURIComponent($("project").value.trim());
+        $("history-message").textContent = "正在加载…";
+        try {
+          const response = await fetch(`/api/diagnoses/history?project=${project}&limit=20`);
+          if (!response.ok) throw new Error(`历史任务获取失败（${response.status}）`);
+          const data = await response.json();
+          $("history-list").textContent = data.items.length
+            ? data.items.map((item) => `${item.id} | ${item.status} | ${item.question}`).join("\n")
+            : "暂无历史任务。";
+          $("history-message").textContent = `已加载 ${data.items.length} 条任务`;
+        } catch (error) {
+          $("history-message").textContent = error.message;
         }
       });
     </script>

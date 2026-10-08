@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.task_store import get_task, insert_task, mark_cancelled
+from app.task_store import get_task, insert_task, list_tasks, mark_cancelled
 from app.validation_plan import ValidationPlan, validation_plan_dict
 from app.reporting import build_markdown_report
 
@@ -71,6 +71,29 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
 
     run_diagnosis_task.delay(task_id)
     return _task_response(task)
+
+
+@router.get("/history")
+async def diagnosis_history(
+    request: Request,
+    project: Optional[str] = Query(default=None, max_length=100),
+    status_filter: Optional[str] = Query(default=None, alias="status", pattern="^[A-Z_]{1,32}$"),
+    query: Optional[str] = Query(default=None, max_length=200),
+    days: Optional[int] = Query(default=None, ge=1, le=3650),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> Dict:
+    """分页查询历史诊断任务，支持项目、状态、问题关键词和时间范围筛选。"""
+    tasks = await list_tasks(
+        _pool(request),
+        project=project,
+        status=status_filter,
+        query=query,
+        days=days,
+        offset=offset,
+        limit=limit,
+    )
+    return {"items": tasks, "offset": offset, "limit": limit}
 
 
 @router.get("/{task_id}")
