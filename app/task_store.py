@@ -92,6 +92,24 @@ CREATE INDEX IF NOT EXISTS idx_diagnostic_feedback_task_created
     ON diagnostic_feedback (task_id, created_at DESC)
 """
 
+CREATE_TASK_OPERATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS diagnostic_task_operations (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(64) NOT NULL REFERENCES diagnostic_tasks(id) ON DELETE CASCADE,
+    operation VARCHAR(32) NOT NULL,
+    from_status VARCHAR(32),
+    to_status VARCHAR(32),
+    actor VARCHAR(100),
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+CREATE_TASK_OPERATIONS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_task_operations_task_created
+    ON diagnostic_task_operations (task_id, created_at DESC)
+"""
+
 CREATE_DOCUMENT_CHUNKS_SQL = """
 CREATE TABLE IF NOT EXISTS document_chunks (
     id BIGSERIAL PRIMARY KEY,
@@ -155,6 +173,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_VALIDATION_AUDIT_INDEX_SQL)
         await connection.execute(CREATE_FEEDBACK_SQL)
         await connection.execute(CREATE_FEEDBACK_INDEX_SQL)
+        await connection.execute(CREATE_TASK_OPERATIONS_SQL)
+        await connection.execute(CREATE_TASK_OPERATIONS_INDEX_SQL)
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(
             "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding JSONB"
@@ -352,6 +372,58 @@ async def prepare_task_retry(
 async def clear_task_evidence(pool: asyncpg.Pool, task_id: str) -> None:
     """清理任务旧证据，避免人工重试后重复保存相同上下文。"""
     await pool.execute("DELETE FROM diagnostic_evidence WHERE task_id = $1", task_id)
+
+
+async def insert_task_operation(
+    pool: asyncpg.Pool,
+    task_id: str,
+    operation: str,
+    *,
+    from_status: Optional[str] = None,
+    to_status: Optional[str] = None,
+    actor: Optional[str] = None,
+    detail: Optional[Dict[str, Any]] = None,
+) -> None:
+    """写入任务操作审计，调用方应传入不含敏感信息的操作摘要。"""
+    await pool.execute(
+        """
+        INSERT INTO diagnostic_task_operations
+            (task_id, operation, from_status, to_status, actor, detail)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+        """,
+        task_id,
+        operation,
+        from_status,
+        to_status,
+        actor,
+        json.dumps(detail or {}, ensure_ascii=False),
+    )
+
+
+async def list_task_operations(
+    pool: asyncpg.Pool, task_id: str, limit: int = 100
+) -> list[Dict[str, Any]]:
+    """按时间倒序返回任务操作审计轨迹，并限制单次读取数量。"""
+    rows = await pool.fetch(
+        """
+        SELECT id, task_id, operation, from_status, to_status, actor, detail, created_at
+        FROM diagnostic_task_operations
+        WHERE task_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+        """,
+        task_id,
+        limit,
+    )
+    operations = []
+    for row in rows:
+        item = dict(row)
+        if isinstance(item.get("created_at"), datetime):
+            item["created_at"] = item["created_at"].isoformat()
+        if isinstance(item.get("detail"), str):
+            item["detail"] = json.loads(item["detail"])
+        operations.append(item)
+    return operations
 
 
 async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, Any]) -> None:

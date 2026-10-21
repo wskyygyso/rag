@@ -65,6 +65,11 @@
       </section>
 
       <section class="card">
+        <h2>操作轨迹</h2>
+        <pre id="operation-list">选择任务后可查看创建、取消和重试记录。</pre>
+      </section>
+
+      <section class="card">
         <h2>历史任务</h2>
         <div class="grid">
           <label>状态
@@ -154,6 +159,16 @@
           : `${header}\n\n暂无反馈。`;
       }
 
+      // 拉取任务创建、取消和重试等操作审计轨迹。
+      async function loadOperations(taskId) {
+        const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/operations?limit=100`);
+        if (!response.ok) throw new Error(`操作轨迹获取失败（${response.status}）`);
+        const data = await response.json();
+        $("operation-list").textContent = data.operations.length
+          ? data.operations.map((item) => `${item.operation} | ${item.from_status || "-"} → ${item.to_status || "-"} | ${item.actor || "系统"} | ${item.created_at}`).join("\n")
+          : "暂无操作记录。";
+      }
+
       // 订阅 SSE 进度流，并在终态自动加载报告和反馈。
       function watchTask(taskId) {
         if (state.events) state.events.close();
@@ -165,6 +180,7 @@
             state.events.close();
             loadReport(taskId).catch((error) => { $("report").textContent = error.message; });
             loadFeedback(taskId).catch((error) => { $("feedback-list").textContent = error.message; });
+            loadOperations(taskId).catch((error) => { $("operation-list").textContent = error.message; });
           }
         });
         state.events.onerror = () => { $("message").textContent = "进度连接已断开，可刷新页面重试"; };
@@ -190,6 +206,7 @@
           $("message").textContent = "任务已创建，正在等待进度…";
           renderTask(task);
           watchTask(state.taskId);
+          loadOperations(state.taskId).catch((error) => { $("operation-list").textContent = error.message; });
         } catch (error) {
           $("message").textContent = error.message;
         } finally {
@@ -243,7 +260,7 @@
             $("report-link").hidden = false;
             renderTask({ task_id: item.id, status: item.status, progress: item.progress, current_step: item.current_step });
             try {
-              await Promise.all([loadReport(item.id), loadFeedback(item.id)]);
+              await Promise.all([loadReport(item.id), loadFeedback(item.id), loadOperations(item.id)]);
               $("message").textContent = "已加载历史任务报告";
             } catch (error) {
               $("message").textContent = error.message;
@@ -300,6 +317,7 @@
           renderTask(task);
           $("message").textContent = "任务已重新排队";
           watchTask(state.taskId);
+          await loadOperations(state.taskId);
         } catch (error) {
           $("message").textContent = error.message;
         } finally {
@@ -321,6 +339,7 @@
           if (state.events) state.events.close();
           renderTask(task);
           $("message").textContent = "任务已取消";
+          await loadOperations(state.taskId);
         } catch (error) {
           $("message").textContent = error.message;
         } finally {

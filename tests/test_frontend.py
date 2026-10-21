@@ -22,5 +22,7 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "history-status" in response.text
     assert "/api/feedback/" in response.text
     assert "loadProjectSummary" in response.text
+    assert "operation-list" in response.text
+    assert "loadOperations" in response.text
     assert "EventSource" in response.text
     assert "提交反馈" in response.text

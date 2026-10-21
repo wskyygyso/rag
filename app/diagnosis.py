@@ -15,6 +15,8 @@ from app.task_store import (
     list_tasks,
     mark_cancelled,
     prepare_task_retry,
+    insert_task_operation,
+    list_task_operations,
     update_task,
 )
 from app.validation_plan import ValidationPlan, validation_plan_dict
@@ -61,6 +63,29 @@ def _pool(request: Request):
     return pool
 
 
+async def _record_operation(
+    pool,
+    task_id: str,
+    operation: str,
+    *,
+    from_status: Optional[str] = None,
+    to_status: Optional[str] = None,
+    actor: Optional[str] = None,
+) -> None:
+    """尽力写入任务操作审计，审计故障不阻断主业务接口。"""
+    try:
+        await insert_task_operation(
+            pool,
+            task_id,
+            operation,
+            from_status=from_status,
+            to_status=to_status,
+            actor=actor,
+        )
+    except Exception:
+        return
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) -> Dict:
     """创建诊断任务并投递到 Celery 队列。"""
@@ -89,6 +114,13 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
             error=str(exc),
         )
         raise HTTPException(status_code=503, detail="任务重新投递失败") from exc
+    await _record_operation(
+        pool,
+        task_id,
+        "CREATE",
+        to_status=task.get("status"),
+        actor=payload.created_by,
+    )
     return _task_response(task)
 
 
@@ -127,13 +159,35 @@ async def get_diagnosis(task_id: str, request: Request) -> Dict:
 @router.post("/{task_id}/cancel")
 async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
     """取消尚未结束的诊断任务。"""
-    task = await mark_cancelled(_pool(request), task_id)
+    pool = _pool(request)
+    previous = await get_task(pool, task_id)
+    task = await mark_cancelled(pool, task_id)
     if task is None:
-        existing = await get_task(_pool(request), task_id)
-        if existing is None:
+        if previous is None:
             raise HTTPException(status_code=404, detail="诊断任务不存在")
         raise HTTPException(status_code=409, detail="任务已经结束，无法取消")
+    await _record_operation(
+        pool,
+        task_id,
+        "CANCEL",
+        from_status=previous.get("status") if previous else None,
+        to_status=task.get("status"),
+        actor=request.headers.get("X-Actor"),
+    )
     return _task_response(task)
+
+
+@router.get("/{task_id}/operations")
+async def task_operations(
+    task_id: str,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> Dict:
+    """查询诊断任务操作审计轨迹，供协作排查使用。"""
+    pool = _pool(request)
+    if await get_task(pool, task_id) is None:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    return {"task_id": task_id, "operations": await list_task_operations(pool, task_id, limit)}
 
 
 @router.post("/{task_id}/retry", status_code=status.HTTP_202_ACCEPTED)
@@ -162,6 +216,14 @@ async def retry_diagnosis(task_id: str, request: Request) -> Dict:
             error=str(exc),
         )
         raise HTTPException(status_code=503, detail="任务重新投递失败") from exc
+    await _record_operation(
+        pool,
+        task_id,
+        "RETRY",
+        from_status="FAILED",
+        to_status=task.get("status"),
+        actor=request.headers.get("X-Actor"),
+    )
     return _task_response(task)
 
 
