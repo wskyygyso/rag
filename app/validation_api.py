@@ -1,12 +1,13 @@
 """数据库、配置和日志验证的只读 HTTP 接口。"""
 
+import inspect
 import logging
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from app.auth import require_project_access
+from app.auth import api_identity, require_project_access
 from app.code_tools import CodeToolError
 from app.settings import get_settings
 from app.rate_limit import RateLimiter
@@ -84,13 +85,24 @@ async def _audit(
 
 
 def _client_key(request: Request) -> str:
-    """获取限流调用方标识；未连接客户端时使用统一匿名键。"""
+    """优先使用认证主体限流，未认证时回退到客户端地址。"""
+    identity = api_identity(request)
+    if identity is not None:
+        return f"subject:{identity.subject}"
     return request.client.host if request.client else "anonymous"
 
 
-def _check_rate_limit(request: Request) -> None:
-    """检查验证接口限流，超限时返回带重试提示的 429。"""
-    if not rate_limiter.allow(_client_key(request)):
+async def _check_rate_limit(request: Request) -> None:
+    """使用应用共享限流器检查请求，后端不可用时安全拒绝验证请求。"""
+    limiter = getattr(request.app.state, "validation_rate_limiter", rate_limiter)
+    try:
+        allowed = limiter.allow(_client_key(request))
+        if inspect.isawaitable(allowed):
+            allowed = await allowed
+    except Exception as exc:
+        logger.exception("validation_rate_limiter_unavailable")
+        raise HTTPException(status_code=503, detail="限流服务暂不可用，已拒绝验证请求") from exc
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="验证接口请求过于频繁，请稍后重试",
@@ -102,7 +114,7 @@ def _check_rate_limit(request: Request) -> None:
 async def database_query(payload: DatabaseQueryRequest, request: Request) -> dict:
     """执行只读 SQL，并记录查询审计摘要。"""
     require_project_access(request, payload.project)
-    _check_rate_limit(request)
+    await _check_rate_limit(request)
     try:
         result = await query_database(
             settings,
@@ -147,7 +159,7 @@ async def database_query(payload: DatabaseQueryRequest, request: Request) -> dic
 async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
     """读取项目配置文件，返回已脱敏内容。"""
     require_project_access(request, payload.project)
-    _check_rate_limit(request)
+    await _check_rate_limit(request)
     try:
         result = read_config(settings.code_repositories_root, payload.project, payload.file)
         await _audit(
@@ -177,7 +189,7 @@ async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
 async def logs_search(payload: LogSearchRequest, request: Request) -> dict:
     """检索项目日志关键词，返回已脱敏的匹配行。"""
     require_project_access(request, payload.project)
-    _check_rate_limit(request)
+    await _check_rate_limit(request)
     try:
         result = search_logs(
             settings.code_repositories_root,

@@ -84,3 +84,29 @@ def test_validation_api_returns_429_when_rate_limited(monkeypatch) -> None:
     assert first.status_code == 400
     assert second.status_code == 429
     assert second.headers["retry-after"] == "60"
+
+
+def test_validation_api_fails_closed_when_shared_limiter_is_unavailable() -> None:
+    """验证 Redis 限流后端故障时拒绝验证请求而不是绕过限制。"""
+    class _BrokenLimiter:
+        """模拟不可用的共享限流器。"""
+
+        async def allow(self, key):
+            """模拟 Redis 连接异常。"""
+            raise RuntimeError("redis unavailable")
+
+    had_limiter = hasattr(app.state, "validation_rate_limiter")
+    previous = getattr(app.state, "validation_rate_limiter", None)
+    app.state.validation_rate_limiter = _BrokenLimiter()
+    try:
+        response = TestClient(app).post(
+            "/api/validation/config/read",
+            json={"project": "waky3", "file": "config.ini"},
+        )
+    finally:
+        if had_limiter:
+            app.state.validation_rate_limiter = previous
+        else:
+            delattr(app.state, "validation_rate_limiter")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "限流服务暂不可用，已拒绝验证请求"

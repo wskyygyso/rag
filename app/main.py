@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app.auth import auth_guard, validate_auth_settings
 from app.health import get_health
+from app.rate_limit import RedisRateLimiter
 from app.settings import get_settings
 from app.code_api import router as code_router
 from app.diagnosis import router as diagnosis_router
@@ -24,6 +25,11 @@ settings = get_settings()
 async def lifespan(application: FastAPI):
     """启动时创建数据库连接池，关闭时释放连接资源。"""
     validate_auth_settings(settings)
+    application.state.validation_rate_limiter = RedisRateLimiter.from_url(
+        settings.redis_url,
+        settings.validation_rate_limit_per_minute,
+        settings.validation_rate_limit_window_seconds,
+    )
     try:
         application.state.db_pool = await create_pool(settings)
     except Exception:
@@ -32,6 +38,7 @@ async def lifespan(application: FastAPI):
     try:
         yield
     finally:
+        await application.state.validation_rate_limiter.close()
         if application.state.db_pool is not None:
             await application.state.db_pool.close()
 

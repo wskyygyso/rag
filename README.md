@@ -144,7 +144,8 @@ POST /api/index/{project}/runs/{run_id}/retry
 
 验证接口默认按调用方进行每分钟 60 次限流，可通过
 `VALIDATION_RATE_LIMIT_PER_MINUTE` 和 `VALIDATION_RATE_LIMIT_WINDOW_SECONDS` 调整。
-当前限流器是单进程实现；生产多实例部署应替换为 Redis 等共享计数器。
+限流计数使用 Redis Lua 原子脚本在多个 API 实例间共享；启用认证时按认证主体计数，否则按客户端地址计数。
+Redis 不可用时验证接口会安全返回 503，不会降级为无限制访问。限流拒绝仍返回 429 和 `Retry-After`。
 
 建立 PHP 符号索引：
 
