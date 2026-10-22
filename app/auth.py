@@ -2,6 +2,7 @@
 
 import hmac
 import json
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Awaitable, Callable, Dict, FrozenSet, Optional
@@ -11,9 +12,11 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from app.settings import Settings, get_settings
+from app.task_store import insert_security_audit
 
 PUBLIC_PATHS = {"/", "/health", "/ui", "/docs", "/redoc", "/openapi.json"}
 VALID_SCOPES = {"read", "write"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -114,10 +117,45 @@ def authenticate_request(request: Request, settings: Settings) -> Optional[ApiId
             detail="API Key 无效",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    request.state.api_identity = identity
     required_scope = "read" if request.method in {"GET", "HEAD", "OPTIONS"} else "write"
     if required_scope not in identity.scopes:
         raise HTTPException(status_code=403, detail=f"缺少 {required_scope} 权限")
     return identity
+
+
+async def record_security_denial(request: Request, exc: HTTPException) -> None:
+    """尽力写入认证或授权拒绝摘要，审计故障不改变原始安全响应。"""
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return
+    identity = api_identity(request)
+    event_type = "AUTHENTICATION" if exc.status_code == 401 else "AUTHORIZATION"
+    client_address = request.client.host if request.client else None
+    try:
+        await insert_security_audit(
+            pool,
+            event_type,
+            exc.status_code,
+            str(exc.detail),
+            request.method,
+            request.url.path,
+            client_address=client_address,
+            actor=identity.subject if identity else None,
+        )
+    except Exception:
+        logger.warning("security_audit_write_failed", exc_info=True)
+
+
+async def security_http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """记录路由内 401/403 拒绝，并返回与 FastAPI 默认格式一致的响应。"""
+    if exc.status_code in {401, 403}:
+        await record_security_denial(request, exc)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
 
 
 async def auth_guard(
@@ -132,6 +170,7 @@ async def auth_guard(
     try:
         request.state.api_identity = authenticate_request(request, settings)
     except HTTPException as exc:
+        await record_security_denial(request, exc)
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},

@@ -3,9 +3,9 @@
 from contextlib import asynccontextmanager
 from typing import Dict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
-from app.auth import auth_guard, validate_auth_settings
+from app.auth import auth_guard, security_http_exception_handler, validate_auth_settings
 from app.health import get_health
 from app.rate_limit import RedisRateLimiter
 from app.settings import get_settings
@@ -44,6 +44,7 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app.add_exception_handler(HTTPException, security_http_exception_handler)
 
 
 @app.middleware("http")

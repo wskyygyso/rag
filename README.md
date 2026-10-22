@@ -43,6 +43,9 @@ X-API-Key: replace-with-long-random-key
 索引和反馈接口会校验任务或路径所属项目。前端页面的 API Key 输入框只保存在当前页面内存中，
 不会写入浏览器存储。
 
+认证失败和项目越权会写入 `security_audit`，记录事件类型、HTTP 状态、方法、路径、来源地址、
+认证主体和拒绝原因。审计不保存请求头和原始 API Key；数据库审计写入失败不会改变 401/403 安全拒绝。
+
 ## 测试
 
 执行 `.venv/bin/pytest -q`。

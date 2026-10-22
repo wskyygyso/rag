@@ -110,6 +110,27 @@ CREATE INDEX IF NOT EXISTS idx_task_operations_task_created
     ON diagnostic_task_operations (task_id, created_at DESC)
 """
 
+CREATE_SECURITY_AUDIT_SQL = """
+CREATE TABLE IF NOT EXISTS security_audit (
+    id BIGSERIAL PRIMARY KEY,
+    event_type VARCHAR(32) NOT NULL,
+    status_code SMALLINT NOT NULL,
+    reason VARCHAR(500) NOT NULL,
+    method VARCHAR(16) NOT NULL,
+    path VARCHAR(500) NOT NULL,
+    client_address VARCHAR(100),
+    actor VARCHAR(100),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+CREATE_SECURITY_AUDIT_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_security_audit_created
+    ON security_audit (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_audit_type_created
+    ON security_audit (event_type, created_at DESC)
+"""
+
 CREATE_DOCUMENT_CHUNKS_SQL = """
 CREATE TABLE IF NOT EXISTS document_chunks (
     id BIGSERIAL PRIMARY KEY,
@@ -175,6 +196,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_FEEDBACK_INDEX_SQL)
         await connection.execute(CREATE_TASK_OPERATIONS_SQL)
         await connection.execute(CREATE_TASK_OPERATIONS_INDEX_SQL)
+        await connection.execute(CREATE_SECURITY_AUDIT_SQL)
+        await connection.execute(CREATE_SECURITY_AUDIT_INDEX_SQL)
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(
             "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding JSONB"
@@ -397,6 +420,34 @@ async def insert_task_operation(
         to_status,
         actor,
         json.dumps(detail or {}, ensure_ascii=False),
+    )
+
+
+async def insert_security_audit(
+    pool: asyncpg.Pool,
+    event_type: str,
+    status_code: int,
+    reason: str,
+    method: str,
+    path: str,
+    *,
+    client_address: Optional[str] = None,
+    actor: Optional[str] = None,
+) -> None:
+    """写入认证或授权拒绝摘要，调用方不得传入请求头或原始 API Key。"""
+    await pool.execute(
+        """
+        INSERT INTO security_audit
+            (event_type, status_code, reason, method, path, client_address, actor)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """,
+        event_type[:32],
+        status_code,
+        reason[:500],
+        method[:16],
+        path[:500],
+        client_address[:100] if client_address else None,
+        actor[:100] if actor else None,
     )
 
 
