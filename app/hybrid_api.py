@@ -3,6 +3,8 @@
 from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+
+from app.auth import require_project_access
 from app.code_tools import CodeToolError
 from app.hybrid_search import search_hybrid
 from app.settings import get_settings
@@ -25,6 +27,7 @@ async def hybrid_search(
     ),
 ) -> Dict:
     """合并代码、符号和历史诊断结果，返回带来源和分数的检索结果。"""
+    require_project_access(request, project)
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="数据库暂不可用")

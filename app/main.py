@@ -5,6 +5,7 @@ from typing import Dict
 
 from fastapi import FastAPI
 
+from app.auth import auth_guard, validate_auth_settings
 from app.health import get_health
 from app.settings import get_settings
 from app.code_api import router as code_router
@@ -22,6 +23,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """启动时创建数据库连接池，关闭时释放连接资源。"""
+    validate_auth_settings(settings)
     try:
         application.state.db_pool = await create_pool(settings)
     except Exception:
@@ -35,6 +37,14 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def access_control(request, call_next):
+    """校验 API Key，并把调用方身份传递给项目级权限检查。"""
+    return await auth_guard(request, call_next, settings)
+
+
 app.include_router(diagnosis_router)
 app.include_router(feedback_router)
 app.include_router(project_feedback_router)

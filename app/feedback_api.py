@@ -5,6 +5,7 @@ from typing import Dict, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from app.auth import operation_actor, require_project_access
 from app.task_store import (
     get_task,
     insert_feedback,
@@ -32,20 +33,28 @@ def _pool(request: Request):
     return pool
 
 
+async def _authorized_task(pool, request: Request, task_id: str) -> Dict:
+    """读取诊断任务并校验当前调用方的项目访问权限。"""
+    task = await get_task(pool, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    require_project_access(request, task.get("project"))
+    return task
+
+
 @router.post("/{task_id}/feedback", status_code=status.HTTP_201_CREATED)
 async def create_feedback(
     task_id: str, payload: FeedbackRequest, request: Request
 ) -> Dict:
     """为已有诊断任务保存一条人工反馈。"""
     pool = _pool(request)
-    if await get_task(pool, task_id) is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    await _authorized_task(pool, request, task_id)
     return await insert_feedback(
         pool,
         task_id,
         payload.rating,
         payload.comment,
-        payload.submitted_by,
+        operation_actor(request, payload.submitted_by),
     )
 
 
@@ -57,8 +66,7 @@ async def get_feedback(
 ) -> Dict:
     """查询诊断任务最近的人工反馈，支持分页上限控制。"""
     pool = _pool(request)
-    if await get_task(pool, task_id) is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    await _authorized_task(pool, request, task_id)
     return {"task_id": task_id, "feedback": await list_feedback(pool, task_id, limit)}
 
 
@@ -66,8 +74,7 @@ async def get_feedback(
 async def get_feedback_summary(task_id: str, request: Request) -> Dict:
     """返回任务反馈分布和最近反馈时间，便于协作质量统计。"""
     pool = _pool(request)
-    if await get_task(pool, task_id) is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    await _authorized_task(pool, request, task_id)
     return {"task_id": task_id, **await summarize_feedback(pool, task_id)}
 
 
@@ -78,4 +85,5 @@ project_feedback_router = APIRouter(prefix="/api/feedback", tags=["diagnosis-fee
 async def get_project_feedback_summary(project: str, request: Request) -> Dict:
     """返回项目范围内的反馈质量汇总，支持质量看板使用。"""
     pool = _pool(request)
+    require_project_access(request, project)
     return {"project": project, **await summarize_project_feedback(pool, project)}

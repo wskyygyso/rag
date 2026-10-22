@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from app.auth import require_project_access
 from app.code_tools import CodeToolError
 from app.settings import get_settings
 from app.rate_limit import RateLimiter
@@ -100,6 +101,7 @@ def _check_rate_limit(request: Request) -> None:
 @router.post("/database/query")
 async def database_query(payload: DatabaseQueryRequest, request: Request) -> dict:
     """执行只读 SQL，并记录查询审计摘要。"""
+    require_project_access(request, payload.project)
     _check_rate_limit(request)
     try:
         result = await query_database(
@@ -144,6 +146,7 @@ async def database_query(payload: DatabaseQueryRequest, request: Request) -> dic
 @router.post("/config/read")
 async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
     """读取项目配置文件，返回已脱敏内容。"""
+    require_project_access(request, payload.project)
     _check_rate_limit(request)
     try:
         result = read_config(settings.code_repositories_root, payload.project, payload.file)
@@ -173,6 +176,7 @@ async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
 @router.post("/logs/search")
 async def logs_search(payload: LogSearchRequest, request: Request) -> dict:
     """检索项目日志关键词，返回已脱敏的匹配行。"""
+    require_project_access(request, payload.project)
     _check_rate_limit(request)
     try:
         result = search_logs(

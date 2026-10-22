@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.auth import operation_actor, require_project_access
 from app.task_store import (
     get_task,
     insert_task,
@@ -86,10 +87,20 @@ async def _record_operation(
         return
 
 
+async def _authorized_task(pool, request: Request, task_id: str) -> Dict:
+    """读取任务并校验项目权限；不存在时统一返回 404，避免泄露任务归属。"""
+    task = await get_task(pool, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    require_project_access(request, task.get("project"))
+    return task
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) -> Dict:
     """创建诊断任务并投递到 Celery 队列。"""
     pool = _pool(request)
+    require_project_access(request, payload.project)
     task_id = f"diag_{uuid.uuid4().hex}"
     task = await insert_task(
         pool,
@@ -119,7 +130,7 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
         task_id,
         "CREATE",
         to_status=task.get("status"),
-        actor=payload.created_by,
+        actor=operation_actor(request, payload.created_by),
     )
     return _task_response(task)
 
@@ -135,6 +146,7 @@ async def diagnosis_history(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> Dict:
     """分页查询历史诊断任务，支持项目、状态、问题关键词和时间范围筛选。"""
+    require_project_access(request, project)
     tasks = await list_tasks(
         _pool(request),
         project=project,
@@ -150,9 +162,7 @@ async def diagnosis_history(
 @router.get("/{task_id}")
 async def get_diagnosis(task_id: str, request: Request) -> Dict:
     """按任务 ID 查询诊断状态、进度和结果。"""
-    task = await get_task(_pool(request), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    task = await _authorized_task(_pool(request), request, task_id)
     return _task_response(task)
 
 
@@ -160,11 +170,9 @@ async def get_diagnosis(task_id: str, request: Request) -> Dict:
 async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
     """取消尚未结束的诊断任务。"""
     pool = _pool(request)
-    previous = await get_task(pool, task_id)
+    previous = await _authorized_task(pool, request, task_id)
     task = await mark_cancelled(pool, task_id)
     if task is None:
-        if previous is None:
-            raise HTTPException(status_code=404, detail="诊断任务不存在")
         raise HTTPException(status_code=409, detail="任务已经结束，无法取消")
     await _record_operation(
         pool,
@@ -172,7 +180,7 @@ async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
         "CANCEL",
         from_status=previous.get("status") if previous else None,
         to_status=task.get("status"),
-        actor=request.headers.get("X-Actor"),
+        actor=operation_actor(request),
     )
     return _task_response(task)
 
@@ -185,8 +193,7 @@ async def task_operations(
 ) -> Dict:
     """查询诊断任务操作审计轨迹，供协作排查使用。"""
     pool = _pool(request)
-    if await get_task(pool, task_id) is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    await _authorized_task(pool, request, task_id)
     return {"task_id": task_id, "operations": await list_task_operations(pool, task_id, limit)}
 
 
@@ -194,6 +201,7 @@ async def task_operations(
 async def retry_diagnosis(task_id: str, request: Request) -> Dict:
     """将失败任务重新排队；非失败任务或达到上限时拒绝重试。"""
     pool = _pool(request)
+    await _authorized_task(pool, request, task_id)
     task = await prepare_task_retry(pool, task_id)
     if task is None:
         existing = await get_task(pool, task_id)
@@ -222,7 +230,7 @@ async def retry_diagnosis(task_id: str, request: Request) -> Dict:
         "RETRY",
         from_status="FAILED",
         to_status=task.get("status"),
-        actor=request.headers.get("X-Actor"),
+        actor=operation_actor(request),
     )
     return _task_response(task)
 
@@ -234,9 +242,7 @@ async def get_report(
     format: str = Query(default="json", pattern="^(json|markdown)$"),
 ):
     """获取稳定诊断报告，支持 JSON 摘要或 Markdown 导出。"""
-    task = await get_task(_pool(request), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    task = await _authorized_task(_pool(request), request, task_id)
     response = _task_response(task)
     if format == "markdown":
         return PlainTextResponse(
@@ -267,9 +273,7 @@ async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
 @router.get("/{task_id}/events")
 async def diagnosis_events(task_id: str, request: Request) -> StreamingResponse:
     """建立诊断任务的实时进度 SSE 响应。"""
-    task = await get_task(_pool(request), task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    await _authorized_task(_pool(request), request, task_id)
     return StreamingResponse(
         _events(request, task_id),
         media_type="text/event-stream",

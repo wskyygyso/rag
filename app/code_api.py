@@ -2,9 +2,10 @@
 
 from typing import Dict
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
 
+from app.auth import require_project_access
 from app.code_tools import CodeToolError
 from app.settings import get_settings
 from app.symbol_tools import find_references, find_symbol, trace_call_chain
@@ -21,9 +22,11 @@ def _tool_error(exc: Exception) -> HTTPException:
 @router.get("/{project}/symbols")
 async def get_symbol(
     project: str,
+    request: Request,
     name: str = Query(min_length=1, max_length=255),
 ) -> Dict:
     """查询项目中的类、方法或函数定义。"""
+    require_project_access(request, project)
     try:
         return await run_in_threadpool(
             find_symbol,
@@ -38,9 +41,11 @@ async def get_symbol(
 @router.get("/{project}/references")
 async def get_references(
     project: str,
+    request: Request,
     symbol: str = Query(min_length=1, max_length=255),
 ) -> Dict:
     """查询项目中对指定符号的调用引用。"""
+    require_project_access(request, project)
     try:
         return await run_in_threadpool(
             find_references,
@@ -55,10 +60,12 @@ async def get_references(
 @router.get("/{project}/call-chain")
 async def get_call_chain(
     project: str,
+    request: Request,
     entry: str = Query(min_length=1, max_length=255),
     depth: int = Query(default=5, ge=1, le=10),
 ) -> Dict:
     """从指定入口符号展开项目静态调用链。"""
+    require_project_access(request, project)
     try:
         return await run_in_threadpool(
             trace_call_chain,

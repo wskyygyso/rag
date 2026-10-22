@@ -39,6 +39,7 @@
           <div class="grid">
             <label>项目<input id="project" name="project" value="waky3" required maxlength="100" /></label>
             <label>环境<input id="environment" name="environment" value="development" maxlength="100" /></label>
+            <label class="wide">API Key<input id="api-key" type="password" autocomplete="off" placeholder="启用访问控制时填写，仅保存在当前页面内存" /></label>
             <label class="wide">问题<textarea id="question" name="question" placeholder="例如：公会邀请失败可能是什么原因？" required maxlength="10000"></textarea></label>
           </div>
           <div class="actions">
@@ -123,8 +124,23 @@
 
     <script>
       // 用于展示任务状态、报告和反馈的最小前端示例，不依赖外部 JavaScript 包。
-      const state = { taskId: null, events: null, historyOffset: 0 };
+      const state = { taskId: null, eventController: null, historyOffset: 0 };
       const $ = (id) => document.getElementById(id);
+      const nativeFetch = window.fetch.bind(window);
+
+      // 为所有 API 请求附加当前页面内存中的 API Key。
+      function apiFetch(input, init = {}) {
+        const headers = new Headers(init.headers || {});
+        const apiKey = $("api-key").value.trim();
+        if (apiKey) headers.set("X-API-Key", apiKey);
+        return nativeFetch(input, { ...init, headers });
+      }
+
+      // 停止当前进度流，避免切换任务后保留旧连接。
+      function stopWatching() {
+        if (state.eventController) state.eventController.abort();
+        state.eventController = null;
+      }
 
       // 将 API 任务摘要同步到页面，避免把服务端文本作为 HTML 执行。
       function renderTask(task) {
@@ -140,7 +156,7 @@
 
       // 拉取 Markdown 报告并在页面中以纯文本预览。
       async function loadReport(taskId) {
-        const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
+        const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
         if (!response.ok) throw new Error(`报告获取失败（${response.status}）`);
         $("report").textContent = await response.text();
         $("copy-report").disabled = false;
@@ -149,7 +165,7 @@
       // 拉取已有人工反馈，帮助审阅者确认提交结果。
       async function loadFeedback(taskId) {
         const base = `/api/diagnoses/${encodeURIComponent(taskId)}/feedback`;
-        const [response, summaryResponse] = await Promise.all([fetch(base), fetch(`${base}/summary`)]);
+        const [response, summaryResponse] = await Promise.all([apiFetch(base), apiFetch(`${base}/summary`)]);
         if (!response.ok || !summaryResponse.ok) throw new Error("反馈获取失败");
         const data = await response.json();
         const summary = await summaryResponse.json();
@@ -161,7 +177,7 @@
 
       // 拉取任务创建、取消和重试等操作审计轨迹。
       async function loadOperations(taskId) {
-        const response = await fetch(`/api/diagnoses/${encodeURIComponent(taskId)}/operations?limit=100`);
+        const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/operations?limit=100`);
         if (!response.ok) throw new Error(`操作轨迹获取失败（${response.status}）`);
         const data = await response.json();
         $("operation-list").textContent = data.operations.length
@@ -169,21 +185,44 @@
           : "暂无操作记录。";
       }
 
-      // 订阅 SSE 进度流，并在终态自动加载报告和反馈。
-      function watchTask(taskId) {
-        if (state.events) state.events.close();
-        state.events = new EventSource(`/api/diagnoses/${encodeURIComponent(taskId)}/events`);
-        state.events.addEventListener("progress", (event) => {
-          const task = JSON.parse(event.data);
-          renderTask(task);
-          if (["COMPLETED", "FAILED", "CANCELLED"].includes(task.status)) {
-            state.events.close();
-            loadReport(taskId).catch((error) => { $("report").textContent = error.message; });
-            loadFeedback(taskId).catch((error) => { $("feedback-list").textContent = error.message; });
-            loadOperations(taskId).catch((error) => { $("operation-list").textContent = error.message; });
+      // 使用 fetch 流读取 SSE，以便认证模式下携带 API Key。
+      async function watchTask(taskId) {
+        stopWatching();
+        const controller = new AbortController();
+        state.eventController = controller;
+        try {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/events`, { signal: controller.signal });
+          if (!response.ok) {
+            let message = `进度连接失败（${response.status}）`;
+            try { message = (await response.json()).detail || message; } catch (error) { /* 非 JSON 错误保持状态码提示 */ }
+            throw new Error(message);
           }
-        });
-        state.events.onerror = () => { $("message").textContent = "进度连接已断开，可刷新页面重试"; };
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const blocks = buffer.split("\n\n");
+            buffer = blocks.pop();
+            for (const block of blocks) {
+              const data = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+              if (!data) continue;
+              const task = JSON.parse(data);
+              renderTask(task);
+              if (["COMPLETED", "FAILED", "CANCELLED"].includes(task.status)) {
+                stopWatching();
+                loadReport(taskId).catch((error) => { $("report").textContent = error.message; });
+                loadFeedback(taskId).catch((error) => { $("feedback-list").textContent = error.message; });
+                loadOperations(taskId).catch((error) => { $("operation-list").textContent = error.message; });
+                return;
+              }
+            }
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") $("message").textContent = error.message || "进度连接已断开，可刷新页面重试";
+        }
       }
 
       // 创建诊断任务，并把返回的任务 ID 交给 SSE 进度订阅。
@@ -197,7 +236,7 @@
           question: $("question").value.trim(),
         };
         try {
-          const response = await fetch("/api/diagnoses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+          const response = await apiFetch("/api/diagnoses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
           if (!response.ok) throw new Error(`任务创建失败（${response.status}）`);
           const task = await response.json();
           state.taskId = task.task_id;
@@ -220,7 +259,7 @@
         if (!state.taskId) return;
         $("feedback-submit").disabled = true;
         try {
-          const response = await fetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/feedback`, {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/feedback`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ rating: $("rating").value, comment: $("comment").value.trim() || null, submitted_by: $("submitted-by").value.trim() || null }),
           });
@@ -278,7 +317,7 @@
         $("history-message").textContent = "正在加载…";
         try {
           const filters = `project=${project}&offset=${state.historyOffset}&limit=20${status ? `&status=${status}` : ""}${days ? `&days=${days}` : ""}`;
-          const response = await fetch(`/api/diagnoses/history?${filters}`);
+          const response = await apiFetch(`/api/diagnoses/history?${filters}`);
           if (!response.ok) throw new Error(`历史任务获取失败（${response.status}）`);
           const data = await response.json();
           renderHistory(data.items, append);
@@ -296,7 +335,7 @@
       // 加载当前项目的反馈质量摘要，和历史任务筛选保持同一项目范围。
       async function loadProjectSummary() {
         const project = encodeURIComponent($("project").value.trim());
-        const response = await fetch(`/api/feedback/${project}/summary`);
+        const response = await apiFetch(`/api/feedback/${project}/summary`);
         if (!response.ok) throw new Error(`项目反馈摘要获取失败（${response.status}）`);
         const data = await response.json();
         $("project-summary").textContent = `项目反馈摘要：共 ${data.total} 条，涉及 ${data.task_count} 个任务；正确 ${data.counts.correct}，不准确 ${data.counts.inaccurate}，证据不足 ${data.counts.insufficient_evidence}，转人工 ${data.counts.escalate}`;
@@ -308,7 +347,7 @@
         $("retry-task").disabled = true;
         $("message").textContent = "正在重新投递任务…";
         try {
-          const response = await fetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/retry`, { method: "POST" });
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/retry`, { method: "POST" });
           if (!response.ok) {
             const body = await response.json();
             throw new Error(body.detail || `任务重试失败（${response.status}）`);
@@ -330,13 +369,13 @@
         if (!state.taskId) return;
         $("cancel-task").disabled = true;
         try {
-          const response = await fetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/cancel`, { method: "POST" });
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/cancel`, { method: "POST" });
           if (!response.ok) {
             const body = await response.json();
             throw new Error(body.detail || `任务取消失败（${response.status}）`);
           }
           const task = await response.json();
-          if (state.events) state.events.close();
+          stopWatching();
           renderTask(task);
           $("message").textContent = "任务已取消";
           await loadOperations(state.taskId);
@@ -354,6 +393,24 @@
           $("message").textContent = "报告已复制";
         } catch (error) {
           $("message").textContent = "复制失败，请手动选择报告内容";
+        }
+      });
+
+      // 使用认证请求下载报告，避免直接导航丢失 API Key 请求头。
+      $("report-link").addEventListener("click", async (event) => {
+        event.preventDefault();
+        if (!state.taskId) return;
+        try {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`);
+          if (!response.ok) throw new Error(`报告下载失败（${response.status}）`);
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${state.taskId}.md`;
+          link.click();
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          $("message").textContent = error.message;
         }
       });
     </script>

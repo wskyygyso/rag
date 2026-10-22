@@ -1,6 +1,6 @@
 # PHP 代码诊断 RAgent
 
-当前项目已完成阶段 0 至阶段 5，正在推进阶段 6：前端和协作能力。
+当前项目已完成阶段 0 至阶段 6，正在推进阶段 7：安全、性能和生产上线。
 
 ## 本地启动
 
@@ -19,6 +19,29 @@ API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 启动后访问 `http://127.0.0.1:8000/ui` 可打开轻量前端示例，页面支持创建诊断任务、查看 SSE
 进度、预览或下载 Markdown 报告，以及提交人工反馈。该页面使用原生 HTML、CSS 和 JavaScript，
 不需要额外的前端构建工具。
+
+## API 访问控制
+
+开发环境默认关闭 API Key 认证，保持本地调试兼容。生产环境应设置：
+
+```bash
+export AUTH_ENABLED=true
+export API_KEYS_JSON='{"replace-with-long-random-key":{"subject":"developer","projects":["waky3"],"scopes":["read","write"]}}'
+```
+
+也可把同样配置写入 `.env`。API Key 至少 16 个字符，`projects` 使用项目白名单或 `["*"]`，
+`scopes` 支持 `read` 和 `write`；GET 请求需要 `read`，POST 请求需要 `write`。
+
+调用 API 时使用请求头：
+
+```text
+X-API-Key: replace-with-long-random-key
+```
+
+或 `Authorization: Bearer <API Key>`。`/`、`/health`、`/ui`、`/docs` 和 `/openapi.json` 保持公开；
+其余 `/api/` 路径均受保护。启用认证后，历史查询和数据库验证必须指定项目，任务、代码、检索、
+索引和反馈接口会校验任务或路径所属项目。前端页面的 API Key 输入框只保存在当前页面内存中，
+不会写入浏览器存储。
 
 ## 测试
 

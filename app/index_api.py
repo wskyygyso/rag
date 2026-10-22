@@ -4,6 +4,8 @@ from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.auth import require_project_access
+
 router = APIRouter(prefix="/api/index", tags=["index"])
 
 
@@ -14,6 +16,7 @@ async def index_runs(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> Dict:
     """返回项目最近的文档索引运行状态和版本信息。"""
+    require_project_access(request, project)
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="数据库暂不可用")
@@ -45,6 +48,7 @@ async def index_runs(
 @router.post("/{project}/runs/{run_id}/retry", status_code=202)
 async def retry_index_run(project: str, run_id: int, request: Request) -> Dict:
     """将失败索引重新投递到 Worker，避免 API 进程阻塞执行。"""
+    require_project_access(request, project)
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="数据库暂不可用")

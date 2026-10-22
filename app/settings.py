@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     code_repositories_root: str = "/repositories"
     validation_rate_limit_per_minute: int = 60
     validation_rate_limit_window_seconds: int = 60
+    auth_enabled: bool = False
+    api_keys_json: str = "{}"
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"
