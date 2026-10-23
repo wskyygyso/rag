@@ -66,6 +66,26 @@ scrape_configs:
 HTTP 路径使用路由模板标签，任务 ID 等动态值不会被写入指标。数据库指标查询使用 3 秒超时；采集失败时
 仍返回 HTTP 指标，并输出 `ragent_database_up 0` 和累计采集失败次数。
 
+Prometheus 告警规则位于 `monitoring/prometheus-rules.yml`，覆盖数据库指标不可用、HTTP 5xx 比例、
+P95 延迟、并发请求、安全拒绝、任务重试、失败任务和指标采集异常。可在 Prometheus 中通过
+`rule_files` 加载该文件，再由 Alertmanager 负责通知路由。
+
+执行开发环境性能冒烟基线：
+
+```bash
+RAGENT_API_KEY='replace-with-long-random-key' \
+  .venv/bin/python scripts/performance_baseline.py \
+  --base-url http://127.0.0.1:8000 \
+  --path /api/metrics \
+  --requests 100 \
+  --concurrency 10 \
+  --max-error-rate 0.01 \
+  --max-p95-ms 500
+```
+
+脚本输出 P50/P95/P99、平均/最大延迟、错误率、吞吐和状态码分布；超过错误率或 P95 阈值时以非零状态退出。
+API Key 仅从 `RAGENT_API_KEY` 环境变量读取，避免出现在命令行参数和终端历史中。
+
 ## 测试
 
 执行 `.venv/bin/pytest -q`。
