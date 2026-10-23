@@ -46,6 +46,26 @@ X-API-Key: replace-with-long-random-key
 认证失败和项目越权会写入 `security_audit`，记录事件类型、HTTP 状态、方法、路径、来源地址、
 认证主体和拒绝原因。审计不保存请求头和原始 API Key；数据库审计写入失败不会改变 401/403 安全拒绝。
 
+## 监控指标
+
+`GET /api/metrics` 以 Prometheus 文本格式输出 HTTP 请求量、延迟直方图、并发请求、进程运行时长、
+任务状态、任务操作、安全拒绝和数据库指标采集状态。启用 API 认证时，抓取端需提供具备 `read` scope
+的 API Key：
+
+```yaml
+scrape_configs:
+  - job_name: php-diagnostic-ragent
+    metrics_path: /api/metrics
+    authorization:
+      type: Bearer
+      credentials: replace-with-long-random-key
+    static_configs:
+      - targets: ["127.0.0.1:8000"]
+```
+
+HTTP 路径使用路由模板标签，任务 ID 等动态值不会被写入指标。数据库指标查询使用 3 秒超时；采集失败时
+仍返回 HTTP 指标，并输出 `ragent_database_up 0` 和累计采集失败次数。
+
 ## 测试
 
 执行 `.venv/bin/pytest -q`。

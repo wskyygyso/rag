@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 
 from app.auth import auth_guard, security_http_exception_handler, validate_auth_settings
 from app.health import get_health
+from app.metrics import begin_http_request, finish_http_request, router as metrics_router
 from app.rate_limit import RedisRateLimiter
 from app.settings import get_settings
 from app.code_api import router as code_router
@@ -50,7 +51,14 @@ app.add_exception_handler(HTTPException, security_http_exception_handler)
 @app.middleware("http")
 async def access_control(request, call_next):
     """校验 API Key，并把调用方身份传递给项目级权限检查。"""
-    return await auth_guard(request, call_next, settings)
+    started_at = begin_http_request()
+    status_code = 500
+    try:
+        response = await auth_guard(request, call_next, settings)
+        status_code = response.status_code
+        return response
+    finally:
+        finish_http_request(request, started_at, status_code)
 
 
 app.include_router(diagnosis_router)
@@ -61,6 +69,7 @@ app.include_router(code_router)
 app.include_router(validation_router)
 app.include_router(hybrid_router)
 app.include_router(index_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health")
