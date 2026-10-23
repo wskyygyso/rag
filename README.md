@@ -34,6 +34,24 @@ docker compose run --rm api python scripts/cleanup_retention.py \
 确认候选数量无误后必须显式增加 `--apply` 才会删除；删除终态任务时，关联证据、反馈和任务操作
 会由外键级联清理。脚本按小批次执行，超过 `--max-batches` 未完成时返回非零状态，便于定时任务告警。
 
+## 上线预检
+
+在容器网络内执行配置和依赖预检：
+
+```bash
+docker compose run --rm api python scripts/preflight_check.py
+```
+
+生产发布门禁必须使用严格模式：
+
+```bash
+docker compose run --rm api python scripts/preflight_check.py --strict
+```
+
+预检会检查生产环境、API Key 认证、任务超时、数据保留策略、独立只读数据库、代码仓库目录、
+RAgent 元数据库核心表和 Redis。`--strict` 模式下任何 `WARN` 或 `FAIL` 都返回非零状态。
+完整部署、告警、备份和回滚要求见 `PRODUCTION_CHECKLIST.md`。
+
 启动后访问 `http://127.0.0.1:8000/ui` 可打开轻量前端示例，页面支持创建诊断任务、查看 SSE
 进度、预览或下载 Markdown 报告，以及提交人工反馈。该页面使用原生 HTML、CSS 和 JavaScript，
 不需要额外的前端构建工具。
