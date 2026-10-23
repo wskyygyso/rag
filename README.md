@@ -16,6 +16,16 @@
 
 API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 
+健康检查分为：
+
+```text
+GET /health       详细依赖状态，用于人工排查
+GET /health/live  进程存活检查，不访问外部依赖
+GET /health/ready 流量就绪检查，PostgreSQL 或 Redis 异常时返回 503
+```
+
+Compose 的 API 健康检查使用 `/health/ready`，依赖不可用时容器会标记为 unhealthy。
+
 诊断任务和文档索引任务使用独立队列：`worker` 消费 `diagnosis`，`index-worker` 消费 `index`，
 两者可以分别扩缩容。诊断默认软超时 240 秒、硬超时 300 秒；索引默认软超时 900 秒、硬超时
 960 秒，可通过 `DIAGNOSIS_TASK_*_TIME_LIMIT_SECONDS` 和

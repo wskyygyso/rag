@@ -47,7 +47,7 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 | 4 | 数据库、配置和日志验证 | 已完成 | 100% |
 | 5 | 混合检索和知识库 | 已完成 | 100% |
 | 6 | 前端和协作能力 | 已完成 | 100% |
-| 7 | 安全、性能和生产上线 | 进行中 | 95% |
+| 7 | 安全、性能和生产上线 | 进行中 | 98% |
 
 ---
 
@@ -727,7 +727,7 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 ### 状态
 
-进行中，95%。
+进行中，98%。
 
 ### 目标
 
@@ -1057,6 +1057,39 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 - 配置生产 `AUTH_ENABLED`、API Key 和 `VALIDATION_DATABASE_URL`；
 - 在目标环境执行严格模式预检、备份恢复和回滚演练，完成阶段 7 验收。
+
+### 本轮推进：liveness 和 readiness
+
+#### 本次完成
+
+- 保留 `/health` 作为详细依赖状态查询；
+- 新增 `/health/live`，只反映 API 进程存活，不访问外部依赖；
+- 新增 `/health/ready`，PostgreSQL 或 Redis 降级时返回 HTTP 503；
+- Compose API 健康检查改用 `/health/ready`，并配置启动宽限期和重试次数；
+- 增加 live、ready 健康和不健康测试；
+- 更新 README、进度文档和中文注释。
+
+#### 本轮验证
+
+- `.venv/bin/pytest -q` 通过，结果为 `90 passed`；
+- `python3 -m compileall -q app tests scripts` 通过；
+- 前端内联 JavaScript 语法检查通过；
+- `docker compose config` 通过；
+- `git diff --check` 通过；
+- 临时 API 容器实测 `/health/live` 和 `/health/ready` 均返回 200，Redis 与 PostgreSQL 状态正常，验证容器已停止。
+
+#### 当前状态
+
+- 当前阶段：阶段 7：安全、性能和生产上线；
+- 阶段进度：98%；
+- 总体进度：99%；
+- 阻塞项：生产 API Key 和目标只读数据库凭据待配置；
+- Git 状态：liveness/readiness 健康检查改动待用户审阅，未提交。
+
+#### 下一步
+
+- 在生产配置下执行严格预检；
+- 完成备份恢复、回滚演练和最终上线签字，关闭阶段 7。
 
 ---
 

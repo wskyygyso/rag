@@ -1,9 +1,10 @@
 """FastAPI 应用入口和生命周期管理。"""
 
 from contextlib import asynccontextmanager
-from typing import Dict
+from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 
 from app.auth import auth_guard, security_http_exception_handler, validate_auth_settings
 from app.health import get_health
@@ -76,6 +77,21 @@ app.include_router(metrics_router)
 async def health() -> Dict:
     """返回 API、Redis 和 PostgreSQL 的健康状态。"""
     return await get_health(settings)
+
+
+@app.get("/health/live")
+async def health_live() -> Dict[str, str]:
+    """返回进程存活状态，不访问外部依赖。"""
+    return {"status": "ok", "check": "liveness"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> Any:
+    """返回流量就绪状态，核心依赖降级时使用 HTTP 503。"""
+    result = await get_health(settings)
+    if result["status"] != "ok":
+        return JSONResponse(status_code=503, content=result)
+    return result
 
 
 @app.get("/")
