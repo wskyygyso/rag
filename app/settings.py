@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"
+    validation_database_url: str = ""
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 

@@ -130,14 +130,18 @@ async def query_database(
     if max_result_bytes < 1 or max_result_bytes > 5_000_000:
         raise ValidationToolError("最大结果大小必须在 1 到 5000000 字节之间")
     safe_sql = validate_readonly_sql(sql)
+    validation_database_url = (settings.validation_database_url or "").strip()
+    if not validation_database_url:
+        raise ValidationToolError("未配置只读验证数据库")
     connection = None
     try:
-        connection = await asyncpg.connect(settings.database_url, timeout=timeout_seconds)
-        rows = await connection.fetch(
-            safe_sql,
-            *(params or []),
-            timeout=timeout_seconds,
-        )
+        connection = await asyncpg.connect(validation_database_url, timeout=timeout_seconds)
+        async with connection.transaction(readonly=True):
+            rows = await connection.fetch(
+                safe_sql,
+                *(params or []),
+                timeout=timeout_seconds,
+            )
         result_rows = [
             {key: _redact_result_value(str(key), value) for key, value in dict(row).items()}
             for row in rows[:max_rows]

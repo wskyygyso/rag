@@ -39,6 +39,25 @@ class _DatabaseConnection:
         self.error = error
         self.closed = False
         self.calls = []
+        self.readonly_transactions = []
+
+    def transaction(self, readonly=False):
+        """返回记录只读标志的异步事务上下文。"""
+        connection = self
+
+        class _Transaction:
+            """模拟 asyncpg 只读事务。"""
+
+            async def __aenter__(self):
+                """记录事务进入时的只读标志。"""
+                connection.readonly_transactions.append(readonly)
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                """不抑制查询异常。"""
+                return False
+
+        return _Transaction()
 
     async def fetch(self, sql: str, *params: object, timeout: float) -> list:
         """返回测试记录，或抛出预设数据库异常。"""
@@ -122,7 +141,7 @@ async def test_query_database_redacts_limits_rows_and_closes_connection(monkeypa
 
     monkeypatch.setattr(validation_tools.asyncpg, "connect", fake_connect)
     result = await query_database(
-        SimpleNamespace(database_url="postgresql://test"),
+        SimpleNamespace(validation_database_url="postgresql://readonly-test"),
         "SELECT * FROM guild",
         max_rows=1,
         max_result_bytes=1000,
@@ -130,6 +149,7 @@ async def test_query_database_redacts_limits_rows_and_closes_connection(monkeypa
     assert result["total"] == 1
     assert result["rows"][0]["token"] == "***"
     assert connection.closed is True
+    assert connection.readonly_transactions == [True]
     assert connection.calls[0][0] == "SELECT * FROM guild"
 
 
@@ -145,7 +165,9 @@ async def test_query_database_converts_timeout_and_database_errors(monkeypatch) 
     monkeypatch.setattr(validation_tools.asyncpg, "connect", fake_timeout_connect)
     with pytest.raises(ValidationToolError, match="超时"):
         await query_database(
-            SimpleNamespace(database_url="postgresql://test"), "SELECT 1", max_result_bytes=1000
+            SimpleNamespace(validation_database_url="postgresql://readonly-test"),
+            "SELECT 1",
+            max_result_bytes=1000,
         )
     assert timeout_connection.closed is True
 
@@ -158,7 +180,9 @@ async def test_query_database_converts_timeout_and_database_errors(monkeypatch) 
     monkeypatch.setattr(validation_tools.asyncpg, "connect", fake_error_connect)
     with pytest.raises(ValidationToolError, match="数据库查询失败"):
         await query_database(
-            SimpleNamespace(database_url="postgresql://test"), "SELECT 1", max_result_bytes=1000
+            SimpleNamespace(validation_database_url="postgresql://readonly-test"),
+            "SELECT 1",
+            max_result_bytes=1000,
         )
     assert error_connection.closed is True
 
@@ -167,5 +191,20 @@ def test_query_database_rejects_result_size_limit() -> None:
     """验证数据库结果大小参数存在明确边界。"""
     with pytest.raises(ValidationToolError, match="最大结果大小"):
         asyncio.run(
-            query_database(SimpleNamespace(database_url="postgresql://test"), "SELECT 1", max_result_bytes=0)
+            query_database(
+                SimpleNamespace(validation_database_url="postgresql://readonly-test"),
+                "SELECT 1",
+                max_result_bytes=0,
+            )
+        )
+
+
+def test_query_database_requires_separate_readonly_url() -> None:
+    """验证未配置独立只读数据库时拒绝数据库验证。"""
+    with pytest.raises(ValidationToolError, match="未配置只读验证数据库"):
+        asyncio.run(
+            query_database(
+                SimpleNamespace(validation_database_url=""),
+                "SELECT 1",
+            )
         )

@@ -203,6 +203,11 @@ POST /api/index/{project}/runs/{run_id}/retry
 
 数据库接口只允许 `SELECT` 或只读 `WITH` 查询，并限制参数数量、返回行数、结果大小和查询时间；数据库结果、配置与日志响应会对常见 Token、密码和 Secret 做脱敏。
 
+目标业务数据库必须通过 `VALIDATION_DATABASE_URL` 单独配置，不能复用 RAgent 元数据库 `DATABASE_URL`。
+生产环境应使用独立只读账号，并限制其只能访问允许的业务库和 schema。即使账号权限配置错误，每次查询仍会在
+PostgreSQL `readonly=True` 事务中执行。未配置 `VALIDATION_DATABASE_URL` 时，数据库验证会返回受控失败，
+不会回退到 RAgent 主库。
+
 验证接口默认按调用方进行每分钟 60 次限流，可通过
 `VALIDATION_RATE_LIMIT_PER_MINUTE` 和 `VALIDATION_RATE_LIMIT_WINDOW_SECONDS` 调整。
 限流计数使用 Redis Lua 原子脚本在多个 API 实例间共享；启用认证时按认证主体计数，否则按客户端地址计数。
