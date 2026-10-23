@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     diagnosis_task_time_limit_seconds: int = 300
     document_index_soft_time_limit_seconds: int = 900
     document_index_time_limit_seconds: int = 960
+    diagnostic_task_retention_days: int = 90
+    validation_audit_retention_days: int = 180
+    security_audit_retention_days: int = 180
+    document_index_retention_days: int = 90
     auth_enabled: bool = False
     api_keys_json: str = "{}"
 

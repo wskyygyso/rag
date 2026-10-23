@@ -22,6 +22,18 @@ API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 `DOCUMENT_INDEX_*_TIME_LIMIT_SECONDS` 调整。软超时会写入失败状态和超时原因；硬超时或 Worker
 中断后，超过硬超时窗口仍停留在执行阶段的任务会在数据库初始化时恢复为失败。
 
+历史数据保留期限默认：终态诊断任务 90 天、文档索引运行记录 90 天、验证审计 180 天、
+安全审计 180 天。可通过 `.env` 中对应的 `*_RETENTION_DAYS` 调整。清理脚本默认只试运行：
+
+```bash
+docker compose run --rm api python scripts/cleanup_retention.py
+docker compose run --rm api python scripts/cleanup_retention.py \
+  --batch-size 500 --max-batches 100
+```
+
+确认候选数量无误后必须显式增加 `--apply` 才会删除；删除终态任务时，关联证据、反馈和任务操作
+会由外键级联清理。脚本按小批次执行，超过 `--max-batches` 未完成时返回非零状态，便于定时任务告警。
+
 启动后访问 `http://127.0.0.1:8000/ui` 可打开轻量前端示例，页面支持创建诊断任务、查看 SSE
 进度、预览或下载 Markdown 报告，以及提交人工反馈。该页面使用原生 HTML、CSS 和 JavaScript，
 不需要额外的前端构建工具。
