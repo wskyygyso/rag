@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.auth import auth_guard, security_http_exception_handler, validate_auth_settings
 from app.health import get_health
 from app.metrics import begin_http_request, finish_http_request, router as metrics_router
+from app.preflight import enforce_production_settings
 from app.rate_limit import RedisRateLimiter
 from app.settings import get_settings
 from app.code_api import router as code_router
@@ -26,6 +27,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """启动时创建数据库连接池，关闭时释放连接资源。"""
+    enforce_production_settings(settings)
     validate_auth_settings(settings)
     application.state.validation_rate_limiter = RedisRateLimiter.from_url(
         settings.redis_url,

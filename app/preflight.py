@@ -131,6 +131,19 @@ def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
     return results
 
 
+def enforce_production_settings(settings: Settings) -> None:
+    """生产环境关键静态配置不完整时拒绝启动，避免带病上线。"""
+    if settings.app_env != "production":
+        return
+    failures = [
+        result.name
+        for result in static_preflight(settings, strict=True)
+        if result.status != "PASS"
+    ]
+    if failures:
+        raise ValueError(f"生产配置预检失败：{', '.join(failures)}")
+
+
 async def check_metadata_database(settings: Settings) -> CheckResult:
     """检查 RAgent 元数据库连接和核心表是否齐全。"""
     connection = None

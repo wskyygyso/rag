@@ -62,6 +62,9 @@ docker compose run --rm api python scripts/preflight_check.py --strict
 RAgent 元数据库核心表和 Redis。`--strict` 模式下任何 `WARN` 或 `FAIL` 都返回非零状态。
 完整部署、告警、备份和回滚要求见 `PRODUCTION_CHECKLIST.md`。
 
+`APP_ENV=production` 时，API 启动阶段也会执行关键静态配置门禁；认证、目标只读库、超时、保留策略
+或仓库目录不合格时直接拒绝启动，避免服务带病接收流量。
+
 ## 备份和恢复
 
 通过维护 profile 创建 RAgent 元数据库备份：
@@ -81,6 +84,8 @@ docker compose --profile maintenance run --rm backup
 ## API 访问控制
 
 开发环境默认关闭 API Key 认证，保持本地调试兼容。生产环境应设置：
+
+可直接参考 `.env.production.example`。该文件只包含占位值，真实密码和 API Key 必须由 Secret Manager 注入。
 
 ```bash
 export AUTH_ENABLED=true
