@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     code_repositories_root: str = "/repositories"
     validation_rate_limit_per_minute: int = 60
     validation_rate_limit_window_seconds: int = 60
+    diagnosis_task_soft_time_limit_seconds: int = 240
+    diagnosis_task_time_limit_seconds: int = 300
+    document_index_soft_time_limit_seconds: int = 900
+    document_index_time_limit_seconds: int = 960
     auth_enabled: bool = False
     api_keys_json: str = "{}"
 

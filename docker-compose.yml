@@ -16,7 +16,20 @@ services:
 
   worker:
     build: .
-    command: celery -A app.worker.celery_app worker --loglevel=INFO
+    command: celery -A app.worker.celery_app worker --loglevel=INFO -Q diagnosis
+    env_file:
+      - .env
+    volumes:
+      - ./repositories:/repositories:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  index-worker:
+    build: .
+    command: celery -A app.worker.celery_app worker --loglevel=INFO -Q index
     env_file:
       - .env
     volumes:

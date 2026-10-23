@@ -1,5 +1,6 @@
-"""Celery Worker 和诊断任务执行流程。"""
+"""Celery Worker、任务队列和诊断执行流程。"""
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from celery import Celery
 
 from app.task_store import clear_task_evidence, create_pool, get_task, insert_evidence, update_task
@@ -11,6 +12,25 @@ from app.symbol_tools import summarize_symbol_index
 from app.validation_runner import execute_validation_plan
 
 settings = get_settings()
+
+
+def validate_worker_timeouts(current_settings) -> None:
+    """校验软超时小于硬超时，避免任务配置互相冲突。"""
+    pairs = (
+        (
+            current_settings.diagnosis_task_soft_time_limit_seconds,
+            current_settings.diagnosis_task_time_limit_seconds,
+        ),
+        (
+            current_settings.document_index_soft_time_limit_seconds,
+            current_settings.document_index_time_limit_seconds,
+        ),
+    )
+    if any(soft < 1 or hard <= soft for soft, hard in pairs):
+        raise ValueError("任务软超时必须为正数且小于硬超时")
+
+
+validate_worker_timeouts(settings)
 celery_app = Celery(
     "ragent",
     broker=settings.celery_broker_url,
@@ -23,6 +43,15 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="Asia/Shanghai",
     enable_utc=False,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    task_track_started=True,
+    broker_connection_retry_on_startup=True,
+    task_routes={
+        "app.worker.run_diagnosis_task": {"queue": "diagnosis"},
+        "app.worker.run_document_index_task": {"queue": "index"},
+    },
 )
 
 
@@ -32,7 +61,12 @@ def healthcheck_task() -> dict:
     return {"status": "ok"}
 
 
-@celery_app.task(name="app.worker.run_document_index_task")
+@celery_app.task(
+    name="app.worker.run_document_index_task",
+    queue="index",
+    soft_time_limit=settings.document_index_soft_time_limit_seconds,
+    time_limit=settings.document_index_time_limit_seconds,
+)
 def run_document_index_task(project: str) -> dict:
     """在 Worker 中异步重试指定项目的文档分块索引。"""
     import asyncio
@@ -166,6 +200,16 @@ async def _execute_diagnosis(task_id: str) -> None:
                 "warnings": warnings,
             },
         )
+    except SoftTimeLimitExceeded as exc:
+        await update_task(
+            pool,
+            task_id,
+            status="FAILED",
+            progress=100,
+            current_step="任务执行超时",
+            error="任务超过软超时限制，已停止执行",
+        )
+        raise
     except Exception as exc:
         await update_task(
             pool,
@@ -180,7 +224,14 @@ async def _execute_diagnosis(task_id: str) -> None:
         await pool.close()
 
 
-@celery_app.task(bind=True, name="app.worker.run_diagnosis_task", max_retries=2)
+@celery_app.task(
+    bind=True,
+    name="app.worker.run_diagnosis_task",
+    queue="diagnosis",
+    max_retries=2,
+    soft_time_limit=settings.diagnosis_task_soft_time_limit_seconds,
+    time_limit=settings.diagnosis_task_time_limit_seconds,
+)
 def run_diagnosis_task(self, task_id: str) -> dict:
     """Celery 同步入口：运行异步诊断流程并返回任务摘要。"""
     import asyncio

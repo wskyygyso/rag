@@ -1,6 +1,7 @@
 """诊断任务和证据的 PostgreSQL 持久化操作。"""
 
 import json
+import math
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -198,6 +199,10 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_TASK_OPERATIONS_INDEX_SQL)
         await connection.execute(CREATE_SECURITY_AUDIT_SQL)
         await connection.execute(CREATE_SECURITY_AUDIT_INDEX_SQL)
+        await recover_stale_diagnosis_tasks(
+            pool,
+            max(1, math.ceil(settings.diagnosis_task_time_limit_seconds / 60) + 5),
+        )
         await connection.execute(CREATE_DOCUMENT_CHUNKS_SQL)
         await connection.execute(
             "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding JSONB"
@@ -713,6 +718,28 @@ async def recover_stale_document_index_runs(
           AND started_at < NOW() - ($2 * INTERVAL '1 minute')
         """,
         project,
+        stale_minutes,
+    )
+    return int(result.rsplit(" ", 1)[-1]) if result.rsplit(" ", 1)[-1].isdigit() else 0
+
+
+async def recover_stale_diagnosis_tasks(
+    pool: asyncpg.Pool, stale_minutes: int = 10
+) -> int:
+    """将超过执行窗口仍处于运行阶段的任务标记为失败，恢复 Worker 中断状态。"""
+    if stale_minutes < 1 or stale_minutes > 7 * 24 * 60:
+        raise ValueError("诊断任务超时窗口必须在 1 分钟到 7 天之间")
+    result = await pool.execute(
+        """
+        UPDATE diagnostic_tasks
+        SET status = 'FAILED',
+            progress = 100,
+            current_step = '任务执行超时，已由系统恢复',
+            error = '任务超过执行超时窗口或 Worker 已中断',
+            updated_at = NOW()
+        WHERE status IN ('RUNNING', 'SEARCHING', 'VERIFYING', 'REPORTING')
+          AND updated_at < NOW() - ($1 * INTERVAL '1 minute')
+        """,
         stale_minutes,
     )
     return int(result.rsplit(" ", 1)[-1]) if result.rsplit(" ", 1)[-1].isdigit() else 0
