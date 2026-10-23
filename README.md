@@ -62,6 +62,18 @@ docker compose run --rm api python scripts/preflight_check.py --strict
 RAgent 元数据库核心表和 Redis。`--strict` 模式下任何 `WARN` 或 `FAIL` 都返回非零状态。
 完整部署、告警、备份和回滚要求见 `PRODUCTION_CHECKLIST.md`。
 
+## 备份和恢复
+
+通过维护 profile 创建 RAgent 元数据库备份：
+
+```bash
+docker compose --profile maintenance run --rm backup
+```
+
+备份使用 PostgreSQL custom format，生成 SHA-256 校验文件，并通过归档目录自检；默认保存在被 Git
+忽略的 `backups/` 目录并保留最近 7 份。生产环境必须将备份复制到加密、受访问控制且与运行环境隔离的
+对象存储，按周期执行隔离数据库恢复演练。详细步骤和禁止事项见 `BACKUP_RESTORE.md`。
+
 启动后访问 `http://127.0.0.1:8000/ui` 可打开轻量前端示例，页面支持创建诊断任务、查看 SSE
 进度、预览或下载 Markdown 报告，以及提交人工反馈。该页面使用原生 HTML、CSS 和 JavaScript，
 不需要额外的前端构建工具。

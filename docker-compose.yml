@@ -72,5 +72,24 @@ services:
       timeout: 3s
       retries: 10
 
+  backup:
+    image: postgres:16-alpine
+    profiles: ["maintenance"]
+    command: ["sh", "/scripts/backup_metadata.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ragent
+      PGUSER: ragent
+      PGPASSWORD: ragent
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: "${BACKUP_KEEP:-7}"
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
