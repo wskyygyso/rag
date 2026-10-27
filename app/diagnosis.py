@@ -21,7 +21,7 @@ from app.task_store import (
     update_task,
 )
 from app.validation_plan import ValidationPlan, validation_plan_dict
-from app.reporting import build_markdown_report
+from app.reporting import build_assessment, build_markdown_report
 
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
 
@@ -244,6 +244,7 @@ async def get_report(
     """获取稳定诊断报告，支持 JSON 摘要或 Markdown 导出。"""
     task = await _authorized_task(_pool(request), request, task_id)
     response = _task_response(task)
+    response["assessment"] = build_assessment(response.get("result") or {})
     if format == "markdown":
         return PlainTextResponse(
             build_markdown_report(response),

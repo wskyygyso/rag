@@ -8,6 +8,7 @@ from app.task_store import replace_symbol_index
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
 from app.php_index import index_repository, trace_index_call_chain
+from app.reporting import build_assessment
 from app.symbol_tools import summarize_symbol_index
 from app.validation_runner import execute_validation_plan
 
@@ -181,24 +182,26 @@ async def _execute_diagnosis(task_id: str) -> None:
         current = await get_task(pool, task_id)
         if current is None or current["status"] == "CANCELLED":
             return
+        report_result = {
+            "message": "已完成第一轮代码关键词检索。",
+            "queries": queries,
+            "evidence": deduplicated,
+            "symbols": symbol_summary["symbols"],
+            "references": symbol_summary["references"],
+            "configs": symbol_summary["configs"],
+            "sql": symbol_summary["sql"],
+            "call_chains": call_chains,
+            "validation": validation,
+            "warnings": warnings,
+        }
+        report_result["assessment"] = build_assessment(report_result)
         await update_task(
             pool,
             task_id,
             status="COMPLETED",
             progress=100,
             current_step="任务执行器已就绪",
-            result={
-                "message": "已完成第一轮代码关键词检索。",
-                "queries": queries,
-                "evidence": deduplicated,
-                "symbols": symbol_summary["symbols"],
-                "references": symbol_summary["references"],
-                "configs": symbol_summary["configs"],
-                "sql": symbol_summary["sql"],
-                "call_chains": call_chains,
-                "validation": validation,
-                "warnings": warnings,
-            },
+            result=report_result,
         )
     except SoftTimeLimitExceeded as exc:
         await update_task(

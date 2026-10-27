@@ -3,6 +3,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.reporting import build_assessment
 
 
 class _Pool:
@@ -44,8 +45,13 @@ def test_report_endpoint_supports_json_and_markdown() -> None:
         app.state.db_pool = None
     assert json_response.status_code == 200
     assert json_response.json()["task_id"] == "diag_1"
+    assert json_response.json()["assessment"]["confidence"]["level"] == "high"
     assert markdown_response.status_code == 200
     assert "# 诊断报告：diag_1" in markdown_response.text
+    assert "## 结论" in markdown_response.text
+    assert "## 置信度" in markdown_response.text
+    assert "## 已确认事实" in markdown_response.text
+    assert "## 未验证项" in markdown_response.text
     assert "## 代码证据" in markdown_response.text
     assert "Guild.php:10 invite failed" in markdown_response.text
     assert markdown_response.headers["content-disposition"].endswith('"diag_1.md"')
@@ -62,3 +68,17 @@ def test_report_endpoint_validates_format_and_missing_task() -> None:
         app.state.db_pool = None
     assert missing_response.status_code == 404
     assert invalid_response.status_code == 422
+
+
+def test_assessment_marks_low_confidence_without_evidence() -> None:
+    """验证无证据且验证失败时给出低置信度和未验证说明。"""
+    assessment = build_assessment(
+        {
+            "evidence": [],
+            "warnings": ["代码搜索超时"],
+            "validation": {"database": {"status": "FAILED", "error": "数据库不可用"}},
+        }
+    )
+    assert assessment["confidence"]["level"] == "low"
+    assert "未定位到相关代码证据" in assessment["unverified_items"]
+    assert any("数据库验证失败" in item for item in assessment["unverified_items"])
