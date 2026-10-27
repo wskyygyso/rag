@@ -43,6 +43,22 @@ def build_assessment(result: Dict[str, Any]) -> Dict[str, Any]:
     if not successes:
         unverified_items.append("未成功完成数据库、配置或日志事实验证")
 
+    suggested_next_steps = []
+    if evidence:
+        suggested_next_steps.append("使用已定位文件和行号检查条件判断、异常分支与实际返回路径。")
+    if result.get("configs"):
+        suggested_next_steps.append("在目标环境只读核对配置键的实际值是否与代码预期一致。")
+    if result.get("sql"):
+        suggested_next_steps.append("使用只读 SQL 参数核对相关业务表记录、状态和关键时间字段。")
+    if result.get("call_chains"):
+        suggested_next_steps.append("沿报告中的调用链确认错误码来源和上层调用方。")
+    if not successes:
+        suggested_next_steps.append("补充数据库、配置或日志的按需只读验证计划以确认运行态事实。")
+    if failures or warnings:
+        suggested_next_steps.append("先处理未验证项和警告，再判断候选原因是否成立。")
+    if not suggested_next_steps:
+        suggested_next_steps.append("补充错误码、类方法、配置键或业务对象后重新诊断。")
+
     if evidence and successes and not failures and not warnings:
         level, label, score = "high", "高", 0.85
         conclusion = "已定位相关代码证据并完成事实验证，可依据已确认事实继续排查。"
@@ -61,6 +77,7 @@ def build_assessment(result: Dict[str, Any]) -> Dict[str, Any]:
         "confidence": {"level": level, "label": label, "score": score, "reason": reason},
         "confirmed_facts": confirmed_facts,
         "unverified_items": unverified_items,
+        "suggested_next_steps": suggested_next_steps,
     }
 
 
@@ -96,9 +113,20 @@ def build_markdown_report(task: Dict[str, Any]) -> str:
             "",
             _lines(assessment["unverified_items"]),
             "",
+            "## 建议下一步",
+            "",
+            _lines(assessment["suggested_next_steps"]),
+            "",
             "## 检索关键词",
             "",
             _lines(result.get("queries") or []),
+            "",
+            "## 符号证据",
+            "",
+            _lines(
+                f"{item.get('symbol_type')} {item.get('symbol_name')} {item.get('file')}:{item.get('line')}"
+                for item in result.get("symbols") or []
+            ),
             "",
             "## 代码证据",
             "",
@@ -110,6 +138,20 @@ def build_markdown_report(task: Dict[str, Any]) -> str:
             "## 调用链",
             "",
             _lines(result.get("call_chains") or []),
+            "",
+            "## 配置线索",
+            "",
+            _lines(
+                f"{item.get('key')} {item.get('file')}:{item.get('line')}"
+                for item in result.get("configs") or []
+            ),
+            "",
+            "## SQL 线索",
+            "",
+            _lines(
+                f"{item.get('operation')} {item.get('content')} {item.get('file')}:{item.get('line')}"
+                for item in result.get("sql") or []
+            ),
             "",
             "## 事实验证",
             "",
