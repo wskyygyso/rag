@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "id": "guild_invite_limit",
+      "project": "waky3",
+      "question": "公会邀请 GuildController::inviteGuild 为什么返回 BD_OP_FORBIDDEN，检查 anchor.joinBDGuildDayLimit",
+      "expected_symbols": ["GuildController::inviteGuild"],
+      "expected_files": ["php/action/Guild.php"],
+      "expected_queries": ["GuildController::inviteGuild", "BD_OP_FORBIDDEN", "anchor.joinBDGuildDayLimit"],
+      "expected_lines": [{"file": "php/action/Guild.php", "line": 8}]
+    },
+    {
+      "id": "guild_entry_symbol",
+      "project": "waky3",
+      "question": "定位 GuildController::inviteGuild 的 PHP 入口",
+      "expected_symbols": ["GuildController::inviteGuild"],
+      "expected_files": ["php/action/Guild.php"],
+      "expected_queries": ["GuildController::inviteGuild"]
+    },
+    {
+      "id": "unknown_failure_no_false_positive",
+      "project": "waky3",
+      "question": "NO_SUCH_RAgent_FAILURE_2026",
+      "expected_symbols": [],
+      "expected_files": [],
+      "expected_queries": ["NO_SUCH_RAgent_FAILURE_2026"]
+    }
+  ]
+}

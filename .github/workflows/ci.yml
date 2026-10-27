@@ -47,6 +47,9 @@ jobs:
       - name: Check frontend syntax
         run: node scripts/check_frontend_syntax.js
 
+      - name: Evaluate diagnosis baseline
+        run: python scripts/evaluate_diagnosis.py
+
       - name: Check shell syntax
         run: sh -n scripts/backup_metadata.sh
 

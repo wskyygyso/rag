@@ -44,6 +44,12 @@ def test_extract_search_queries_keeps_qualified_symbol() -> None:
     assert "GuildController::inviteGuild" in queries
 
 
+def test_extract_search_queries_keeps_dotted_config_key() -> None:
+    """验证点号配置键不会被拆成两个无关关键词。"""
+    queries = extract_search_queries("检查 anchor.joinBDGuildDayLimit 配置")
+    assert "anchor.joinBDGuildDayLimit" in queries
+
+
 def test_php_repository_fixture_returns_real_context() -> None:
     """验证固定 PHP 仓库样例可以返回方法、配置和错误码所在行。"""
     root = Path(__file__).parent / "fixtures" / "php_repo"

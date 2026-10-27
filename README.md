@@ -156,6 +156,15 @@ API Key 仅从 `RAGENT_API_KEY` 环境变量读取，避免出现在命令行参
 GitHub Actions 的 `CI` 工作流在 Python 3.9 和 3.11 下执行单元测试、Python 编译、前端脚本语法、
 备份脚本语法、Compose 普通/维护配置和空白错误检查。推送 `main` 或创建 Pull Request 时自动运行。
 
+运行离线诊断准确性基线：
+
+```bash
+.venv/bin/python scripts/evaluate_diagnosis.py
+```
+
+固定评测集位于 `tests/fixtures/diagnosis_cases.json`，检查符号、证据文件、搜索关键词和关键行号，
+同时包含一个不应产生证据的负例。可用 `--min-pass-rate` 设置发布门禁阈值。
+
 ## 代码注释约定
 
 所有新增或修改的代码文件，都必须同步维护注释：
