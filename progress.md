@@ -1158,6 +1158,40 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 - 使用 `.env.production.example` 配置真实生产凭据；
 - 执行严格预检、监控告警和回滚签字后关闭阶段 7。
 
+### 本轮推进：CI 发布门禁
+
+#### 本次完成
+
+- 新增 GitHub Actions `CI` 工作流，覆盖 Python 3.9 和 3.11；
+- 自动执行测试、Python 编译、前端脚本语法和 shell 语法检查；
+- 自动验证普通 Compose 配置和 maintenance profile；
+- 增加独立前端语法检查脚本，避免在 CI 中维护复杂内联命令；
+- 将 PyYAML 加入开发依赖，并把告警规则结构和关键告警纳入测试；
+- 更新 README 和进度文档。
+
+#### 本轮验证
+
+- `.venv/bin/pytest -q` 通过，结果为 `94 passed`；
+- `python3 -m compileall -q app tests scripts` 通过；
+- `node scripts/check_frontend_syntax.js` 通过；
+- `sh -n scripts/backup_metadata.sh` 通过；
+- `docker compose config` 和维护 profile 配置通过；
+- CI YAML 和告警 YAML 均可解析；
+- `git diff --check` 通过。
+
+#### 当前状态
+
+- 当前阶段：阶段 7：安全、性能和生产上线；
+- 阶段进度：99%；
+- 总体进度：99%；
+- 阻塞项：生产 API Key 和目标只读数据库凭据待配置；
+- Git 状态：CI 发布门禁改动待用户审阅，未提交。
+
+#### 下一步
+
+- 推送后确认 GitHub Actions 在 Python 3.9/3.11 均通过；
+- 使用生产凭据完成严格预检和上线签字后关闭阶段 7。
+
 ---
 
 ## 阶段性提交记录

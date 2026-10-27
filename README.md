@@ -153,6 +153,9 @@ API Key 仅从 `RAGENT_API_KEY` 环境变量读取，避免出现在命令行参
 
 执行 `.venv/bin/pytest -q`。
 
+GitHub Actions 的 `CI` 工作流在 Python 3.9 和 3.11 下执行单元测试、Python 编译、前端脚本语法、
+备份脚本语法、Compose 普通/维护配置和空白错误检查。推送 `main` 或创建 Pull Request 时自动运行。
+
 ## 代码注释约定
 
 所有新增或修改的代码文件，都必须同步维护注释：

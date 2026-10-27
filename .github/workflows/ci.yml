@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Prepare local environment file
+        run: cp .env.example .env
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install '.[dev]'
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Compile Python
+        run: python -m compileall -q app tests scripts
+
+      - name: Check frontend syntax
+        run: node scripts/check_frontend_syntax.js
+
+      - name: Check shell syntax
+        run: sh -n scripts/backup_metadata.sh
+
+      - name: Validate Compose
+        run: |
+          docker compose config > /dev/null
+          docker compose --profile maintenance config > /dev/null
+
+      - name: Check whitespace
+        run: git diff --check
