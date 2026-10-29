@@ -53,6 +53,7 @@ def _task_response(task: Dict) -> Dict:
         "error": task["error"],
         "created_at": task["created_at"],
         "updated_at": task["updated_at"],
+        "request_id": task.get("request_id"),
     }
 
 
@@ -110,6 +111,7 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
         payload.environment,
         payload.created_by,
         validation_plan_dict(payload.validation),
+        request_id=getattr(request.state, "request_id", None),
     )
     from app.worker import run_diagnosis_task
 

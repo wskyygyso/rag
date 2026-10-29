@@ -142,6 +142,7 @@ async def record_security_denial(request: Request, exc: HTTPException) -> None:
             request.url.path,
             client_address=client_address,
             actor=identity.subject if identity else None,
+            request_id=getattr(request.state, "request_id", None),
         )
     except Exception:
         logger.warning("security_audit_write_failed", exc_info=True)

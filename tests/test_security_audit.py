@@ -40,6 +40,7 @@ async def test_security_audit_persists_only_controlled_fields() -> None:
         "/api/diagnoses/example",
         client_address="127.0.0.1",
         actor=None,
+        request_id="request-1",
     )
     assert len(pool.calls) == 1
     assert pool.calls[0][1] == (
@@ -50,6 +51,7 @@ async def test_security_audit_persists_only_controlled_fields() -> None:
         "/api/diagnoses/example",
         "127.0.0.1",
         None,
+        "request-1",
     )
     assert "X-API-Key" not in pool.calls[0][0]
 

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_tasks (
     retry_count INT NOT NULL DEFAULT 0,
     created_by VARCHAR(100),
     validation_plan JSONB,
+    request_id VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
@@ -121,6 +122,7 @@ CREATE TABLE IF NOT EXISTS security_audit (
     path VARCHAR(500) NOT NULL,
     client_address VARCHAR(100),
     actor VARCHAR(100),
+    request_id VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
 """
@@ -189,6 +191,9 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(
             "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS validation_plan JSONB"
         )
+        await connection.execute(
+            "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS request_id VARCHAR(128)"
+        )
         await connection.execute(CREATE_EVIDENCE_SQL)
         await connection.execute(CREATE_SYMBOLS_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_SQL)
@@ -199,6 +204,15 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_TASK_OPERATIONS_INDEX_SQL)
         await connection.execute(CREATE_SECURITY_AUDIT_SQL)
         await connection.execute(CREATE_SECURITY_AUDIT_INDEX_SQL)
+        await connection.execute(
+            "ALTER TABLE security_audit ADD COLUMN IF NOT EXISTS request_id VARCHAR(128)"
+        )
+        await connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_request_id ON diagnostic_tasks (request_id)"
+        )
+        await connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_security_audit_request_id ON security_audit (request_id)"
+        )
         await recover_stale_diagnosis_tasks(
             pool,
             max(1, math.ceil(settings.diagnosis_task_time_limit_seconds / 60) + 5),
@@ -249,13 +263,14 @@ async def insert_task(
     environment: str,
     created_by: Optional[str] = None,
     validation_plan: Optional[Dict[str, Any]] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """插入排队状态的诊断任务，并保存可选的只读验证计划。"""
     row = await pool.fetchrow(
         """
         INSERT INTO diagnostic_tasks
-            (id, project, question, environment, status, progress, current_step, created_by, validation_plan)
-        VALUES ($1, $2, $3, $4, 'QUEUED', 0, '等待 Worker 执行', $5, $6::jsonb)
+            (id, project, question, environment, status, progress, current_step, created_by, validation_plan, request_id)
+        VALUES ($1, $2, $3, $4, 'QUEUED', 0, '等待 Worker 执行', $5, $6::jsonb, $7)
         RETURNING *
         """,
         task_id,
@@ -264,6 +279,7 @@ async def insert_task(
         environment,
         created_by,
         json.dumps(validation_plan, ensure_ascii=False) if validation_plan is not None else None,
+        request_id,
     )
     return _decode_task(row)  # type: ignore[return-value]
 
@@ -307,7 +323,7 @@ async def list_tasks(
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     rows = await pool.fetch(
         f"""
-        SELECT id, project, question, environment, status, progress, current_step,
+        SELECT id, project, question, environment, status, progress, current_step, request_id,
                error, created_at, updated_at
         FROM diagnostic_tasks
         {where}
@@ -438,13 +454,14 @@ async def insert_security_audit(
     *,
     client_address: Optional[str] = None,
     actor: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """写入认证或授权拒绝摘要，调用方不得传入请求头或原始 API Key。"""
     await pool.execute(
         """
         INSERT INTO security_audit
-            (event_type, status_code, reason, method, path, client_address, actor)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (event_type, status_code, reason, method, path, client_address, actor, request_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """,
         event_type[:32],
         status_code,
@@ -453,6 +470,7 @@ async def insert_security_audit(
         path[:500],
         client_address[:100] if client_address else None,
         actor[:100] if actor else None,
+        request_id[:128] if request_id else None,
     )
 
 
