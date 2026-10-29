@@ -339,10 +339,10 @@ GET /api/feedback/{project}/summary
 浏览历史诊断任务：
 
 ```text
-GET /api/diagnoses/history?project=waky3&status=COMPLETED&query=邀请&days=30&offset=0&limit=20
+GET /api/diagnoses/history?project=waky3&status=COMPLETED&query=邀请&request_id=request-1&days=30&offset=0&limit=20
 ```
 
-历史接口按创建时间倒序返回任务摘要，支持项目、状态、问题关键词、最近天数和分页筛选；前端
+历史接口按创建时间倒序返回任务摘要，支持项目、状态、问题关键词、请求 ID、最近天数和分页筛选；前端
 页面的“历史任务”区域可直接加载当前项目最近任务，点击任务即可查看报告和反馈，并可继续加载下一页。
 页面支持按状态和最近天数筛选，并同时展示当前项目反馈质量摘要。
 

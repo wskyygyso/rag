@@ -13,6 +13,7 @@ class _Pool:
     async def fetch(self, query, *args):
         """返回带时间字段的历史任务摘要。"""
         assert "ORDER BY created_at DESC" in query
+        assert "request_id = $" in query
         assert args[-2:] == (0, 10)
         return [
             {
@@ -35,7 +36,7 @@ def test_history_endpoint_filters_and_serializes_tasks() -> None:
     app.state.db_pool = _Pool()
     try:
         response = TestClient(app).get(
-            "/api/diagnoses/history?project=waky3&status=COMPLETED&query=邀请&days=30&limit=10"
+            "/api/diagnoses/history?project=waky3&status=COMPLETED&query=邀请&request_id=request-1&days=30&limit=10"
         )
     finally:
         app.state.db_pool = None

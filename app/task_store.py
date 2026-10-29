@@ -296,6 +296,7 @@ async def list_tasks(
     project: Optional[str] = None,
     status: Optional[str] = None,
     query: Optional[str] = None,
+    request_id: Optional[str] = None,
     days: Optional[int] = None,
     offset: int = 0,
     limit: int = 20,
@@ -315,6 +316,8 @@ async def list_tasks(
         add_condition("status = $VALUE", status)
     if query:
         add_condition("question ILIKE '%' || $VALUE || '%'", query)
+    if request_id:
+        add_condition("request_id = $VALUE", request_id)
     if days is not None:
         add_condition("created_at >= NOW() - ($VALUE * INTERVAL '1 day')", days)
     offset_position = len(values) + 1

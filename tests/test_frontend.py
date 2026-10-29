@@ -20,6 +20,7 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "cancel-task" in response.text
     assert "navigator.clipboard.writeText" in response.text
     assert "history-status" in response.text
+    assert "history-request-id" in response.text
     assert "/api/feedback/" in response.text
     assert "loadProjectSummary" in response.text
     assert "operation-list" in response.text
