@@ -1350,6 +1350,39 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 - 执行大数据量和流式请求的安全回归；
 - 使用生产凭据完成严格预检和上线签字后关闭阶段 7。
 
+### 本轮推进：HTTP 安全响应头和 CORS
+
+#### 本次完成
+
+- 增加 nosniff、frame deny、Referrer Policy、CSP 和 Permissions Policy；
+- 经 HTTPS 反向代理时增加 HSTS；
+- API 响应增加 `Cache-Control: no-store`；
+- CORS 默认关闭，支持逗号分隔来源白名单；
+- 允许 API Key、Authorization、Content-Type 和报告下载响应头；
+- 413、公开页面和 API 响应统一应用安全头；
+- 增加安全头、HTTPS HSTS 和 CORS 白名单测试；
+- 更新环境模板、README、进度文档和中文注释。
+
+#### 本轮验证
+
+- `.venv/bin/pytest -q` 通过，结果为 `108 passed`；
+- `python3 -m compileall -q app tests scripts` 通过；
+- 诊断基线 3/3 通过；
+- 前端 JS、shell、Compose 和 `git diff --check` 通过。
+
+#### 当前状态
+
+- 当前阶段：阶段 7：安全、性能和生产上线；
+- 阶段进度：99%；
+- 总体进度：99%；
+- 阻塞项：生产 API Key 和目标只读数据库凭据待配置；
+- Git 状态：HTTP 安全响应头和 CORS 改动待用户审阅，未提交。
+
+#### 下一步
+
+- 在反向代理和生产域名下验证 HTTPS、CORS 和 CSP；
+- 使用生产凭据完成严格预检和上线签字后关闭阶段 7。
+
 ---
 
 ## 阶段性提交记录

@@ -12,6 +12,7 @@ from app.metrics import begin_http_request, finish_http_request, router as metri
 from app.preflight import enforce_production_settings
 from app.rate_limit import RedisRateLimiter
 from app.request_limits import RequestBodyTooLarge, read_limited_body
+from app.security_headers import add_cors_middleware, apply_security_headers
 from app.settings import get_settings
 from app.code_api import router as code_router
 from app.diagnosis import router as diagnosis_router
@@ -50,6 +51,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.add_exception_handler(HTTPException, security_http_exception_handler)
+add_cors_middleware(app, settings.cors_allowed_origins)
 
 
 @app.middleware("http")
@@ -57,6 +59,7 @@ async def access_control(request, call_next):
     """校验 API Key，并把调用方身份传递给项目级权限检查。"""
     started_at = begin_http_request()
     status_code = 500
+    response = None
     try:
         if request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH"}:
             try:
@@ -70,6 +73,8 @@ async def access_control(request, call_next):
         return response
     finally:
         finish_http_request(request, started_at, status_code)
+        if response is not None:
+            apply_security_headers(response, request)
 
 
 app.include_router(diagnosis_router)

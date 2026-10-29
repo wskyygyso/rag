@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     auth_enabled: bool = False
     api_keys_json: str = "{}"
     max_request_body_bytes: int = 1_000_000
+    cors_allowed_origins: str = ""
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"

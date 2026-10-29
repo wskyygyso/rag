@@ -112,6 +112,10 @@ X-API-Key: replace-with-long-random-key
 所有 API 写请求默认限制为 1MB，可通过 `MAX_REQUEST_BODY_BYTES` 调整。限制在认证和 JSON 解析前执行；
 有 `Content-Length` 时提前拒绝，无长度时按流读取并在超限时停止，超限返回 HTTP 413。
 
+响应默认包含 `nosniff`、`DENY` frame、Referrer Policy、CSP 和 Permissions Policy；经 HTTPS 代理访问时
+添加 HSTS。跨域默认关闭，可通过逗号分隔的 `CORS_ALLOWED_ORIGINS` 配置白名单，允许使用
+`Authorization`、`X-API-Key` 和报告下载响应头。
+
 ## 监控指标
 
 `GET /api/metrics` 以 Prometheus 文本格式输出 HTTP 请求量、延迟直方图、并发请求、进程运行时长、
