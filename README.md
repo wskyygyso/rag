@@ -343,6 +343,9 @@ LLM_API_URL=https://ark.cn-beijing.volces.com/api/coding/v3
 LLM_API_PROTOCOL=auto
 ```
 
+`LLM_MIN_EVIDENCE_ITEMS` 控制最低调用证据数，默认 1。没有足够代码证据时不会调用外部模型。每次成功调用
+会保存模型、协议、证据数、耗时和 token usage 到任务结果的 `ai_metadata`。
+
 提交和查询诊断报告人工反馈：
 
 ```text

@@ -10,6 +10,7 @@ from app.llm_diagnosis import (
     LLMResponseError,
     build_evidence_context,
     generate_ai_diagnosis,
+    generate_ai_diagnosis_run,
     validate_llm_settings,
 )
 from app.settings import Settings
@@ -63,13 +64,51 @@ async def test_llm_structured_output_and_evidence_refs_are_validated() -> None:
         assert payload["store"] is False
         assert payload["max_output_tokens"] == 2000
         assert "allowed_evidence_refs" in json.loads(payload["input"])
-        return httpx.Response(200, json={"output_text": json.dumps(output)})
+        return httpx.Response(
+            200,
+            json={
+                "output_text": json.dumps(output),
+                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         diagnosis = await generate_ai_diagnosis(
             _settings(), "waky3", "为什么邀请失败", _result(), client=client
         )
     assert diagnosis.possible_causes[0].evidence_refs == ["Guild.php:8"]
+
+
+@pytest.mark.asyncio
+async def test_llm_run_records_latency_and_token_usage() -> None:
+    """验证调用元数据记录模型、协议、证据数、耗时和 token。"""
+    output = {
+        "conclusion": "结论。",
+        "possible_causes": [],
+        "uncertainties": [],
+        "recommended_actions": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """返回带 usage 的 Chat Completions 响应。"""
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": json.dumps(output)}}],
+                "usage": {"prompt_tokens": 80, "completion_tokens": 20, "total_tokens": 100},
+            },
+        )
+
+    settings = _settings()
+    settings.llm_api_url = "https://ark.example.test/api/coding/v3"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        run = await generate_ai_diagnosis_run(
+            settings, "waky3", "问题", _result(), client=client
+        )
+    assert run.metadata["model"] == "test-model"
+    assert run.metadata["protocol"] == "chat_completions"
+    assert run.metadata["usage"]["total_tokens"] == 100
+    assert run.metadata["latency_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -99,6 +138,8 @@ def test_llm_configuration_and_evidence_context_are_bounded() -> None:
     """验证启用时缺少模型或密钥失败，证据内容会截断。"""
     with pytest.raises(LLMConfigurationError):
         validate_llm_settings(Settings(llm_enabled=True, llm_model="", llm_api_key=""))
+    with pytest.raises(LLMConfigurationError):
+        validate_llm_settings(Settings(llm_enabled=True, llm_model="m", llm_api_key="k", llm_min_evidence_items=-1))
     result = _result()
     result["evidence"][0]["content"] = "x" * 5000
     context = build_evidence_context("waky3", "问题", result)

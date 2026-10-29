@@ -10,7 +10,7 @@ from app.task_store import replace_symbol_index
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
 from app.php_index import index_repository, trace_index_call_chain
-from app.llm_diagnosis import generate_ai_diagnosis
+from app.llm_diagnosis import generate_ai_diagnosis_run
 from app.reporting import build_assessment
 from app.symbol_tools import summarize_symbol_index
 from app.validation_runner import execute_validation_plan
@@ -198,15 +198,16 @@ async def _execute_diagnosis(task_id: str) -> None:
             "validation": validation,
             "warnings": warnings,
         }
-        if settings.llm_enabled:
+        if settings.llm_enabled and len(deduped) >= settings.llm_min_evidence_items:
             try:
-                ai_diagnosis = await generate_ai_diagnosis(
+                ai_run = await generate_ai_diagnosis_run(
                     settings,
                     current["project"],
                     current["question"],
                     report_result,
                 )
-                report_result["ai_diagnosis"] = ai_diagnosis.model_dump()
+                report_result["ai_diagnosis"] = ai_run.diagnosis.model_dump()
+                report_result["ai_metadata"] = ai_run.metadata
             except Exception as exc:
                 logger.warning(
                     "ai_diagnosis_failed task_id=%s error_type=%s",
@@ -214,6 +215,8 @@ async def _execute_diagnosis(task_id: str) -> None:
                     type(exc).__name__,
                 )
                 warnings.append("AI 诊断叙写不可用，已保留确定性证据报告")
+        elif settings.llm_enabled:
+            warnings.append("代码证据不足，已跳过 AI 诊断叙写")
         report_result["assessment"] = build_assessment(report_result)
         await update_task(
             pool,

@@ -1,6 +1,9 @@
 """证据约束的 AI 诊断叙写提供方。"""
 
 import json
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -36,6 +39,14 @@ class AIDiagnosis(BaseModel):
     recommended_actions: List[str] = Field(max_length=10)
 
 
+@dataclass(frozen=True)
+class AIDiagnosisRun:
+    """保存已验证诊断结果及其调用元数据。"""
+
+    diagnosis: AIDiagnosis
+    metadata: Dict[str, Any]
+
+
 class LLMConfigurationError(ValueError):
     """LLM 配置不完整或不安全时抛出的异常。"""
 
@@ -56,6 +67,8 @@ def validate_llm_settings(settings: Settings) -> None:
         raise LLMConfigurationError("LLM_API_PROTOCOL 必须是 auto、responses 或 chat_completions")
     if settings.llm_timeout_seconds <= 0 or settings.llm_timeout_seconds > 120:
         raise LLMConfigurationError("LLM_TIMEOUT_SECONDS 必须在 0 到 120 秒之间")
+    if settings.llm_min_evidence_items < 0 or settings.llm_min_evidence_items > 100:
+        raise LLMConfigurationError("LLM_MIN_EVIDENCE_ITEMS 必须在 0 到 100 之间")
 
 
 def build_evidence_context(
@@ -160,15 +173,15 @@ def _extract_chat_output(payload: Dict[str, Any]) -> str:
     raise LLMResponseError("LLM chat completion content 格式无效")
 
 
-async def generate_ai_diagnosis(
+async def generate_ai_diagnosis_run(
     settings: Settings,
     project: str,
     question: str,
     result: Dict[str, Any],
     *,
     client: Optional[httpx.AsyncClient] = None,
-) -> AIDiagnosis:
-    """调用 Responses API Structured Outputs 并校验证据引用。"""
+) -> AIDiagnosisRun:
+    """调用 LLM、校验证据引用并返回诊断和调用元数据。"""
     if not settings.llm_enabled:
         raise LLMConfigurationError("LLM 诊断未启用")
     validate_llm_settings(settings)
@@ -214,6 +227,7 @@ async def generate_ai_diagnosis(
     }
     owns_client = client is None
     active_client = client or httpx.AsyncClient(timeout=settings.llm_timeout_seconds)
+    started_at = time.perf_counter()
     try:
         response = await active_client.post(endpoint, headers=headers, json=payload)
         response.raise_for_status()
@@ -223,6 +237,7 @@ async def generate_ai_diagnosis(
             if protocol == "responses"
             else _extract_chat_output(response_payload)
         )
+        usage = response_payload.get("usage") or {}
     finally:
         if owns_client:
             await active_client.aclose()
@@ -239,4 +254,32 @@ async def generate_ai_diagnosis(
     }
     if invalid_refs:
         raise LLMResponseError(f"LLM 引用了不存在的证据：{sorted(invalid_refs)}")
-    return diagnosis
+    metadata = {
+        "model": settings.llm_model,
+        "protocol": protocol,
+        "evidence_count": len(context["evidence"]),
+        "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        "usage": {
+            key: int(value)
+            for key, value in usage.items()
+            if key in {"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens"}
+            and isinstance(value, (int, float))
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return AIDiagnosisRun(diagnosis=diagnosis, metadata=metadata)
+
+
+async def generate_ai_diagnosis(
+    settings: Settings,
+    project: str,
+    question: str,
+    result: Dict[str, Any],
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+) -> AIDiagnosis:
+    """兼容调用方，仅返回经过校验的诊断结果。"""
+    run = await generate_ai_diagnosis_run(
+        settings, project, question, result, client=client
+    )
+    return run.diagnosis
