@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -16,9 +17,20 @@ from app.task_store import (
     create_pool,
     cleanup_document_index_runs,
     finish_document_index_run,
+    find_reusable_document_index_run,
     recover_stale_document_index_runs,
     start_document_index_run_with_revision,
 )
+
+INDEX_VERSION = "v1"
+
+
+@dataclass(frozen=True)
+class DocumentIndexResult:
+    """表示一次文档索引统计结果和是否复用已有索引。"""
+
+    chunk_count: int
+    reused: bool = False
 
 
 def _repository_revision(root: str, project: str) -> Optional[str]:
@@ -35,25 +47,42 @@ def _repository_revision(root: str, project: str) -> Optional[str]:
         return None
 
 
-async def _run(project: str, dry_run: bool = False) -> int:
-    """扫描项目并写入分块索引，dry-run 只统计分块数量。"""
+async def _run_detailed(project: str, dry_run: bool = False) -> DocumentIndexResult:
+    """执行索引或复用同版本索引，并返回分块数量和复用状态。"""
     settings = get_settings()
     if dry_run:
-        return len(build_repository_chunks(settings.code_repositories_root, project))
+        return DocumentIndexResult(
+            len(build_repository_chunks(settings.code_repositories_root, project))
+        )
     pool = await create_pool(settings)
-    revision = _repository_revision(settings.code_repositories_root, project)
-    await recover_stale_document_index_runs(pool, project)
-    run_id = await start_document_index_run_with_revision(pool, project, revision, "v1")
     try:
+        revision = _repository_revision(settings.code_repositories_root, project)
+        await recover_stale_document_index_runs(pool, project)
+        if revision:
+            reusable = await find_reusable_document_index_run(
+                pool, project, revision, INDEX_VERSION
+            )
+            if reusable is not None:
+                return DocumentIndexResult(int(reusable["chunk_count"]), reused=True)
+        run_id = await start_document_index_run_with_revision(
+            pool, project, revision, INDEX_VERSION
+        )
         count = await index_repository_documents(settings.code_repositories_root, project, pool)
         await finish_document_index_run(pool, run_id, "COMPLETED", count)
         await cleanup_document_index_runs(pool, project)
-        return count
+        return DocumentIndexResult(count)
     except Exception as exc:
-        await finish_document_index_run(pool, run_id, "FAILED", error=str(exc)[:2000])
+        if "run_id" in locals():
+            await finish_document_index_run(pool, run_id, "FAILED", error=str(exc)[:2000])
         raise
     finally:
         await pool.close()
+
+
+async def _run(project: str, dry_run: bool = False) -> int:
+    """兼容旧调用方，仅返回文档分块数量。"""
+    result = await _run_detailed(project, dry_run)
+    return result.chunk_count
 
 
 def main() -> None:
@@ -62,8 +91,9 @@ def main() -> None:
     parser.add_argument("project", help="项目目录名称")
     parser.add_argument("--dry-run", action="store_true", help="只扫描并统计分块，不连接数据库")
     args = parser.parse_args()
-    count = asyncio.run(_run(args.project, dry_run=args.dry_run))
-    print(f"{'扫描到' if args.dry_run else '已写入'} {count} 个文档分块")
+    result = asyncio.run(_run_detailed(args.project, dry_run=args.dry_run))
+    action = "扫描到" if args.dry_run else "复用" if result.reused else "已写入"
+    print(f"{action} {result.chunk_count} 个文档分块")
 
 
 if __name__ == "__main__":

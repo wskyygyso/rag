@@ -259,6 +259,9 @@ embedding 模型标识和维度，生产环境替换向量提供商时可避免�
 .venv/bin/python scripts/index_document_repository.py waky3 --dry-run
 ```
 
+正式索引会读取项目 Git HEAD；同一仓库 SHA、同一索引版本已有成功运行且当前分块数量完整的，会直接复用
+已有索引并跳过重建。仓库无 Git 版本、索引版本变化或分块缺失时仍执行完整索引。
+
 正式索引会在 `document_index_runs` 中记录 `RUNNING`、`COMPLETED` 或 `FAILED` 状态、
 分块数量、仓库提交 SHA、索引版本和错误信息，便于排查失败并重新执行。
 开始新索引前会自动恢复同项目超过 60 分钟仍处于 `RUNNING` 的历史记录，标记为失败并

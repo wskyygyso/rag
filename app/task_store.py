@@ -733,6 +733,35 @@ async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
     return await start_document_index_run_with_revision(pool, project)
 
 
+async def find_reusable_document_index_run(
+    pool: asyncpg.Pool,
+    project: str,
+    repository_revision: str,
+    index_version: str = "v1",
+) -> Optional[Dict[str, Any]]:
+    """返回同仓库版本、同索引版本且分块完整的最近成功运行。"""
+    row = await pool.fetchrow(
+        """
+        SELECT r.id, r.chunk_count, r.repository_revision, r.index_version,
+               r.finished_at, COUNT(c.id) AS actual_chunks
+        FROM document_index_runs AS r
+        JOIN document_chunks AS c ON c.project = r.project
+        WHERE r.project = $1
+          AND r.status = 'COMPLETED'
+          AND r.repository_revision = $2
+          AND r.index_version = $3
+        GROUP BY r.id
+        HAVING r.chunk_count > 0 AND COUNT(c.id) = r.chunk_count
+        ORDER BY r.finished_at DESC NULLS LAST, r.id DESC
+        LIMIT 1
+        """,
+        project,
+        repository_revision,
+        index_version,
+    )
+    return dict(row) if row is not None else None
+
+
 async def recover_stale_document_index_runs(
     pool: asyncpg.Pool, project: str, stale_minutes: int = 60
 ) -> int:
