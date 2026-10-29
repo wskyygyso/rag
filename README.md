@@ -116,6 +116,9 @@ X-API-Key: replace-with-long-random-key
 添加 HSTS。跨域默认关闭，可通过逗号分隔的 `CORS_ALLOWED_ORIGINS` 配置白名单，允许使用
 `Authorization`、`X-API-Key` 和报告下载响应头。
 
+每个请求会生成或校验 `X-Request-ID` 并通过响应头返回。访问日志以 JSON 记录请求 ID、方法、路径、
+状态码和耗时，不记录查询参数、请求体或认证头。
+
 ## 监控指标
 
 `GET /api/metrics` 以 Prometheus 文本格式输出 HTTP 请求量、延迟直方图、并发请求、进程运行时长、

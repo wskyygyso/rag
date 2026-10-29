@@ -26,7 +26,7 @@ def add_cors_middleware(application: FastAPI, raw_origins: str) -> List[str]:
             allow_origins=origins,
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Actor"],
-            expose_headers=["Content-Disposition"],
+            expose_headers=["Content-Disposition", "X-Request-ID"],
             allow_credentials=False,
             max_age=600,
         )
@@ -48,6 +48,9 @@ def apply_security_headers(response: Response, request: Request) -> None:
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
         "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
     )
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        response.headers.setdefault("X-Request-ID", request_id)
     if request.url.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
     forwarded_proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)

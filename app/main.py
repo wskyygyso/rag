@@ -1,6 +1,9 @@
 """FastAPI 应用入口和生命周期管理。"""
 
 from contextlib import asynccontextmanager
+import json
+import logging
+import time
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +15,7 @@ from app.metrics import begin_http_request, finish_http_request, router as metri
 from app.preflight import enforce_production_settings
 from app.rate_limit import RedisRateLimiter
 from app.request_limits import RequestBodyTooLarge, read_limited_body
+from app.request_context import resolve_request_id
 from app.security_headers import add_cors_middleware, apply_security_headers
 from app.settings import get_settings
 from app.code_api import router as code_router
@@ -24,6 +28,7 @@ from app.index_api import router as index_router
 from app.task_store import create_pool
 
 settings = get_settings()
+logger = logging.getLogger("ragent.access")
 
 
 @asynccontextmanager
@@ -58,6 +63,8 @@ add_cors_middleware(app, settings.cors_allowed_origins)
 async def access_control(request, call_next):
     """校验 API Key，并把调用方身份传递给项目级权限检查。"""
     started_at = begin_http_request()
+    request_id = resolve_request_id(request.headers.get("X-Request-ID"))
+    request.state.request_id = request_id
     status_code = 500
     response = None
     try:
@@ -75,6 +82,19 @@ async def access_control(request, call_next):
         finish_http_request(request, started_at, status_code)
         if response is not None:
             apply_security_headers(response, request)
+        logger.info(
+            json.dumps(
+                {
+                    "event": "http_request",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": status_code,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                },
+                ensure_ascii=False,
+            )
+        )
 
 
 app.include_router(diagnosis_router)
