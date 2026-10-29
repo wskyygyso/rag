@@ -11,6 +11,7 @@ from app.health import get_health
 from app.metrics import begin_http_request, finish_http_request, router as metrics_router
 from app.preflight import enforce_production_settings
 from app.rate_limit import RedisRateLimiter
+from app.request_limits import RequestBodyTooLarge, read_limited_body
 from app.settings import get_settings
 from app.code_api import router as code_router
 from app.diagnosis import router as diagnosis_router
@@ -57,6 +58,13 @@ async def access_control(request, call_next):
     started_at = begin_http_request()
     status_code = 500
     try:
+        if request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH"}:
+            try:
+                await read_limited_body(request, settings.max_request_body_bytes)
+            except RequestBodyTooLarge as exc:
+                response = JSONResponse(status_code=413, content={"detail": str(exc)})
+                status_code = response.status_code
+                return response
         response = await auth_guard(request, call_next, settings)
         status_code = response.status_code
         return response

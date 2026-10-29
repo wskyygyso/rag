@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     document_index_retention_days: int = 90
     auth_enabled: bool = False
     api_keys_json: str = "{}"
+    max_request_body_bytes: int = 1_000_000
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"

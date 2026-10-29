@@ -109,6 +109,9 @@ X-API-Key: replace-with-long-random-key
 认证失败和项目越权会写入 `security_audit`，记录事件类型、HTTP 状态、方法、路径、来源地址、
 认证主体和拒绝原因。审计不保存请求头和原始 API Key；数据库审计写入失败不会改变 401/403 安全拒绝。
 
+所有 API 写请求默认限制为 1MB，可通过 `MAX_REQUEST_BODY_BYTES` 调整。限制在认证和 JSON 解析前执行；
+有 `Content-Length` 时提前拒绝，无长度时按流读取并在超限时停止，超限返回 HTTP 413。
+
 ## 监控指标
 
 `GET /api/metrics` 以 Prometheus 文本格式输出 HTTP 请求量、延迟直方图、并发请求、进程运行时长、
