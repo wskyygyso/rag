@@ -73,6 +73,7 @@ async def _record_operation(
     from_status: Optional[str] = None,
     to_status: Optional[str] = None,
     actor: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """尽力写入任务操作审计，审计故障不阻断主业务接口。"""
     try:
@@ -83,6 +84,7 @@ async def _record_operation(
             from_status=from_status,
             to_status=to_status,
             actor=actor,
+            request_id=request_id,
         )
     except Exception:
         return
@@ -133,6 +135,7 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
         "CREATE",
         to_status=task.get("status"),
         actor=operation_actor(request, payload.created_by),
+        request_id=getattr(request.state, "request_id", None),
     )
     return _task_response(task)
 
@@ -185,6 +188,7 @@ async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
         from_status=previous.get("status") if previous else None,
         to_status=task.get("status"),
         actor=operation_actor(request),
+        request_id=getattr(request.state, "request_id", None),
     )
     return _task_response(task)
 
@@ -235,6 +239,7 @@ async def retry_diagnosis(task_id: str, request: Request) -> Dict:
         from_status="FAILED",
         to_status=task.get("status"),
         actor=operation_actor(request),
+        request_id=getattr(request.state, "request_id", None),
     )
     return _task_response(task)
 

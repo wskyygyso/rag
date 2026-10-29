@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_task_operations (
     from_status VARCHAR(32),
     to_status VARCHAR(32),
     actor VARCHAR(100),
+    request_id VARCHAR(128),
     detail JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
@@ -109,7 +110,9 @@ CREATE TABLE IF NOT EXISTS diagnostic_task_operations (
 
 CREATE_TASK_OPERATIONS_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_task_operations_task_created
-    ON diagnostic_task_operations (task_id, created_at DESC)
+    ON diagnostic_task_operations (task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_operations_request_id
+    ON diagnostic_task_operations (request_id)
 """
 
 CREATE_SECURITY_AUDIT_SQL = """
@@ -202,6 +205,12 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(CREATE_FEEDBACK_INDEX_SQL)
         await connection.execute(CREATE_TASK_OPERATIONS_SQL)
         await connection.execute(CREATE_TASK_OPERATIONS_INDEX_SQL)
+        await connection.execute(
+            "ALTER TABLE diagnostic_task_operations ADD COLUMN IF NOT EXISTS request_id VARCHAR(128)"
+        )
+        await connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_operations_request_id ON diagnostic_task_operations (request_id)"
+        )
         await connection.execute(CREATE_SECURITY_AUDIT_SQL)
         await connection.execute(CREATE_SECURITY_AUDIT_INDEX_SQL)
         await connection.execute(
@@ -429,20 +438,22 @@ async def insert_task_operation(
     from_status: Optional[str] = None,
     to_status: Optional[str] = None,
     actor: Optional[str] = None,
+    request_id: Optional[str] = None,
     detail: Optional[Dict[str, Any]] = None,
 ) -> None:
     """写入任务操作审计，调用方应传入不含敏感信息的操作摘要。"""
     await pool.execute(
         """
         INSERT INTO diagnostic_task_operations
-            (task_id, operation, from_status, to_status, actor, detail)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            (task_id, operation, from_status, to_status, actor, request_id, detail)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
         """,
         task_id,
         operation,
         from_status,
         to_status,
         actor,
+        request_id[:128] if request_id else None,
         json.dumps(detail or {}, ensure_ascii=False),
     )
 
@@ -483,7 +494,7 @@ async def list_task_operations(
     """按时间倒序返回任务操作审计轨迹，并限制单次读取数量。"""
     rows = await pool.fetch(
         """
-        SELECT id, task_id, operation, from_status, to_status, actor, detail, created_at
+        SELECT id, task_id, operation, from_status, to_status, actor, request_id, detail, created_at
         FROM diagnostic_task_operations
         WHERE task_id = $1
         ORDER BY created_at DESC, id DESC

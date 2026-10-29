@@ -28,8 +28,16 @@ async def test_insert_task_operation_writes_status_and_actor() -> None:
         from_status="FAILED",
         to_status="QUEUED",
         actor="reviewer",
+        request_id="request-1",
         detail={"source": "ui"},
     )
     assert len(pool.calls) == 1
-    assert pool.calls[0][1][:5] == ("diag_1", "RETRY", "FAILED", "QUEUED", "reviewer")
-    assert '"source": "ui"' in pool.calls[0][1][5]
+    assert pool.calls[0][1][:6] == (
+        "diag_1",
+        "RETRY",
+        "FAILED",
+        "QUEUED",
+        "reviewer",
+        "request-1",
+    )
+    assert '"source": "ui"' in pool.calls[0][1][6]
