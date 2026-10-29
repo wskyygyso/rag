@@ -117,6 +117,10 @@ def build_markdown_report(task: Dict[str, Any]) -> str:
             "",
             _lines(assessment["suggested_next_steps"]),
             "",
+            "## AI 诊断叙写",
+            "",
+            _ai_diagnosis_lines(result.get("ai_diagnosis")),
+            "",
             "## 检索关键词",
             "",
             _lines(result.get("queries") or []),
@@ -169,3 +173,20 @@ def _json_text(value: Any) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+
+
+def _ai_diagnosis_lines(diagnosis: Any) -> str:
+    """格式化经过校验的 AI 诊断结果，不存在时给出明确状态。"""
+    if not diagnosis:
+        return "- 未启用或未生成 AI 诊断叙写"
+    lines = ["结论：" + str(diagnosis.get("conclusion", ""))]
+    for cause in diagnosis.get("possible_causes") or []:
+        refs = ", ".join(str(item) for item in cause.get("evidence_refs") or [])
+        lines.append(
+            f"候选原因：{cause.get('title', '')}；依据：{cause.get('reasoning', '')}；证据：{refs}"
+        )
+    for uncertainty in diagnosis.get("uncertainties") or []:
+        lines.append(f"不确定项：{uncertainty}")
+    for action in diagnosis.get("recommended_actions") or []:
+        lines.append(f"建议：{action}")
+    return _lines(lines)

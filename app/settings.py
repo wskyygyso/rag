@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     api_keys_json: str = "{}"
     max_request_body_bytes: int = 1_000_000
     cors_allowed_origins: str = ""
+    llm_enabled: bool = False
+    llm_api_url: str = "https://api.openai.com/v1/responses"
+    llm_api_protocol: str = "auto"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_timeout_seconds: float = 30.0
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"

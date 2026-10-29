@@ -308,8 +308,8 @@ Redis 不可用时验证接口会安全返回 503，不会降级为无限制访�
 .venv/bin/python scripts/index_php_repository.py waky3 --dry-run
 ```
 
-当前诊断报告会汇总关键词检索、PHP 符号和调用链、按需数据库/配置/日志验证结果；仍未接入
-LLM 生成式结论，报告中的事实和建议应以代码证据及验证结果为准。
+当前诊断报告会汇总关键词检索、PHP 符号和调用链、按需数据库/配置/日志验证结果。LLM 生成式叙写
+默认关闭，报告中的事实和建议始终以代码证据及验证结果为准。
 
 查询诊断报告并导出 Markdown：
 
@@ -325,6 +325,23 @@ GET /api/diagnoses/{task_id}/report?format=markdown
 成功事实验证且没有警告时才标记为高置信度；部分证据标记为中置信度；缺少证据或验证失败标记为低置信度。
 该判断不替代人工确认，也不会把检索结果直接表述为已证实根因。
 报告同时展示符号、代码、调用链、配置和 SQL 线索，并根据已获得证据生成只读排查建议。
+
+### 证据约束 AI 叙写
+
+LLM 默认关闭。配置 `LLM_ENABLED=true`、`LLM_MODEL`、`LLM_API_KEY` 后，Worker 会在确定性报告完成后调用
+Responses API Structured Outputs，生成结论、候选原因、不确定项和建议动作。模型只能引用上下文中已有的
+文件和行号，输出不符合 JSON Schema 或引用不存在证据时整段 AI 结果被拒绝，任务仍保留确定性报告。
+代码、日志和数据库文本在提示词中明确标记为不可信数据，模型不能调用工具或执行修改。
+
+OpenAI 官方文档参考：[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)。
+
+`LLM_API_PROTOCOL=auto` 会根据 URL 选择协议：以 `/responses` 结尾时使用 Responses API，其他 Base URL
+使用 OpenAI-compatible Chat Completions 并自动追加 `/chat/completions`。例如火山方舟 OpenAI 兼容 Base URL：
+
+```env
+LLM_API_URL=https://ark.cn-beijing.volces.com/api/coding/v3
+LLM_API_PROTOCOL=auto
+```
 
 提交和查询诊断报告人工反馈：
 

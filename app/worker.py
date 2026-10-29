@@ -1,5 +1,7 @@
 """Celery Worker、任务队列和诊断执行流程。"""
 
+import logging
+
 from billiard.exceptions import SoftTimeLimitExceeded
 from celery import Celery
 
@@ -8,11 +10,13 @@ from app.task_store import replace_symbol_index
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
 from app.php_index import index_repository, trace_index_call_chain
+from app.llm_diagnosis import generate_ai_diagnosis
 from app.reporting import build_assessment
 from app.symbol_tools import summarize_symbol_index
 from app.validation_runner import execute_validation_plan
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def validate_worker_timeouts(current_settings) -> None:
@@ -194,6 +198,22 @@ async def _execute_diagnosis(task_id: str) -> None:
             "validation": validation,
             "warnings": warnings,
         }
+        if settings.llm_enabled:
+            try:
+                ai_diagnosis = await generate_ai_diagnosis(
+                    settings,
+                    current["project"],
+                    current["question"],
+                    report_result,
+                )
+                report_result["ai_diagnosis"] = ai_diagnosis.model_dump()
+            except Exception as exc:
+                logger.warning(
+                    "ai_diagnosis_failed task_id=%s error_type=%s",
+                    task_id,
+                    type(exc).__name__,
+                )
+                warnings.append("AI 诊断叙写不可用，已保留确定性证据报告")
         report_result["assessment"] = build_assessment(report_result)
         await update_task(
             pool,

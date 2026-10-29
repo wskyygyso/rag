@@ -8,6 +8,7 @@ import asyncpg
 from redis import asyncio as redis_asyncio
 
 from app.auth import validate_auth_settings
+from app.llm_diagnosis import validate_llm_settings
 from app.settings import Settings
 
 REQUIRED_TABLES = {
@@ -95,6 +96,18 @@ def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
             "数据保留期限有效" if retention_valid else "数据保留期限必须在 1 到 3650 天之间",
         )
     )
+
+    try:
+        validate_llm_settings(settings)
+        results.append(
+            _result(
+                "llm",
+                "PASS",
+                "LLM 诊断已启用且配置有效" if settings.llm_enabled else "LLM 诊断未启用",
+            )
+        )
+    except ValueError as exc:
+        results.append(_result("llm", "FAIL", str(exc)))
 
     metadata_url = (settings.database_url or "").strip()
     validation_url = (settings.validation_database_url or "").strip()
