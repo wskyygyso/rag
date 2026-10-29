@@ -165,6 +165,17 @@ GitHub Actions 的 `CI` 工作流在 Python 3.9 和 3.11 下执行单元测试�
 固定评测集位于 `tests/fixtures/diagnosis_cases.json`，检查符号、证据文件、搜索关键词和关键行号，
 同时包含一个不应产生证据的负例。可用 `--min-pass-rate` 设置发布门禁阈值。
 
+从历史正确反馈导出评测候选：
+
+```bash
+docker compose run --rm api python scripts/export_evaluation_candidates.py --dry-run
+docker compose run --rm api python scripts/export_evaluation_candidates.py \
+  --project waky3 --days 180 --output /tmp/diagnosis-candidates.json
+```
+
+历史反馈仅生成 `review_status=pending` 的候选，不能直接作为准确率真值。人工核对问题、符号、文件和行号
+后再合并到固定评测集。
+
 ## 代码注释约定
 
 所有新增或修改的代码文件，都必须同步维护注释：
