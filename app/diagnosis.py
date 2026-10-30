@@ -10,6 +10,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.auth import operation_actor, require_project_access
+from app.settings import get_settings
 from app.task_store import (
     get_task,
     insert_task,
@@ -24,6 +25,7 @@ from app.validation_plan import ValidationPlan, validation_plan_dict
 from app.reporting import build_assessment, build_markdown_report
 
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
+settings = get_settings()
 
 
 class CreateDiagnosisRequest(BaseModel):
@@ -33,6 +35,10 @@ class CreateDiagnosisRequest(BaseModel):
     project: str = Field(min_length=1, max_length=100)
     environment: str = Field(default="development", max_length=100)
     created_by: Optional[str] = Field(default=None, max_length=100)
+    use_ai: Optional[bool] = Field(
+        default=None,
+        description="true 使用 AI 叙写，false 跳过；null 沿用全局 LLM 配置",
+    )
     validation: Optional[ValidationPlan] = Field(
         default=None,
         description="可选的只读数据库、配置和日志验证计划",
@@ -58,6 +64,7 @@ def _task_response(task: Dict) -> Dict:
         "created_at": task["created_at"],
         "updated_at": task["updated_at"],
         "request_id": task.get("request_id"),
+        "use_ai": task.get("use_ai"),
     }
 
 
@@ -133,6 +140,8 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
     """
     pool = _pool(request)
     require_project_access(request, payload.project)
+    if payload.use_ai is True and not settings.llm_enabled:
+        raise HTTPException(status_code=400, detail="LLM 诊断尚未启用")
     task_id = f"diag_{uuid.uuid4().hex}"
     task = await insert_task(
         pool,
@@ -142,6 +151,7 @@ async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) ->
         payload.environment,
         payload.created_by,
         validation_plan_dict(payload.validation),
+        use_ai=payload.use_ai,
         request_id=getattr(request.state, "request_id", None),
     )
     from app.worker import run_diagnosis_task

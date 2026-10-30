@@ -40,6 +40,7 @@
             <label>项目<input id="project" name="project" value="waky3" required maxlength="100" /></label>
             <label>环境<input id="environment" name="environment" value="development" maxlength="100" /></label>
             <label class="wide">API Key<input id="api-key" type="password" autocomplete="off" placeholder="启用访问控制时填写，仅保存在当前页面内存" /></label>
+            <label class="wide"><span><input id="use-ai" type="checkbox" checked /> 使用 AI 诊断叙写（可能产生模型费用）</span></label>
             <label class="wide">问题<textarea id="question" name="question" placeholder="例如：公会邀请失败可能是什么原因？" required maxlength="10000"></textarea></label>
           </div>
           <div class="actions">
@@ -264,6 +265,7 @@
           project: $("project").value.trim(),
           environment: $("environment").value.trim() || "development",
           question: $("question").value.trim(),
+          use_ai: $("use-ai").checked,
         };
         try {
           const response = await apiFetch("/api/diagnoses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });

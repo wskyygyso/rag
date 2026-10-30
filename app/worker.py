@@ -39,6 +39,19 @@ def validate_worker_timeouts(current_settings) -> None:
         raise ValueError("任务软超时必须为正数且小于硬超时")
 
 
+def should_run_ai(settings, task: dict, available_evidence: int) -> bool:
+    """判断当前诊断任务是否应调用 LLM。
+
+    参数:
+        - `settings`：当前 Worker 的 LLM 和证据门槛配置。
+        - `task`：包含任务级 use_ai 开关的诊断任务记录。
+        - `available_evidence`：去重后的代码、符号、配置和 SQL 证据数。
+    """
+    if not settings.llm_enabled or task.get("use_ai") is False:
+        return False
+    return available_evidence >= settings.llm_min_evidence_items
+
+
 validate_worker_timeouts(settings)
 celery_app = Celery(
     "ragent",
@@ -210,7 +223,7 @@ async def _execute_diagnosis(task_id: str) -> None:
             "validation": validation,
             "warnings": warnings,
         }
-        if settings.llm_enabled and count_available_evidence(report_result) >= settings.llm_min_evidence_items:
+        if should_run_ai(settings, current, count_available_evidence(report_result)):
             try:
                 ai_run = await generate_ai_diagnosis_cached(
                     settings,

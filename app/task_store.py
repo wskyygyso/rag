@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_tasks (
     retry_count INT NOT NULL DEFAULT 0,
     created_by VARCHAR(100),
     validation_plan JSONB,
+    use_ai BOOLEAN,
     request_id VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -205,6 +206,9 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
             "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS validation_plan JSONB"
         )
         await connection.execute(
+            "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS use_ai BOOLEAN"
+        )
+        await connection.execute(
             "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS request_id VARCHAR(128)"
         )
         await connection.execute(CREATE_EVIDENCE_SQL)
@@ -286,6 +290,7 @@ async def insert_task(
     environment: str,
     created_by: Optional[str] = None,
     validation_plan: Optional[Dict[str, Any]] = None,
+    use_ai: Optional[bool] = None,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """插入排队状态的诊断任务，并保存可选的只读验证计划。
@@ -303,8 +308,8 @@ async def insert_task(
     row = await pool.fetchrow(
         """
         INSERT INTO diagnostic_tasks
-            (id, project, question, environment, status, progress, current_step, created_by, validation_plan, request_id)
-        VALUES ($1, $2, $3, $4, 'QUEUED', 0, '等待 Worker 执行', $5, $6::jsonb, $7)
+            (id, project, question, environment, status, progress, current_step, created_by, validation_plan, use_ai, request_id)
+        VALUES ($1, $2, $3, $4, 'QUEUED', 0, '等待 Worker 执行', $5, $6::jsonb, $7, $8)
         RETURNING *
         """,
         task_id,
@@ -313,6 +318,7 @@ async def insert_task(
         environment,
         created_by,
         json.dumps(validation_plan, ensure_ascii=False) if validation_plan is not None else None,
+        use_ai,
         request_id,
     )
     return _decode_task(row)  # type: ignore[return-value]
@@ -381,7 +387,7 @@ async def list_tasks(
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     rows = await pool.fetch(
         f"""
-        SELECT id, project, question, environment, status, progress, current_step, request_id,
+        SELECT id, project, question, environment, status, progress, current_step, use_ai, request_id,
                error, created_at, updated_at
         FROM diagnostic_tasks
         {where}
