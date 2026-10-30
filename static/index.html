@@ -390,11 +390,19 @@
       async function loadAiQuality() {
         const project = encodeURIComponent($("project").value.trim());
         const days = encodeURIComponent($("history-days").value || "30");
-        const response = await apiFetch(`/api/ai/${project}/quality?days=${days}`);
-        if (!response.ok) throw new Error(`AI 质量摘要获取失败（${response.status}）`);
+        const [response, evaluationsResponse] = await Promise.all([
+          apiFetch(`/api/ai/${project}/quality?days=${days}`),
+          apiFetch(`/api/ai/${project}/evaluations?limit=1`),
+        ]);
+        if (!response.ok || !evaluationsResponse.ok) throw new Error("AI 质量摘要获取失败");
         const data = await response.json();
+        const evaluations = await evaluationsResponse.json();
         const hitRate = `${Math.round(data.cache_hit_rate * 100)}%`;
-        $("ai-quality").textContent = `AI 质量摘要：${data.ai_tasks} 个任务，缓存命中 ${hitRate}，平均 ${data.latency_ms.avg}ms，消耗 ${data.tokens.total} tokens；正确 ${data.feedback.correct}，不准确 ${data.feedback.inaccurate}`;
+        const latest = evaluations.runs[0];
+        const evaluationText = latest
+          ? `最近评测：通过 ${latest.passed}/${latest.executed}，跳过 ${latest.skipped}，证据召回 ${Math.round(latest.average_evidence_ref_recall * 100)}%`
+          : "最近评测：暂无";
+        $("ai-quality").textContent = `AI 质量摘要：${data.ai_tasks} 个任务，缓存命中 ${hitRate}，平均 ${data.latency_ms.avg}ms，消耗 ${data.tokens.total} tokens；正确 ${data.feedback.correct}，不准确 ${data.feedback.inaccurate}；${evaluationText}`;
       }
 
       /** 将当前失败任务重新排队并重新订阅执行进度。 */

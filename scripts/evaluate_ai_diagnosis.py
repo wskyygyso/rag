@@ -7,10 +7,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+import asyncpg
+
 # 支持从项目根目录直接执行 AI 质量评测。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.ai_evaluation import evaluate_ai_case, summarize_ai_evaluations
+from app.ai_evaluation_runs import insert_ai_evaluation_run
 from app.code_tools import extract_search_queries, search_code
 from app.diagnosis_eval import load_cases
 from app.llm_diagnosis import build_evidence_context, generate_ai_diagnosis_run
@@ -117,6 +120,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-pass-rate", type=float, default=1.0)
     parser.add_argument("--limit", type=int, default=0, help="只运行前 N 个用例；0 表示全部")
     parser.add_argument("--offset", type=int, default=0, help="跳过前 N 个用例")
+    parser.add_argument("--project", help="记录评测运行时使用的项目标识")
+    parser.add_argument("--record", action="store_true", help="将评测结果写入元数据库")
     parser.add_argument("--live", action="store_true", help="确认调用外部 LLM 并可能产生费用")
     return parser.parse_args()
 
@@ -137,6 +142,17 @@ async def main_async() -> int:
     result = await run_cases(args.root, cases)
     result["min_pass_rate"] = args.min_pass_rate
     result["threshold_passed"] = result["pass_rate"] >= args.min_pass_rate
+    if args.record:
+        if not args.project:
+            raise SystemExit("--record 必须同时提供 --project")
+        settings = get_settings()
+        pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=2)
+        try:
+            result["run_id"] = await insert_ai_evaluation_run(
+                pool, args.project, result
+            )
+        finally:
+            await pool.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["threshold_passed"] else 1
 

@@ -5,6 +5,7 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.ai_quality import summarize_ai_quality
+from app.ai_evaluation_runs import list_ai_evaluation_runs
 from app.auth import require_project_access
 
 router = APIRouter(prefix="/api/ai", tags=["ai-quality"])
@@ -48,4 +49,27 @@ async def ai_quality(
         "project": project,
         "days": days,
         **summarize_ai_quality(dict(row) for row in rows),
+    }
+
+
+@router.get("/{project}/evaluations")
+async def ai_evaluations(
+    project: str,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> Dict:
+    """返回项目最近的 AI 固定评测运行记录。
+
+    参数:
+        - `project`：需要查询评测历史的诊断项目。
+        - `request`：携带认证身份和数据库连接池的 FastAPI 请求。
+        - `limit`：单次最多返回的评测运行数量。
+    """
+    require_project_access(request, project)
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="数据库暂不可用")
+    return {
+        "project": project,
+        "runs": await list_ai_evaluation_runs(pool, project, limit),
     }

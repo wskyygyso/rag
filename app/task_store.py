@@ -100,6 +100,29 @@ CREATE INDEX IF NOT EXISTS idx_diagnostic_tasks_project_updated
     ON diagnostic_tasks (project, updated_at DESC)
 """
 
+CREATE_AI_EVALUATION_RUNS_SQL = """
+CREATE TABLE IF NOT EXISTS ai_evaluation_runs (
+    id BIGSERIAL PRIMARY KEY,
+    project VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    min_pass_rate DOUBLE PRECISION NOT NULL,
+    total INT NOT NULL,
+    executed INT NOT NULL,
+    skipped INT NOT NULL,
+    passed INT NOT NULL,
+    pass_rate DOUBLE PRECISION NOT NULL,
+    average_evidence_ref_recall DOUBLE PRECISION NOT NULL,
+    result JSONB NOT NULL,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+CREATE_AI_EVALUATION_RUNS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_ai_evaluation_runs_project_created
+    ON ai_evaluation_runs (project, created_at DESC)
+"""
+
 CREATE_TASK_OPERATIONS_SQL = """
 CREATE TABLE IF NOT EXISTS diagnostic_task_operations (
     id BIGSERIAL PRIMARY KEY,
@@ -202,6 +225,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
         await connection.execute(CREATE_TASKS_QUALITY_INDEX_SQL)
+        await connection.execute(CREATE_AI_EVALUATION_RUNS_SQL)
+        await connection.execute(CREATE_AI_EVALUATION_RUNS_INDEX_SQL)
         await connection.execute(
             "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS validation_plan JSONB"
         )

@@ -381,6 +381,16 @@ GET /api/ai/{project}/quality?days=30
 接口聚合最近完成任务的 AI 调用数、缓存命中率、平均/最大延迟、prompt/completion/total token、模型和协议分布，
 并关联人工反馈中的正确与不准确数量。前端历史任务区域会同步展示该摘要。
 
+真实 AI 评测可记录到元数据库并在前端显示最近一次结果：
+
+```bash
+.venv/bin/python scripts/evaluate_ai_diagnosis.py \
+  --live --project waky3 --record --min-pass-rate 1.0
+GET /api/ai/{project}/evaluations?limit=20
+```
+
+运行记录保存通过率、执行/skipped 数、平均证据召回和每个用例的质量检查明细。
+
 提交和查询诊断报告人工反馈：
 
 ```text
