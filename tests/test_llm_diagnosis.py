@@ -60,7 +60,11 @@ async def test_llm_structured_output_and_evidence_refs_are_validated() -> None:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """验证请求结构并返回 Structured Outputs 响应。"""
+        """验证请求结构并返回 Structured Outputs 响应。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         payload = json.loads(request.content)
         assert payload["text"]["format"]["type"] == "json_schema"
         assert payload["text"]["format"]["strict"] is True
@@ -93,7 +97,11 @@ async def test_llm_run_records_latency_and_token_usage() -> None:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """返回带 usage 的 Chat Completions 响应。"""
+        """返回带 usage 的 Chat Completions 响应。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         return httpx.Response(
             200,
             json={
@@ -127,7 +135,11 @@ async def test_llm_rejects_unknown_evidence_reference() -> None:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """返回包含伪造证据的模型输出。"""
+        """返回包含伪造证据的模型输出。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         return httpx.Response(200, json={"output_text": json.dumps(output)})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -155,16 +167,30 @@ class _Redis:
     """模拟 AI 结果缓存使用的 Redis 客户端。"""
 
     def __init__(self, value=None):
-        """初始化缓存值和写入记录。"""
+        """初始化缓存值和写入记录。
+
+        参数:
+            - `value`：测试 Redis 客户端预置的缓存内容。
+        """
         self.value = value
         self.set_calls = []
 
     async def get(self, key):
-        """返回预设缓存。"""
+        """返回预设缓存。
+
+        参数:
+            - `key`：Redis、配置或字典键。
+        """
         return self.value
 
     async def setex(self, key, ttl, value):
-        """记录缓存写入。"""
+        """记录缓存写入。
+
+        参数:
+            - `key`：Redis、配置或字典键。
+            - `ttl`：Redis 缓存过期秒数。
+            - `value`：测试写入 Redis 的 AI 诊断 JSON 字符串。
+        """
         self.set_calls.append((key, ttl, value))
 
 
@@ -184,7 +210,11 @@ async def test_ai_cache_hit_skips_model_call() -> None:
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """缓存命中时不应发起模型请求。"""
+        """缓存命中时不应发起模型请求。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         raise AssertionError("不应调用模型")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -214,7 +244,11 @@ async def test_ai_cache_miss_calls_model_and_writes_cache() -> None:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """返回有效结构化输出。"""
+        """返回有效结构化输出。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         return httpx.Response(200, json={"output_text": json.dumps(output)})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -245,7 +279,11 @@ async def test_ark_base_url_uses_chat_completions_protocol() -> None:
     settings.llm_api_url = "https://ark.example.test/api/coding/v3"
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """验证请求路径和 Chat Completions 请求体。"""
+        """验证请求路径和 Chat Completions 请求体。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         assert str(request.url) == "https://ark.example.test/api/coding/v3/chat/completions"
         payload = json.loads(request.content)
         assert payload["response_format"]["type"] == "json_schema"

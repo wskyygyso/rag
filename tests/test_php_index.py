@@ -28,7 +28,11 @@ def test_parse_php_source_extracts_symbols_and_references() -> None:
 
 
 def test_index_repository_and_trace_call_chain(tmp_path: Path) -> None:
-    """验证项目索引和入口调用链节点可以关联到文件和行号。"""
+    """验证项目索引和入口调用链节点可以关联到文件和行号。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3" / "php"
     project.mkdir(parents=True)
     (project / "Guild.php").write_text(SOURCE, encoding="utf-8")
@@ -40,7 +44,11 @@ def test_index_repository_and_trace_call_chain(tmp_path: Path) -> None:
 
 
 def test_symbol_tools_find_definitions_references_and_summary(tmp_path: Path) -> None:
-    """验证符号定义、引用和项目摘要工具复用同一份索引。"""
+    """验证符号定义、引用和项目摘要工具复用同一份索引。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3" / "php"
     project.mkdir(parents=True)
     (project / "Guild.php").write_text(SOURCE, encoding="utf-8")

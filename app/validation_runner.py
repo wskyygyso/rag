@@ -27,7 +27,16 @@ async def _audit_failure(
     error: str,
     request_summary: Dict[str, Any],
 ) -> None:
-    """记录验证失败摘要；审计系统异常不会中断其他验证步骤。"""
+    """记录验证失败摘要；审计系统异常不会中断其他验证步骤。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `operation`：操作类型，类型为 `str`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `error`：失败原因或数据库异常，类型为 `str`。
+        - `request_summary`：验证请求脱敏摘要，类型为 `Dict[str, Any]`。
+    """
     await record_validation_audit(
         pool,
         operation,
@@ -47,8 +56,14 @@ async def execute_validation_plan(
 ) -> Dict[str, Any]:
     """执行诊断任务携带的只读验证计划，并返回脱敏验证结果。
 
-    单个步骤失败只标记该步骤，不影响其他配置或日志验证；数据库、配置和日志
-    工具自身负责结果脱敏，审计记录只保存摘要。
+        单个步骤失败只标记该步骤，不影响其他配置或日志验证；数据库、配置和日志
+        工具自身负责结果脱敏，审计记录只保存摘要。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `plan`：按需只读验证计划，类型为 `Optional[Dict[str, Any]]`。
     """
     result: Dict[str, Any] = {
         "database": _not_requested(),

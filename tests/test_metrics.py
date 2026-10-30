@@ -14,7 +14,12 @@ from app.metrics import (
 
 
 def _request(method: str, path: str) -> Request:
-    """构造只包含指标测试所需字段的 HTTP 请求。"""
+    """构造只包含指标测试所需字段的 HTTP 请求。
+
+    参数:
+        - `method`：HTTP 请求方法，类型为 `str`。
+        - `path`：文件或请求路径，类型为 `str`。
+    """
     return Request(
         {
             "type": "http",
@@ -50,7 +55,12 @@ class _Pool:
     """返回固定任务、操作和安全拒绝聚合数据。"""
 
     async def fetch(self, query, *args):
-        """按 SQL 来源返回不同指标行。"""
+        """按 SQL 来源返回不同指标行。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         if "FROM diagnostic_tasks" in query:
             return [{"status": "COMPLETED", "count": 2}]
         if "FROM diagnostic_task_operations" in query:
@@ -79,7 +89,12 @@ class _BrokenPool:
     """模拟数据库指标查询失败。"""
 
     async def fetch(self, query, *args):
-        """抛出数据库异常。"""
+        """抛出数据库异常。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         raise RuntimeError("database unavailable")
 
 

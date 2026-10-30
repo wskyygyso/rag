@@ -59,7 +59,11 @@ class LLMResponseError(ValueError):
 
 
 def validate_llm_settings(settings: Settings) -> None:
-    """启用 AI 叙写时校验模型、密钥、URL 和超时配置。"""
+    """启用 AI 叙写时校验模型、密钥、URL 和超时配置。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     if not settings.llm_enabled:
         return
     if not settings.llm_model or not settings.llm_api_key:
@@ -82,7 +86,14 @@ def build_evidence_context(
     result: Dict[str, Any],
     max_evidence: int = 30,
 ) -> Dict[str, Any]:
-    """构造低敏感、限制大小的证据上下文和允许引用集合。"""
+    """构造低敏感、限制大小的证据上下文和允许引用集合。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `result`：确定性诊断结果，包含代码证据、验证状态和警告，类型为 `Dict[str, Any]`。
+        - `max_evidence`：送入 LLM 的最大代码证据数，类型为 `int`。
+    """
     evidence = []
     refs = []
     symbol_items = []
@@ -154,7 +165,11 @@ def build_evidence_context(
 
 
 def count_available_evidence(result: Dict[str, Any]) -> int:
-    """统计去重后可提供给 LLM 的证据引用数量。"""
+    """统计去重后可提供给 LLM 的证据引用数量。
+
+    参数:
+        - `result`：待统计可用证据引用的确定性诊断结果，类型为 `Dict[str, Any]`。
+    """
     return len(build_evidence_context("", "", result)["allowed_evidence_refs"])
 
 
@@ -164,7 +179,11 @@ def _structured_output_schema() -> Dict[str, Any]:
 
 
 def _extract_output_text(payload: Dict[str, Any]) -> str:
-    """从 Responses API 响应中提取 output_text。"""
+    """从 Responses API 响应中提取 output_text。
+
+    参数:
+        - `payload`：HTTP 请求体或 LLM 响应载荷，类型为 `Dict[str, Any]`。
+    """
     if isinstance(payload.get("output_text"), str):
         return payload["output_text"]
     texts = []
@@ -178,7 +197,11 @@ def _extract_output_text(payload: Dict[str, Any]) -> str:
 
 
 def _resolve_protocol_and_url(settings: Settings) -> tuple[str, str]:
-    """根据显式配置或 URL 推断协议并返回完整请求地址。"""
+    """根据显式配置或 URL 推断协议并返回完整请求地址。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     url = settings.llm_api_url.rstrip("/")
     protocol = settings.llm_api_protocol
     if protocol == "auto":
@@ -189,7 +212,11 @@ def _resolve_protocol_and_url(settings: Settings) -> tuple[str, str]:
 
 
 def _extract_chat_output(payload: Dict[str, Any]) -> str:
-    """从 OpenAI-compatible Chat Completions 响应中提取消息内容。"""
+    """从 OpenAI-compatible Chat Completions 响应中提取消息内容。
+
+    参数:
+        - `payload`：HTTP 请求体或 LLM 响应载荷，类型为 `Dict[str, Any]`。
+    """
     try:
         content = payload["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -215,7 +242,15 @@ async def generate_ai_diagnosis_run(
     *,
     client: Optional[httpx.AsyncClient] = None,
 ) -> AIDiagnosisRun:
-    """调用 LLM、校验证据引用并返回诊断和调用元数据。"""
+    """调用 LLM、校验证据引用并返回诊断和调用元数据。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `result`：送入 LLM 的确定性诊断证据摘要，类型为 `Dict[str, Any]`。
+        - `client`：HTTP 异步客户端，类型为 `Optional[httpx.AsyncClient]`。
+    """
     if not settings.llm_enabled:
         raise LLMConfigurationError("LLM 诊断未启用")
     validate_llm_settings(settings)
@@ -312,7 +347,15 @@ async def generate_ai_diagnosis(
     *,
     client: Optional[httpx.AsyncClient] = None,
 ) -> AIDiagnosis:
-    """兼容调用方，仅返回经过校验的诊断结果。"""
+    """兼容调用方，仅返回经过校验的诊断结果。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `result`：用于生成或读取缓存诊断的确定性证据结果，类型为 `Dict[str, Any]`。
+        - `client`：HTTP 异步客户端，类型为 `Optional[httpx.AsyncClient]`。
+    """
     run = await generate_ai_diagnosis_run(
         settings, project, question, result, client=client
     )
@@ -325,7 +368,14 @@ def build_ai_cache_key(
     question: str,
     result: Dict[str, Any],
 ) -> str:
-    """基于模型、协议、提示词版本和证据上下文生成稳定缓存键。"""
+    """基于模型、协议、提示词版本和证据上下文生成稳定缓存键。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `result`：用于生成或读取缓存诊断的确定性证据结果，类型为 `Dict[str, Any]`。
+    """
     protocol, _ = _resolve_protocol_and_url(settings)
     context = build_evidence_context(project, question, result)
     material = json.dumps(
@@ -351,7 +401,16 @@ async def generate_ai_diagnosis_cached(
     client: Optional[httpx.AsyncClient] = None,
     redis_client=None,
 ) -> AIDiagnosisRun:
-    """优先读取有效 AI 缓存，未命中时调用模型并写回缓存。"""
+    """优先读取有效 AI 缓存，未命中时调用模型并写回缓存。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `result`：用于生成或读取缓存诊断的确定性证据结果，类型为 `Dict[str, Any]`。
+        - `client`：HTTP 异步客户端，类型为 `Optional[httpx.AsyncClient]`。
+        - `redis_client`：Redis 客户端。
+    """
     owns_redis = redis_client is None
     active_redis = redis_client or redis_asyncio.from_url(settings.redis_url, decode_responses=True)
     cache_key = build_ai_cache_key(settings, project, question, result)

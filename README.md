@@ -1,6 +1,6 @@
 # PHP 代码诊断 RAgent
 
-当前项目已完成阶段 0 至阶段 6，正在推进阶段 7：安全、性能和生产上线。
+当前项目已完成阶段 0 至阶段 7，正在推进阶段 8：智能诊断增强。
 
 ## 本地启动
 
@@ -194,9 +194,18 @@ docker compose run --rm api python scripts/export_evaluation_candidates.py \
 
 - 模块顶部说明模块职责；
 - 类注释说明类的职责和边界；
-- 方法或函数注释说明用途、关键参数、返回值和异常边界；
+- 方法或函数注释说明用途、具体参数、返回值和异常边界；
+- 参数必须结合业务字段上下文说明，禁止使用“输入参数”“输出参数”“输入值”等泛化措辞；
+- JavaScript 函数使用 JSDoc 标注参数类型和业务含义；
+- 环境变量、Compose、Dockerfile、TOML、YAML 和 CI 配置按字段或分组说明用途；
 - 复杂流程保留必要的行内注释，并在行为变化时同步更新；
 - 注释使用中文，技术名词和接口名称保留原文。
+
+注释规则同时记录在仓库级 `AGENTS.md`。提交前运行：
+
+```bash
+python3 scripts/check_comment_coverage.py
+```
 
 ## Git 提交约定
 

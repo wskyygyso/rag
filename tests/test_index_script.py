@@ -12,7 +12,12 @@ from scripts import index_php_repository
 async def test_index_script_dry_run_does_not_connect_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """验证 dry-run 只扫描代码，不创建数据库连接。"""
+    """验证 dry-run 只扫描代码，不创建数据库连接。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+        - `monkeypatch`：pytest 运行期替换工具，类型为 `pytest.MonkeyPatch`。
+    """
     project = tmp_path / "waky3" / "php"
     project.mkdir(parents=True)
     (project / "Guild.php").write_text("<?php class Guild { public function invite() {} }", encoding="utf-8")
@@ -29,13 +34,19 @@ async def test_index_script_dry_run_does_not_connect_database(
 async def test_index_script_closes_database_pool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """验证索引写入结束后一定释放连接池资源。"""
+    """验证索引写入结束后一定释放连接池资源。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+        - `monkeypatch`：pytest 运行期替换工具，类型为 `pytest.MonkeyPatch`。
+    """
     project = tmp_path / "waky3" / "php"
     project.mkdir(parents=True)
     (project / "Guild.php").write_text("<?php class Guild {}", encoding="utf-8")
     pool = SimpleNamespace(closed=False)
 
     async def close() -> None:
+        """执行 `close` 的业务逻辑。"""
         pool.closed = True
 
     pool.close = close
@@ -56,5 +67,9 @@ async def test_index_script_closes_database_pool(
 
 
 async def _return(value):
-    """为异步 mock 返回固定值。"""
+    """为异步 mock 返回固定值。
+
+    参数:
+        - `value`：异步 mock 需要直接返回的固定对象。
+    """
     return value

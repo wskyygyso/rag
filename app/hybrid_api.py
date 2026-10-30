@@ -26,7 +26,17 @@ async def hybrid_search(
         description="重复传入以筛选来源：code、symbol、chunk 或 history",
     ),
 ) -> Dict:
-    """合并代码、符号和历史诊断结果，返回带来源和分数的检索结果。"""
+    """合并代码、符号和历史诊断结果，返回带来源和分数的检索结果。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+        - `history_offset`：历史诊断结果分页偏移，类型为 `int`。
+        - `history_days`：历史诊断结果最近天数范围，类型为 `Optional[int]`。
+        - `source_types`：混合检索来源筛选类型，类型为 `Optional[list[str]]`。
+    """
     require_project_access(request, project)
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:

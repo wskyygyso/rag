@@ -14,7 +14,7 @@ from app.settings import get_settings
 
 
 def parse_args() -> argparse.Namespace:
-    """解析严格模式和 JSON 输出参数。"""
+    """解析严格门禁和 JSON 输出命令行开关。"""
     parser = argparse.ArgumentParser(description="RAgent 生产上线预检")
     parser.add_argument("--strict", action="store_true", help="生产门禁模式，警告也视为未通过")
     parser.add_argument("--json", action="store_true", help="输出 JSON 结果")

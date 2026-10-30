@@ -24,10 +24,16 @@ class _AuditPool:
     """捕获审计 SQL 参数的最小异步连接池替身。"""
 
     def __init__(self) -> None:
+        """初始化对象实例。"""
         self.calls = []
 
     async def execute(self, query: str, *args: object) -> None:
-        """记录一次数据库写入调用，供审计脱敏测试断言。"""
+        """记录一次数据库写入调用，供审计脱敏测试断言。
+
+        参数:
+            - `query`：检索或查询文本，类型为 `str`。
+            - `*args`：可变位置参数集合。
+        """
         self.calls.append((query, args))
 
 
@@ -35,6 +41,12 @@ class _DatabaseConnection:
     """模拟 asyncpg 连接，记录查询参数并控制返回或异常。"""
 
     def __init__(self, rows=None, error=None) -> None:
+        """初始化对象实例。
+
+        参数:
+            - `rows`：数据库查询或模拟记录集合。
+            - `error`：失败原因或数据库异常。
+        """
         self.rows = rows or []
         self.error = error
         self.closed = False
@@ -42,7 +54,11 @@ class _DatabaseConnection:
         self.readonly_transactions = []
 
     def transaction(self, readonly=False):
-        """返回记录只读标志的异步事务上下文。"""
+        """返回记录只读标志的异步事务上下文。
+
+        参数:
+            - `readonly`：是否使用只读数据库事务。
+        """
         connection = self
 
         class _Transaction:
@@ -54,13 +70,25 @@ class _DatabaseConnection:
                 return self
 
             async def __aexit__(self, exc_type, exc, traceback):
-                """不抑制查询异常。"""
+                """不抑制查询异常。
+
+                参数:
+                    - `exc_type`：上下文管理器捕获的异常类型。
+                    - `exc`：当前捕获的异常。
+                    - `traceback`：上下文管理器捕获的异常堆栈。
+                """
                 return False
 
         return _Transaction()
 
     async def fetch(self, sql: str, *params: object, timeout: float) -> list:
-        """返回测试记录，或抛出预设数据库异常。"""
+        """返回测试记录，或抛出预设数据库异常。
+
+        参数:
+            - `sql`：待执行或展示的 SQL，类型为 `str`。
+            - `timeout`：单次数据库或网络操作超时秒数，类型为 `float`。
+            - `*params`：SQL 绑定参数。
+        """
         self.calls.append((sql, params, timeout))
         if self.error is not None:
             raise self.error
@@ -85,7 +113,11 @@ def test_validate_readonly_sql_rejects_writes_and_multiple_statements() -> None:
 
 
 def test_config_and_log_tools_redact_sensitive_values(tmp_path: Path) -> None:
-    """验证配置和日志内容读取后会隐藏 Token 和密码。"""
+    """验证配置和日志内容读取后会隐藏 Token 和密码。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     (project / "config.ini").write_text("token=abc123\nname=waky3\n", encoding="utf-8")
@@ -98,7 +130,11 @@ def test_config_and_log_tools_redact_sensitive_values(tmp_path: Path) -> None:
 
 
 def test_validation_tools_reject_invalid_files_and_limits(tmp_path: Path) -> None:
-    """验证不存在文件和结果边界会返回可识别的业务异常。"""
+    """验证不存在文件和结果边界会返回可识别的业务异常。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     with pytest.raises(ValidationToolError):
@@ -130,13 +166,22 @@ async def test_validation_audit_uses_shared_pool_and_redacts_summary() -> None:
 
 @pytest.mark.asyncio
 async def test_query_database_redacts_limits_rows_and_closes_connection(monkeypatch) -> None:
-    """验证数据库查询会脱敏、限制行数并在成功后关闭连接。"""
+    """验证数据库查询会脱敏、限制行数并在成功后关闭连接。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     connection = _DatabaseConnection(
         rows=[{"name": "waky3", "token": "abc123"}, {"name": "extra"}]
     )
 
     async def fake_connect(*args, **kwargs):
-        """返回可控的数据库连接替身。"""
+        """返回可控的数据库连接替身。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         return connection
 
     monkeypatch.setattr(validation_tools.asyncpg, "connect", fake_connect)
@@ -155,11 +200,20 @@ async def test_query_database_redacts_limits_rows_and_closes_connection(monkeypa
 
 @pytest.mark.asyncio
 async def test_query_database_converts_timeout_and_database_errors(monkeypatch) -> None:
-    """验证连接超时和数据库错误会转换为受控业务异常并释放连接。"""
+    """验证连接超时和数据库错误会转换为受控业务异常并释放连接。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     timeout_connection = _DatabaseConnection(error=asyncio.TimeoutError())
 
     async def fake_timeout_connect(*args, **kwargs):
-        """返回会在查询时超时的连接替身。"""
+        """返回会在查询时超时的连接替身。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         return timeout_connection
 
     monkeypatch.setattr(validation_tools.asyncpg, "connect", fake_timeout_connect)
@@ -174,7 +228,12 @@ async def test_query_database_converts_timeout_and_database_errors(monkeypatch) 
     error_connection = _DatabaseConnection(error=OSError("connection refused"))
 
     async def fake_error_connect(*args, **kwargs):
-        """返回会抛出连接错误的连接替身。"""
+        """返回会抛出连接错误的连接替身。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         return error_connection
 
     monkeypatch.setattr(validation_tools.asyncpg, "connect", fake_error_connect)

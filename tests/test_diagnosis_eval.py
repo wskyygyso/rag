@@ -36,7 +36,11 @@ def test_diagnosis_eval_reports_missing_symbol() -> None:
 
 
 def test_diagnosis_eval_rejects_duplicate_case_ids(tmp_path) -> None:
-    """验证重复用例 ID 会被拒绝，避免统计混淆。"""
+    """验证重复用例 ID 会被拒绝，避免统计混淆。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     path = tmp_path / "cases.json"
     path.write_text(
         '{"cases":[{"id":"same","project":"waky3","question":"a"},{"id":"same","project":"waky3","question":"b"}]}',

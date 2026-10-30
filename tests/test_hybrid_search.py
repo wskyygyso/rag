@@ -13,10 +13,20 @@ class _Pool:
     """返回历史诊断记录的连接池替身。"""
 
     def __init__(self) -> None:
+        """初始化对象实例。"""
         self.arguments = None
 
     async def fetch(self, query, project, keyword, since, limit, offset):
-        """返回一条模拟历史记录。"""
+        """返回一条模拟历史记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `project`：项目标识。
+            - `keyword`：历史任务检索关键词。
+            - `since`：历史任务查询起始时间。
+            - `limit`：单次结果数量上限。
+            - `offset`：分页起始偏移。
+        """
         self.arguments = (project, keyword, since, limit, offset)
         return [
             {
@@ -30,7 +40,12 @@ class _Pool:
 
 @pytest.mark.asyncio
 async def test_search_hybrid_merges_sources_and_redacts_history(tmp_path: Path, monkeypatch) -> None:
-    """验证混合检索包含代码、符号、历史来源且历史敏感信息已脱敏。"""
+    """验证混合检索包含代码、符号、历史来源且历史敏感信息已脱敏。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     (project / "Guild.php").write_text("class Guild { public function invite() {} }", encoding="utf-8")
@@ -50,7 +65,12 @@ async def test_search_hybrid_merges_sources_and_redacts_history(tmp_path: Path, 
         },
     )
     async def fake_chunks(*args, **kwargs):
-        """返回一条全文分块结果。"""
+        """返回一条全文分块结果。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         return [{"source_type": "chunk", "source_id": "Guild.php:1-1", "score": 0.7}]
 
     monkeypatch.setattr(hybrid_search, "search_document_chunks", fake_chunks)
@@ -68,7 +88,11 @@ async def test_search_hybrid_merges_sources_and_redacts_history(tmp_path: Path, 
 
 @pytest.mark.asyncio
 async def test_search_hybrid_rejects_invalid_limits(tmp_path: Path) -> None:
-    """验证混合检索关键词和数量边界。"""
+    """验证混合检索关键词和数量边界。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     with pytest.raises(CodeToolError):
         await hybrid_search.search_hybrid(str(tmp_path), "waky3", "", _Pool(), limit=10)
     with pytest.raises(CodeToolError):
@@ -83,7 +107,12 @@ async def test_search_hybrid_rejects_invalid_limits(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_search_hybrid_filters_sources_and_applies_weights(monkeypatch, tmp_path: Path) -> None:
-    """验证来源筛选和统一权重排序。"""
+    """验证来源筛选和统一权重排序。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     monkeypatch.setattr(hybrid_search, "search_code", lambda *args, **kwargs: {"matches": []})

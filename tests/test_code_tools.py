@@ -8,7 +8,11 @@ from app.code_tools import CodeToolError, extract_search_queries, read_file, sea
 
 
 def test_search_code_and_read_file(tmp_path: Path) -> None:
-    """验证搜索结果包含准确的相对路径、行号和文件内容。"""
+    """验证搜索结果包含准确的相对路径、行号和文件内容。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     php_file = project / "php" / "action" / "Guild.php"
     php_file.parent.mkdir(parents=True)
@@ -24,7 +28,11 @@ def test_search_code_and_read_file(tmp_path: Path) -> None:
 
 
 def test_code_tools_reject_path_escape(tmp_path: Path) -> None:
-    """验证相对路径不能逃逸项目仓库目录。"""
+    """验证相对路径不能逃逸项目仓库目录。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     with pytest.raises(CodeToolError):

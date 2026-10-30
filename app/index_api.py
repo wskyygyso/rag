@@ -15,7 +15,13 @@ async def index_runs(
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> Dict:
-    """返回项目最近的文档索引运行状态和版本信息。"""
+    """返回项目最近的文档索引运行状态和版本信息。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     require_project_access(request, project)
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
@@ -47,7 +53,13 @@ async def index_runs(
 
 @router.post("/{project}/runs/{run_id}/retry", status_code=202)
 async def retry_index_run(project: str, run_id: int, request: Request) -> Dict:
-    """将失败索引重新投递到 Worker，避免 API 进程阻塞执行。"""
+    """将失败索引重新投递到 Worker，避免 API 进程阻塞执行。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `run_id`：运行记录 ID，类型为 `int`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     require_project_access(request, project)
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:

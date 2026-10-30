@@ -14,7 +14,12 @@ class _Pool:
         self.args = None
 
     async def fetchrow(self, query, *args):
-        """返回一条可复用记录。"""
+        """返回一条可复用记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         self.query = query
         self.args = args
         return {"id": 9, "chunk_count": 20, "actual_chunks": 20}

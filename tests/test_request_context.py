@@ -25,7 +25,11 @@ def test_response_echoes_safe_request_id() -> None:
 
 
 def test_access_log_excludes_query_and_api_key(caplog) -> None:
-    """验证访问日志不包含查询参数和 API Key。"""
+    """验证访问日志不包含查询参数和 API Key。
+
+    参数:
+        - `caplog`：pytest 日志捕获器。
+    """
     logger = logging.getLogger("ragent.access")
     caplog.set_level(logging.INFO, logger=logger.name)
     response = TestClient(app).get(

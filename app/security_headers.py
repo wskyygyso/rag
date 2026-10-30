@@ -8,7 +8,11 @@ from starlette.responses import Response
 
 
 def parse_cors_origins(raw_origins: str) -> List[str]:
-    """解析逗号分隔的 CORS 来源，去空、去重并保持顺序。"""
+    """解析逗号分隔的 CORS 来源，去空、去重并保持顺序。
+
+    参数:
+        - `raw_origins`：逗号分隔的 CORS 来源配置，类型为 `str`。
+    """
     origins = []
     for origin in (raw_origins or "").split(","):
         value = origin.strip().rstrip("/")
@@ -18,7 +22,12 @@ def parse_cors_origins(raw_origins: str) -> List[str]:
 
 
 def add_cors_middleware(application: FastAPI, raw_origins: str) -> List[str]:
-    """在白名单非空时启用 CORS，并返回实际允许的来源。"""
+    """在白名单非空时启用 CORS，并返回实际允许的来源。
+
+    参数:
+        - `application`：FastAPI 应用实例，类型为 `FastAPI`。
+        - `raw_origins`：逗号分隔的 CORS 来源配置，类型为 `str`。
+    """
     origins = parse_cors_origins(raw_origins)
     if origins:
         application.add_middleware(
@@ -34,7 +43,12 @@ def add_cors_middleware(application: FastAPI, raw_origins: str) -> List[str]:
 
 
 def apply_security_headers(response: Response, request: Request) -> None:
-    """补充通用安全响应头，并在 HTTPS 代理请求上添加 HSTS。"""
+    """补充通用安全响应头，并在 HTTPS 代理请求上添加 HSTS。
+
+    参数:
+        - `response`：待补充安全响应头的 HTTP 响应，类型为 `Response`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")

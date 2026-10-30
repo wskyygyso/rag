@@ -40,7 +40,11 @@ class CreateDiagnosisRequest(BaseModel):
 
 
 def _task_response(task: Dict) -> Dict:
-    """把数据库任务记录转换为稳定的 API 响应结构。"""
+    """把数据库任务记录转换为稳定的 API 响应结构。
+
+    参数:
+        - `task`：诊断任务记录，类型为 `Dict`。
+    """
     return {
         "task_id": task["id"],
         "project": task["project"],
@@ -58,7 +62,11 @@ def _task_response(task: Dict) -> Dict:
 
 
 def _pool(request: Request):
-    """获取应用数据库连接池；依赖不可用时返回明确的 503 错误。"""
+    """获取应用数据库连接池；依赖不可用时返回明确的 503 错误。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="数据库暂不可用")
@@ -75,7 +83,17 @@ async def _record_operation(
     actor: Optional[str] = None,
     request_id: Optional[str] = None,
 ) -> None:
-    """尽力写入任务操作审计，审计故障不阻断主业务接口。"""
+    """尽力写入任务操作审计，审计故障不阻断主业务接口。
+
+    参数:
+        - `pool`：数据库连接池或测试替身。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `operation`：操作类型，类型为 `str`。
+        - `from_status`：状态变更前值，类型为 `Optional[str]`。
+        - `to_status`：状态变更后值，类型为 `Optional[str]`。
+        - `actor`：操作主体标识，类型为 `Optional[str]`。
+        - `request_id`：HTTP 请求关联 ID，类型为 `Optional[str]`。
+    """
     try:
         await insert_task_operation(
             pool,
@@ -91,7 +109,13 @@ async def _record_operation(
 
 
 async def _authorized_task(pool, request: Request, task_id: str) -> Dict:
-    """读取任务并校验项目权限；不存在时统一返回 404，避免泄露任务归属。"""
+    """读取任务并校验项目权限；不存在时统一返回 404，避免泄露任务归属。
+
+    参数:
+        - `pool`：数据库连接池或测试替身。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     task = await get_task(pool, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="诊断任务不存在")
@@ -101,7 +125,12 @@ async def _authorized_task(pool, request: Request, task_id: str) -> Dict:
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def create_diagnosis(payload: CreateDiagnosisRequest, request: Request) -> Dict:
-    """创建诊断任务并投递到 Celery 队列。"""
+    """创建诊断任务并投递到 Celery 队列。
+
+    参数:
+        - `payload`：HTTP 请求体或 LLM 响应载荷，类型为 `CreateDiagnosisRequest`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     pool = _pool(request)
     require_project_access(request, payload.project)
     task_id = f"diag_{uuid.uuid4().hex}"
@@ -151,7 +180,18 @@ async def diagnosis_history(
     offset: int = Query(default=0, ge=0, le=100_000),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> Dict:
-    """分页查询历史诊断任务，支持项目、状态、问题关键词和时间范围筛选。"""
+    """分页查询历史诊断任务，支持项目、状态、问题关键词和时间范围筛选。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `status_filter`：诊断任务状态筛选值，类型为 `Optional[str]`。
+        - `query`：检索或查询文本，类型为 `Optional[str]`。
+        - `request_id`：HTTP 请求关联 ID，类型为 `Optional[str]`。
+        - `days`：最近天数范围，类型为 `Optional[int]`。
+        - `offset`：分页起始偏移，类型为 `int`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     require_project_access(request, project)
     tasks = await list_tasks(
         _pool(request),
@@ -168,14 +208,24 @@ async def diagnosis_history(
 
 @router.get("/{task_id}")
 async def get_diagnosis(task_id: str, request: Request) -> Dict:
-    """按任务 ID 查询诊断状态、进度和结果。"""
+    """按任务 ID 查询诊断状态、进度和结果。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     task = await _authorized_task(_pool(request), request, task_id)
     return _task_response(task)
 
 
 @router.post("/{task_id}/cancel")
 async def cancel_diagnosis(task_id: str, request: Request) -> Dict:
-    """取消尚未结束的诊断任务。"""
+    """取消尚未结束的诊断任务。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     pool = _pool(request)
     previous = await _authorized_task(pool, request, task_id)
     task = await mark_cancelled(pool, task_id)
@@ -199,7 +249,13 @@ async def task_operations(
     request: Request,
     limit: int = Query(default=100, ge=1, le=200),
 ) -> Dict:
-    """查询诊断任务操作审计轨迹，供协作排查使用。"""
+    """查询诊断任务操作审计轨迹，供协作排查使用。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     pool = _pool(request)
     await _authorized_task(pool, request, task_id)
     return {"task_id": task_id, "operations": await list_task_operations(pool, task_id, limit)}
@@ -207,7 +263,12 @@ async def task_operations(
 
 @router.post("/{task_id}/retry", status_code=status.HTTP_202_ACCEPTED)
 async def retry_diagnosis(task_id: str, request: Request) -> Dict:
-    """将失败任务重新排队；非失败任务或达到上限时拒绝重试。"""
+    """将失败任务重新排队；非失败任务或达到上限时拒绝重试。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     pool = _pool(request)
     await _authorized_task(pool, request, task_id)
     task = await prepare_task_retry(pool, task_id)
@@ -250,7 +311,13 @@ async def get_report(
     request: Request,
     format: str = Query(default="json", pattern="^(json|markdown)$"),
 ):
-    """获取稳定诊断报告，支持 JSON 摘要或 Markdown 导出。"""
+    """获取稳定诊断报告，支持 JSON 摘要或 Markdown 导出。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `format`：报告导出格式，类型为 `str`。
+    """
     task = await _authorized_task(_pool(request), request, task_id)
     response = _task_response(task)
     response["assessment"] = build_assessment(response.get("result") or {})
@@ -264,7 +331,12 @@ async def get_report(
 
 
 async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
-    """轮询任务状态并生成 SSE 格式的进度事件。"""
+    """轮询任务状态并生成 SSE 格式的进度事件。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     terminal_statuses = {"COMPLETED", "FAILED", "CANCELLED"}
     while True:
         if await request.is_disconnected():
@@ -282,7 +354,12 @@ async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
 
 @router.get("/{task_id}/events")
 async def diagnosis_events(task_id: str, request: Request) -> StreamingResponse:
-    """建立诊断任务的实时进度 SSE 响应。"""
+    """建立诊断任务的实时进度 SSE 响应。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     await _authorized_task(_pool(request), request, task_id)
     return StreamingResponse(
         _events(request, task_id),

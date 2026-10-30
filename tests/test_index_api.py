@@ -11,7 +11,13 @@ class _Pool:
     """返回索引运行记录的连接池替身。"""
 
     async def fetch(self, query, project, limit):
-        """返回一条带版本信息的索引记录。"""
+        """返回一条带版本信息的索引记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `project`：项目标识。
+            - `limit`：单次结果数量上限。
+        """
         return [
             {
                 "id": 1,

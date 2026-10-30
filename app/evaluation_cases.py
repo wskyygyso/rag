@@ -5,7 +5,11 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 def build_candidate(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """将已完成且有证据的任务转换为待审核候选，缺少证据时返回 None。"""
+    """将已完成且有证据的任务转换为待审核候选，缺少证据时返回 None。
+
+    参数:
+        - `task`：诊断任务记录，类型为 `Dict[str, Any]`。
+    """
     result = task.get("result") or {}
     if isinstance(result, str):
         result = json.loads(result)
@@ -37,7 +41,11 @@ def build_candidate(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def candidates_from_tasks(tasks: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """批量生成候选并跳过无证据任务。"""
+    """批量生成候选并跳过无证据任务。
+
+    参数:
+        - `tasks`：诊断任务记录集合，类型为 `Iterable[Dict[str, Any]]`。
+    """
     candidates = []
     for task in tasks:
         candidate = build_candidate(task)
@@ -53,7 +61,14 @@ async def fetch_candidates(
     days: int = 365,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
-    """查询收到正确反馈的完成任务，并转换为待审核评测候选。"""
+    """查询收到正确反馈的完成任务，并转换为待审核评测候选。
+
+    参数:
+        - `pool`：数据库连接池或测试替身。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `days`：最近天数范围，类型为 `int`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     rows = await pool.fetch(
         """
         SELECT t.id, t.project, t.question, t.result, t.updated_at

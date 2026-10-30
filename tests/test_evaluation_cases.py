@@ -39,7 +39,14 @@ class _Pool:
     """模拟历史任务查询连接池。"""
 
     async def fetch(self, query, project, days, limit):
-        """返回一条包含 JSON 字符串结果的任务。"""
+        """返回一条包含 JSON 字符串结果的任务。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `project`：项目标识。
+            - `days`：最近天数范围。
+            - `limit`：单次结果数量上限。
+        """
         return [
             {
                 "id": "diag_2",

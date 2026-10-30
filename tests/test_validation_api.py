@@ -20,14 +20,26 @@ def test_database_validation_api_rejects_write_sql() -> None:
 
 
 def test_validation_api_records_success_audit(monkeypatch, tmp_path: Path) -> None:
-    """验证配置读取成功后只记录摘要，不记录完整配置内容。"""
+    """验证配置读取成功后只记录摘要，不记录完整配置内容。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     (project / "config.ini").write_text("token=secret\nname=waky3\n", encoding="utf-8")
     records = []
 
     async def fake_audit(pool, operation, status, **kwargs):
-        """捕获接口发起的审计调用。"""
+        """捕获接口发起的审计调用。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `operation`：操作类型。
+            - `status`：状态值。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         records.append((operation, status, kwargs))
 
     monkeypatch.setattr(validation_api, "record_validation_audit", fake_audit)
@@ -48,11 +60,22 @@ def test_validation_api_records_success_audit(monkeypatch, tmp_path: Path) -> No
 
 
 def test_validation_api_records_failed_audit(monkeypatch) -> None:
-    """验证只读 SQL 被拒绝时仍记录失败审计。"""
+    """验证只读 SQL 被拒绝时仍记录失败审计。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     records = []
 
     async def fake_audit(pool, operation, status, **kwargs):
-        """捕获失败审计调用。"""
+        """捕获失败审计调用。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `operation`：操作类型。
+            - `status`：状态值。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         records.append((operation, status, kwargs))
 
     monkeypatch.setattr(validation_api, "record_validation_audit", fake_audit)
@@ -71,7 +94,11 @@ def test_validation_api_records_failed_audit(monkeypatch) -> None:
 
 
 def test_validation_api_returns_429_when_rate_limited(monkeypatch) -> None:
-    """验证超出调用方限额时返回 429 和 Retry-After。"""
+    """验证超出调用方限额时返回 429 和 Retry-After。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     monkeypatch.setattr(validation_api, "rate_limiter", RateLimiter(1, 60))
     first = TestClient(app).post(
         "/api/validation/database/query",
@@ -92,7 +119,11 @@ def test_validation_api_fails_closed_when_shared_limiter_is_unavailable() -> Non
         """模拟不可用的共享限流器。"""
 
         async def allow(self, key):
-            """模拟 Redis 连接异常。"""
+            """模拟 Redis 连接异常。
+
+            参数:
+                - `key`：Redis、配置或字典键。
+            """
             raise RuntimeError("redis unavailable")
 
     had_limiter = hasattr(app.state, "validation_rate_limiter")

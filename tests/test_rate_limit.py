@@ -8,7 +8,11 @@ from app.rate_limit import RateLimiter, RedisRateLimiter
 
 
 def test_rate_limiter_rejects_after_limit_and_allows_next_window(monkeypatch) -> None:
-    """验证固定窗口内超限，窗口过期后恢复请求。"""
+    """验证固定窗口内超限，窗口过期后恢复请求。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     current = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: current[0])
     limiter = RateLimiter(2, 10)
@@ -36,7 +40,14 @@ class _Redis:
         self.expirations = []
 
     async def eval(self, script, key_count, key, ttl):
-        """原子增加计数并记录过期时间。"""
+        """原子增加计数并记录过期时间。
+
+        参数:
+            - `script`：Redis Lua 脚本内容。
+            - `key_count`：Redis EVAL 脚本键数量。
+            - `key`：Redis、配置或字典键。
+            - `ttl`：Redis 缓存过期秒数。
+        """
         self.counts[key] = self.counts.get(key, 0) + 1
         self.expirations.append((key, ttl))
         return self.counts[key]

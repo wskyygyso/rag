@@ -9,7 +9,11 @@ from app.php_index import index_repository
 
 
 def load_cases(path: str) -> List[Dict[str, Any]]:
-    """加载并校验 JSON 诊断评测集，要求 case ID 唯一。"""
+    """加载并校验 JSON 诊断评测集，要求 case ID 唯一。
+
+    参数:
+        - `path`：文件或请求路径，类型为 `str`。
+    """
     content = json.loads(Path(path).read_text(encoding="utf-8"))
     cases = content.get("cases") if isinstance(content, dict) else None
     if not isinstance(cases, list) or not cases:
@@ -30,7 +34,12 @@ def load_cases(path: str) -> List[Dict[str, Any]]:
 
 
 def _recall(expected: Iterable[str], actual: Set[str]) -> float:
-    """计算集合召回率，空期望视为完全命中。"""
+    """计算集合召回率，空期望视为完全命中。
+
+    参数:
+        - `expected`：评测期望命中的集合，类型为 `Iterable[str]`。
+        - `actual`：实际命中的结果集合，类型为 `Set[str]`。
+    """
     expected_set = {str(item) for item in expected}
     if not expected_set:
         return 1.0
@@ -38,7 +47,13 @@ def _recall(expected: Iterable[str], actual: Set[str]) -> float:
 
 
 def _evaluate_case(root: str, case: Dict[str, Any], index: Dict[str, Any]) -> Dict[str, Any]:
-    """执行单个用例并返回命中检查、召回率和通过状态。"""
+    """执行单个用例并返回命中检查、召回率和通过状态。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `case`：评测用例数据，类型为 `Dict[str, Any]`。
+        - `index`：项目代码或符号索引，类型为 `Dict[str, Any]`。
+    """
     queries = extract_search_queries(case["question"])
     evidence: List[Dict[str, Any]] = []
     seen: Set[Tuple[str, int, str]] = set()
@@ -91,7 +106,12 @@ def _evaluate_case(root: str, case: Dict[str, Any], index: Dict[str, Any]) -> Di
 
 
 def evaluate_cases(root: str, cases: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """按项目复用符号索引并汇总整体通过率。"""
+    """按项目复用符号索引并汇总整体通过率。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `cases`：评测用例集合，类型为 `List[Dict[str, Any]]`。
+    """
     indexes: Dict[str, Dict[str, Any]] = {}
     results = []
     for case in cases:

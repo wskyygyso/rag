@@ -14,7 +14,12 @@ from app.task_store import create_pool, replace_symbol_index
 
 
 async def _run(project: str, dry_run: bool = False) -> int:
-    """扫描项目并写入符号表，或在 dry-run 模式下只返回扫描数量。"""
+    """扫描项目并写入符号表，或在 dry-run 模式下只返回扫描数量。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `dry_run`：是否仅扫描而不写入数据库，类型为 `bool`。
+    """
     settings = get_settings()
     index = index_repository(settings.code_repositories_root, project)
     if dry_run:

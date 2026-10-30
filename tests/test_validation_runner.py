@@ -17,7 +17,12 @@ class _Pool:
 async def test_execute_validation_plan_runs_tools_and_records_summaries(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """验证计划会执行数据库、配置和日志步骤，并只记录摘要审计。"""
+    """验证计划会执行数据库、配置和日志步骤，并只记录摘要审计。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     (project / "app.ini").write_text("token=secret\n", encoding="utf-8")
@@ -25,11 +30,23 @@ async def test_execute_validation_plan_runs_tools_and_records_summaries(
     audits = []
 
     async def fake_query(*args, **kwargs):
-        """返回脱敏数据库结果替身。"""
+        """返回脱敏数据库结果替身。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         return {"sql": "SELECT 1", "rows": [{"value": "ok"}], "total": 1}
 
     async def fake_audit(pool, operation, status, **kwargs):
-        """记录验证审计调用。"""
+        """记录验证审计调用。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `operation`：操作类型。
+            - `status`：状态值。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         audits.append((operation, status, kwargs))
 
     monkeypatch.setattr(validation_runner, "query_database", fake_query)
@@ -62,18 +79,35 @@ async def test_execute_validation_plan_runs_tools_and_records_summaries(
 
 @pytest.mark.asyncio
 async def test_execute_validation_plan_isolates_step_failures(monkeypatch, tmp_path: Path) -> None:
-    """验证单个步骤失败时会保留失败状态并继续执行后续步骤。"""
+    """验证单个步骤失败时会保留失败状态并继续执行后续步骤。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     project = tmp_path / "waky3"
     project.mkdir()
     (project / "app.log").write_text("error happened\n", encoding="utf-8")
     audits = []
 
     async def fake_query(*args, **kwargs):
-        """模拟数据库验证失败。"""
+        """模拟数据库验证失败。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         raise validation_runner.ValidationToolError("数据库查询超时")
 
     async def fake_audit(pool, operation, status, **kwargs):
-        """记录失败审计。"""
+        """记录失败审计。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `operation`：操作类型。
+            - `status`：状态值。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         audits.append((operation, status))
 
     monkeypatch.setattr(validation_runner, "query_database", fake_query)

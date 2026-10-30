@@ -11,7 +11,12 @@ class _Pool:
     """模拟任务和反馈数据库操作的连接池。"""
 
     async def fetchrow(self, query, *args):
-        """根据 SQL 操作类型返回任务或反馈记录。"""
+        """根据 SQL 操作类型返回任务或反馈记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         if "SELECT * FROM diagnostic_tasks" in query:
             if args[0] == "missing":
                 return None
@@ -26,7 +31,13 @@ class _Pool:
         }
 
     async def fetch(self, query, task_id, limit=None):
-        """返回一条按时间排序的反馈记录。"""
+        """返回一条按时间排序的反馈记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `task_id`：诊断任务 ID。
+            - `limit`：单次结果数量上限。
+        """
         if "JOIN diagnostic_tasks" in query:
             return [
                 {

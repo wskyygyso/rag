@@ -10,7 +10,11 @@ from app.settings import Settings
 
 
 async def check_redis(settings: Settings) -> Dict[str, Any]:
-    """通过 PING 检查 Redis 是否可连接。"""
+    """通过 PING 检查 Redis 是否可连接。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     client = redis_asyncio.from_url(settings.redis_url, decode_responses=True)
     try:
         await client.ping()
@@ -22,7 +26,11 @@ async def check_redis(settings: Settings) -> Dict[str, Any]:
 
 
 async def check_postgres(settings: Settings) -> Dict[str, Any]:
-    """通过 SELECT 1 检查 PostgreSQL 是否可连接。"""
+    """通过 SELECT 1 检查 PostgreSQL 是否可连接。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     connection = None
     try:
         connection = await asyncpg.connect(settings.database_url, timeout=3)
@@ -36,7 +44,11 @@ async def check_postgres(settings: Settings) -> Dict[str, Any]:
 
 
 async def get_health(settings: Settings) -> Dict[str, Any]:
-    """并行检查所有依赖并汇总整体服务状态。"""
+    """并行检查所有依赖并汇总整体服务状态。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     redis_result, postgres_result = await asyncio.gather(
         check_redis(settings), check_postgres(settings)
     )

@@ -23,7 +23,12 @@ class _Pool:
         self.calls = []
 
     async def execute(self, query, *args):
-        """捕获审计写入参数。"""
+        """捕获审计写入参数。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         self.calls.append((query, args))
 
 
@@ -69,11 +74,25 @@ def _read_settings() -> Settings:
 
 
 def test_auth_middleware_records_missing_key_and_scope_denial(monkeypatch) -> None:
-    """验证认证中间件记录 401 和 scope 403，且不保存密钥。"""
+    """验证认证中间件记录 401 和 scope 403，且不保存密钥。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     records = []
 
     async def fake_audit(pool, event_type, status_code, reason, method, path, **kwargs):
-        """捕获安全审计参数。"""
+        """捕获安全审计参数。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `event_type`：安全审计事件类型。
+            - `status_code`：HTTP 响应状态码。
+            - `reason`：安全拒绝原因。
+            - `method`：HTTP 请求方法。
+            - `path`：文件或请求路径。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         records.append((event_type, status_code, reason, method, path, kwargs))
 
     monkeypatch.setattr(auth_module, "insert_security_audit", fake_audit)
@@ -83,7 +102,12 @@ def test_auth_middleware_records_missing_key_and_scope_denial(monkeypatch) -> No
 
     @test_app.middleware("http")
     async def access_control(request, call_next):
-        """挂载待测认证中间件。"""
+        """挂载待测认证中间件。
+
+        参数:
+            - `request`：FastAPI 请求上下文。
+            - `call_next`：继续调用下游中间件或路由的异步函数。
+        """
         return await auth_guard(request, call_next, settings)
 
     @test_app.post("/api/write")
@@ -101,11 +125,25 @@ def test_auth_middleware_records_missing_key_and_scope_denial(monkeypatch) -> No
 
 
 def test_project_denial_is_recorded_by_exception_handler(monkeypatch) -> None:
-    """验证项目越权 403 通过统一异常处理器写入审计。"""
+    """验证项目越权 403 通过统一异常处理器写入审计。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     records = []
 
     async def fake_audit(pool, event_type, status_code, reason, method, path, **kwargs):
-        """捕获项目越权审计。"""
+        """捕获项目越权审计。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `event_type`：安全审计事件类型。
+            - `status_code`：HTTP 响应状态码。
+            - `reason`：安全拒绝原因。
+            - `method`：HTTP 请求方法。
+            - `path`：文件或请求路径。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         records.append((event_type, status_code, reason, method, path, kwargs))
 
     monkeypatch.setattr(auth_module, "insert_security_audit", fake_audit)
@@ -117,7 +155,12 @@ def test_project_denial_is_recorded_by_exception_handler(monkeypatch) -> None:
 
     @test_app.middleware("http")
     async def access_control(request, call_next):
-        """挂载认证中间件以验证路由内授权拒绝。"""
+        """挂载认证中间件以验证路由内授权拒绝。
+
+        参数:
+            - `request`：FastAPI 请求上下文。
+            - `call_next`：继续调用下游中间件或路由的异步函数。
+        """
         return await auth_guard(request, call_next, settings)
 
     response = TestClient(test_app).get(

@@ -12,12 +12,21 @@ class _Pool:
     """记录恢复 SQL 的连接池替身。"""
 
     def __init__(self, affected: int = 2):
-        """初始化受影响行数和调用记录。"""
+        """初始化受影响行数和调用记录。
+
+        参数:
+            - `affected`：数据库受影响记录数，类型为 `int`。
+        """
         self.affected = affected
         self.calls = []
 
     async def execute(self, query, *args):
-        """返回 PostgreSQL 风格更新结果。"""
+        """返回 PostgreSQL 风格更新结果。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         self.calls.append((query, args))
         return f"UPDATE {self.affected}"
 
@@ -62,16 +71,30 @@ class _ClosingPool:
 
 @pytest.mark.asyncio
 async def test_soft_timeout_marks_diagnosis_failed(monkeypatch) -> None:
-    """验证软超时被转换为失败状态并保留超时原因。"""
+    """验证软超时被转换为失败状态并保留超时原因。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     updates = []
     pool = _ClosingPool()
 
     async def fake_create_pool(settings):
-        """返回测试连接池。"""
+        """返回测试连接池。
+
+        参数:
+            - `settings`：应用运行配置。
+        """
         return pool
 
     async def fake_update_task(pool, task_id, **kwargs):
-        """首次状态推进抛软超时，失败回写正常完成。"""
+        """首次状态推进抛软超时，失败回写正常完成。
+
+        参数:
+            - `pool`：数据库连接池或测试替身。
+            - `task_id`：诊断任务 ID。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         updates.append((task_id, kwargs))
         if len(updates) == 1:
             raise SoftTimeLimitExceeded("soft timeout")

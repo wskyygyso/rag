@@ -9,7 +9,11 @@ from app.settings import Settings
 
 
 def test_strict_preflight_rejects_missing_production_controls(tmp_path) -> None:
-    """验证严格模式拒绝关闭认证和缺少目标只读库。"""
+    """验证严格模式拒绝关闭认证和缺少目标只读库。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     repository_root = tmp_path / "repositories"
     repository_root.mkdir()
     settings = Settings(
@@ -26,7 +30,11 @@ def test_strict_preflight_rejects_missing_production_controls(tmp_path) -> None:
 
 
 def test_preflight_rejects_reusing_metadata_database(tmp_path) -> None:
-    """验证验证数据库与元数据库地址相同时直接失败。"""
+    """验证验证数据库与元数据库地址相同时直接失败。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     repository_root = tmp_path / "repositories"
     repository_root.mkdir()
     settings = Settings(
@@ -39,7 +47,11 @@ def test_preflight_rejects_reusing_metadata_database(tmp_path) -> None:
 
 
 def test_preflight_accepts_valid_static_configuration(tmp_path) -> None:
-    """验证有效认证、独立数据库和超时配置通过静态检查。"""
+    """验证有效认证、独立数据库和超时配置通过静态检查。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     repository_root = tmp_path / "repositories"
     repository_root.mkdir()
     api_key = "preflight-test-key-with-enough-length"
@@ -58,7 +70,11 @@ def test_preflight_accepts_valid_static_configuration(tmp_path) -> None:
 
 
 def test_production_startup_gate_rejects_incomplete_configuration(tmp_path) -> None:
-    """验证生产启动门禁在认证或目标库缺失时拒绝启动。"""
+    """验证生产启动门禁在认证或目标库缺失时拒绝启动。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     repository_root = tmp_path / "repositories"
     repository_root.mkdir()
     settings = Settings(
@@ -73,7 +89,11 @@ def test_production_startup_gate_rejects_incomplete_configuration(tmp_path) -> N
 
 
 def test_production_startup_gate_accepts_complete_configuration(tmp_path) -> None:
-    """验证完整生产静态配置可以通过启动门禁。"""
+    """验证完整生产静态配置可以通过启动门禁。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     repository_root = tmp_path / "repositories"
     repository_root.mkdir()
     api_key = "production-startup-test-key-length"
@@ -91,7 +111,11 @@ def test_production_startup_gate_accepts_complete_configuration(tmp_path) -> Non
 
 
 def test_development_startup_does_not_require_production_controls(tmp_path) -> None:
-    """验证开发环境保留本地调试兼容，不触发生产启动门禁。"""
+    """验证开发环境保留本地调试兼容，不触发生产启动门禁。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     settings = Settings(
         app_env="development",
         auth_enabled=False,

@@ -4,13 +4,21 @@ from typing import Any, Dict, Iterable
 
 
 def _lines(items: Iterable[Any]) -> str:
-    """把列表内容转换为稳定的 Markdown 无序列表。"""
+    """把列表内容转换为稳定的 Markdown 无序列表。
+
+    参数:
+        - `items`：待格式化的条目集合，类型为 `Iterable[Any]`。
+    """
     values = [str(item) for item in items]
     return "\n".join(f"- {value}" for value in values) or "- 无"
 
 
 def _validation_items(validation: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-    """展开数据库、配置和日志验证结果，便于统一统计。"""
+    """展开数据库、配置和日志验证结果，便于统一统计。
+
+    参数:
+        - `validation`：只读事实验证结果，类型为 `Dict[str, Any]`。
+    """
     database = validation.get("database") or {}
     if database.get("status") not in {None, "not_requested"}:
         yield {"type": "数据库", **database}
@@ -21,7 +29,11 @@ def _validation_items(validation: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
 
 
 def build_assessment(result: Dict[str, Any]) -> Dict[str, Any]:
-    """根据证据和验证状态生成可解释的结论、置信度和未验证项。"""
+    """根据证据和验证状态生成可解释的结论、置信度和未验证项。
+
+    参数:
+        - `result`：诊断 Worker 生成的结构化结果，包含证据、事实验证和警告，类型为 `Dict[str, Any]`。
+    """
     evidence = result.get("evidence") or []
     warnings = [str(item) for item in result.get("warnings") or []]
     validation_items = list(_validation_items(result.get("validation") or {}))
@@ -82,7 +94,11 @@ def build_assessment(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_markdown_report(task: Dict[str, Any]) -> str:
-    """将诊断任务和结果转换为便于人工审阅的 Markdown 报告。"""
+    """将诊断任务和结果转换为便于人工审阅的 Markdown 报告。
+
+    参数:
+        - `task`：诊断任务记录，类型为 `Dict[str, Any]`。
+    """
     result = task.get("result") or {}
     validation = result.get("validation") or {}
     warnings = result.get("warnings") or []
@@ -169,14 +185,22 @@ def build_markdown_report(task: Dict[str, Any]) -> str:
 
 
 def _json_text(value: Any) -> str:
-    """以非 ASCII 友好的稳定格式序列化报告中的验证摘要。"""
+    """以非 ASCII 友好的稳定格式序列化报告中的验证摘要。
+
+    参数:
+        - `value`：需要序列化为 JSON 文本的报告数据，类型为 `Any`。
+    """
     import json
 
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
 
 def _ai_diagnosis_lines(diagnosis: Any) -> str:
-    """格式化经过校验的 AI 诊断结果，不存在时给出明确状态。"""
+    """格式化经过校验的 AI 诊断结果，不存在时给出明确状态。
+
+    参数:
+        - `diagnosis`：AI 诊断结构化结果，类型为 `Any`。
+    """
     if not diagnosis:
         return "- 未启用或未生成 AI 诊断叙写"
     lines = ["结论：" + str(diagnosis.get("conclusion", ""))]

@@ -23,7 +23,11 @@ async def test_run_baseline_counts_http_errors_and_successes() -> None:
     calls = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        """交替返回成功和失败响应。"""
+        """交替返回成功和失败响应。
+
+        参数:
+            - `request`：FastAPI 请求上下文，类型为 `httpx.Request`。
+        """
         calls["count"] += 1
         return httpx.Response(200 if calls["count"] % 2 else 500)
 

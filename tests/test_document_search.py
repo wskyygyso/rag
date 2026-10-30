@@ -10,7 +10,13 @@ class _Pool:
     """返回分块全文和向量字段的连接池替身。"""
 
     async def fetch(self, query, project, keyword):
-        """返回一条与查询高度相似的分块。"""
+        """返回一条与查询高度相似的分块。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `project`：项目标识。
+            - `keyword`：历史任务检索关键词。
+        """
         return [
             {
                 "source_type": "code",
@@ -46,7 +52,13 @@ async def test_search_document_chunks_falls_back_to_lexical_for_incompatible_vec
         """返回旧模型分块的连接池替身。"""
 
         async def fetch(self, query, project, keyword):
-            """返回旧模型向量和可用全文分数。"""
+            """返回旧模型向量和可用全文分数。
+
+            参数:
+                - `query`：检索或查询文本。
+                - `project`：项目标识。
+                - `keyword`：历史任务检索关键词。
+            """
             return [
                 {
                     "source_id": "old:1-2",

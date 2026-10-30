@@ -34,7 +34,11 @@ logger = logging.getLogger("ragent.access")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    """启动时创建数据库连接池，关闭时释放连接资源。"""
+    """启动时创建数据库连接池，关闭时释放连接资源。
+
+    参数:
+        - `application`：FastAPI 应用实例，类型为 `FastAPI`。
+    """
     enforce_production_settings(settings)
     validate_auth_settings(settings)
     validate_llm_settings(settings)
@@ -63,7 +67,12 @@ add_cors_middleware(app, settings.cors_allowed_origins)
 
 @app.middleware("http")
 async def access_control(request, call_next):
-    """校验 API Key，并把调用方身份传递给项目级权限检查。"""
+    """校验 API Key，并把调用方身份传递给项目级权限检查。
+
+    参数:
+        - `request`：FastAPI 请求上下文。
+        - `call_next`：继续调用下游中间件或路由的异步函数。
+    """
     started_at = begin_http_request()
     request_id = resolve_request_id(request.headers.get("X-Request-ID"))
     request.state.request_id = request_id

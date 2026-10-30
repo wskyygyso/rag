@@ -16,7 +16,11 @@ from app.settings import get_settings
 
 
 def _positive_int(value: str) -> int:
-    """解析正整数命令行参数。"""
+    """解析正整数命令行参数。
+
+    参数:
+        - `value`：命令行传入、需要转换为正整数的原始字符串，类型为 `str`。
+    """
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("参数必须为正整数")
@@ -46,7 +50,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    """连接数据库执行清理，并以非零状态报告未在批次数内完成。"""
+    """连接数据库执行清理，并以非零状态报告未在批次数内完成。
+
+    参数:
+        - `args`：可变位置参数集合，类型为 `argparse.Namespace`。
+    """
     settings = get_settings()
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=2)
     try:

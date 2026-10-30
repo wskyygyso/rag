@@ -20,7 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 def validate_worker_timeouts(current_settings) -> None:
-    """校验软超时小于硬超时，避免任务配置互相冲突。"""
+    """校验软超时小于硬超时，避免任务配置互相冲突。
+
+    参数:
+        - `current_settings`：待校验的当前 Worker 配置。
+    """
     pairs = (
         (
             current_settings.diagnosis_task_soft_time_limit_seconds,
@@ -73,7 +77,11 @@ def healthcheck_task() -> dict:
     time_limit=settings.document_index_time_limit_seconds,
 )
 def run_document_index_task(project: str) -> dict:
-    """在 Worker 中异步重试指定项目的文档分块索引。"""
+    """在 Worker 中异步重试指定项目的文档分块索引。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+    """
     import asyncio
 
     from scripts.index_document_repository import _run
@@ -83,7 +91,11 @@ def run_document_index_task(project: str) -> dict:
 
 
 async def _execute_diagnosis(task_id: str) -> None:
-    """执行单个诊断任务的状态推进、代码检索和证据持久化。"""
+    """执行单个诊断任务的状态推进、代码检索和证据持久化。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     pool = await create_pool(settings)
     try:
         await update_task(
@@ -259,7 +271,11 @@ async def _execute_diagnosis(task_id: str) -> None:
     time_limit=settings.diagnosis_task_time_limit_seconds,
 )
 def run_diagnosis_task(self, task_id: str) -> dict:
-    """Celery 同步入口：运行异步诊断流程并返回任务摘要。"""
+    """Celery 同步入口：运行异步诊断流程并返回任务摘要。
+
+    参数:
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     import asyncio
 
     asyncio.run(_execute_diagnosis(task_id))

@@ -10,7 +10,12 @@ class _Pool:
     """返回固定诊断报告的连接池替身。"""
 
     async def fetchrow(self, query, task_id):
-        """返回可序列化的诊断任务。"""
+        """返回可序列化的诊断任务。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `task_id`：诊断任务 ID。
+        """
         if task_id == "missing":
             return None
         return {

@@ -14,9 +14,17 @@ def test_root_endpoint() -> None:
 
 
 def test_liveness_endpoint_does_not_check_dependencies(monkeypatch) -> None:
-    """验证 liveness 在依赖不可用时仍只反映进程存活。"""
+    """验证 liveness 在依赖不可用时仍只反映进程存活。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     async def fail_health(settings):
-        """模拟依赖检查失败，该函数不应被 liveness 调用。"""
+        """模拟依赖检查失败，该函数不应被 liveness 调用。
+
+        参数:
+            - `settings`：应用运行配置。
+        """
         raise AssertionError("liveness 不应访问依赖")
 
     monkeypatch.setattr(main, "get_health", fail_health)
@@ -26,9 +34,17 @@ def test_liveness_endpoint_does_not_check_dependencies(monkeypatch) -> None:
 
 
 def test_readiness_endpoint_returns_503_when_dependency_degraded(monkeypatch) -> None:
-    """验证 readiness 在核心依赖降级时返回 503。"""
+    """验证 readiness 在核心依赖降级时返回 503。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     async def degraded_health(settings):
-        """返回 Redis 降级的健康结果。"""
+        """返回 Redis 降级的健康结果。
+
+        参数:
+            - `settings`：应用运行配置。
+        """
         return {
             "status": "degraded",
             "environment": "test",
@@ -45,9 +61,17 @@ def test_readiness_endpoint_returns_503_when_dependency_degraded(monkeypatch) ->
 
 
 def test_readiness_endpoint_returns_200_when_dependencies_are_healthy(monkeypatch) -> None:
-    """验证 readiness 在核心依赖正常时返回 200。"""
+    """验证 readiness 在核心依赖正常时返回 200。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     async def healthy(settings):
-        """返回全部依赖正常的健康结果。"""
+        """返回全部依赖正常的健康结果。
+
+        参数:
+            - `settings`：应用运行配置。
+        """
         return {
             "status": "ok",
             "environment": "test",

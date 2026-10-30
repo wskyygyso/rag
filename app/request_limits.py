@@ -8,7 +8,12 @@ class RequestBodyTooLarge(ValueError):
 
 
 async def read_limited_body(request: Request, max_bytes: int) -> bytes:
-    """读取并缓存请求体，超过限制时停止读取并拒绝请求。"""
+    """读取并缓存请求体，超过限制时停止读取并拒绝请求。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `max_bytes`：最大读取字节数，类型为 `int`。
+    """
     if max_bytes < 1:
         raise ValueError("请求体大小上限必须为正数")
     content_length = request.headers.get("content-length")

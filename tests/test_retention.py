@@ -9,16 +9,31 @@ class _Pool:
     """模拟保留期限计数和删除操作的连接池。"""
 
     def __init__(self, execute_value="DELETE 0"):
-        """保存删除结果和调用记录。"""
+        """保存删除结果和调用记录。
+
+        参数:
+            - `execute_value`：测试中模拟的数据库执行结果。
+        """
         self.execute_value = execute_value
         self.execute_calls = []
 
     async def fetchval(self, query, days):
-        """为每个数据目标返回固定候选数。"""
+        """为每个数据目标返回固定候选数。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `days`：最近天数范围。
+        """
         return 5
 
     async def execute(self, query, days, batch_size):
-        """记录删除批次并返回预设受影响行数。"""
+        """记录删除批次并返回预设受影响行数。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `days`：最近天数范围。
+            - `batch_size`：单批处理数量。
+        """
         self.execute_calls.append((query, days, batch_size))
         return self.execute_value
 

@@ -15,7 +15,11 @@ API_KEY = "test-api-key-with-enough-length"
 
 
 def _settings(scopes=None) -> Settings:
-    """返回启用认证的测试配置，默认同时具备读写权限。"""
+    """返回启用认证的测试配置，默认同时具备读写权限。
+
+    参数:
+        - `scopes`：测试认证主体允许的读写权限。
+    """
     config = {
         API_KEY: {
             "subject": "reviewer",
@@ -36,7 +40,12 @@ def test_api_key_middleware_enforces_key_scope_and_public_paths() -> None:
 
     @test_app.middleware("http")
     async def access_control(request, call_next):
-        """测试应用复用生产环境的认证中间件。"""
+        """测试应用复用生产环境的认证中间件。
+
+        参数:
+            - `request`：FastAPI 请求上下文。
+            - `call_next`：继续调用下游中间件或路由的异步函数。
+        """
         return await auth_guard(request, call_next, settings)
 
     @test_app.get("/health")
@@ -65,7 +74,12 @@ def test_api_key_middleware_enforces_key_scope_and_public_paths() -> None:
 
     @read_only_app.middleware("http")
     async def read_only_control(request, call_next):
-        """使用只读配置验证写接口拒绝行为。"""
+        """使用只读配置验证写接口拒绝行为。
+
+        参数:
+            - `request`：FastAPI 请求上下文。
+            - `call_next`：继续调用下游中间件或路由的异步函数。
+        """
         return await auth_guard(request, call_next, read_only)
 
     @read_only_app.post("/api/write")
@@ -122,7 +136,12 @@ def test_code_endpoint_rejects_unlisted_project() -> None:
 
     @secured_app.middleware("http")
     async def access_control(request, call_next):
-        """为代码接口挂载项目访问控制。"""
+        """为代码接口挂载项目访问控制。
+
+        参数:
+            - `request`：FastAPI 请求上下文。
+            - `call_next`：继续调用下游中间件或路由的异步函数。
+        """
         return await auth_guard(request, call_next, settings)
 
     response = TestClient(secured_app).get(

@@ -21,9 +21,9 @@ class CodeRepository:
     def __init__(self, root: str, project: str) -> None:
         """校验项目标识并解析项目根目录。
 
-        Args:
-            root: 所有项目仓库的根目录。
-            project: 项目标识，对应根目录下的一级子目录。
+        参数:
+            - `root`：所有项目仓库的根目录，类型为 `str`。
+            - `project`：项目标识，对应根目录下的一级子目录，类型为 `str`。
         """
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", project):
             raise CodeToolError("项目标识包含非法字符")
@@ -37,7 +37,11 @@ class CodeRepository:
         self.path = repository
 
     def safe_file(self, relative_path: str) -> Path:
-        """将项目内相对路径解析为安全文件路径并阻止路径穿越。"""
+        """将项目内相对路径解析为安全文件路径并阻止路径穿越。
+
+        参数:
+            - `relative_path`：项目内相对路径，类型为 `str`。
+        """
         candidate = (self.path / relative_path).resolve()
         if self.path not in candidate.parents and candidate != self.path:
             raise CodeToolError("文件路径超出项目目录")
@@ -54,7 +58,16 @@ def read_file(
     end_line: int = 200,
     max_bytes: int = 512_000,
 ) -> Dict:
-    """读取项目文件的指定行区间，并返回带行号的代码内容。"""
+    """读取项目文件的指定行区间，并返回带行号的代码内容。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `relative_path`：项目内相对路径，类型为 `str`。
+        - `start_line`：读取起始行，类型为 `int`。
+        - `end_line`：读取结束行，类型为 `int`。
+        - `max_bytes`：最大读取字节数，类型为 `int`。
+    """
     if start_line < 1 or end_line < start_line or end_line - start_line > 1000:
         raise CodeToolError("行号范围无效，最多读取 1000 行")
     file_path = CodeRepository(root, project).safe_file(relative_path)
@@ -72,7 +85,12 @@ def read_file(
 
 
 def _iter_text_files(repository: Path, extensions: Iterable[str]) -> Iterable[Path]:
-    """遍历可检索的文本文件，跳过依赖、缓存和版本控制目录。"""
+    """遍历可检索的文本文件，跳过依赖、缓存和版本控制目录。
+
+    参数:
+        - `repository`：已验证的仓库对象，类型为 `Path`。
+        - `extensions`：允许检索的文件扩展名，类型为 `Iterable[str]`。
+    """
     allowed = set(extensions)
     ignored = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
     for path in repository.rglob("*"):
@@ -84,7 +102,14 @@ def _iter_text_files(repository: Path, extensions: Iterable[str]) -> Iterable[Pa
 
 
 def _python_search(repository: Path, query: str, max_results: int, extensions: List[str]) -> List[Dict]:
-    """在没有 ripgrep 时使用 Python 执行大小写不敏感的文本搜索。"""
+    """在没有 ripgrep 时使用 Python 执行大小写不敏感的文本搜索。
+
+    参数:
+        - `repository`：已验证的仓库对象，类型为 `Path`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `max_results`：最大结果数量，类型为 `int`。
+        - `extensions`：允许检索的文件扩展名，类型为 `List[str]`。
+    """
     matches: List[Dict] = []
     for path in _iter_text_files(repository, extensions):
         try:
@@ -110,7 +135,15 @@ def search_code(
     max_results: int = 20,
     extensions: Optional[List[str]] = None,
 ) -> Dict:
-    """在项目仓库中搜索固定字符串并返回文件、行号和匹配内容。"""
+    """在项目仓库中搜索固定字符串并返回文件、行号和匹配内容。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `max_results`：最大结果数量，类型为 `int`。
+        - `extensions`：允许检索的文件扩展名，类型为 `Optional[List[str]]`。
+    """
     query = query.strip()
     if not query or len(query) > 200:
         raise CodeToolError("搜索关键词不能为空且不能超过 200 个字符")
@@ -164,7 +197,12 @@ def search_code(
 
 
 def extract_search_queries(question: str, max_queries: int = 8) -> List[str]:
-    """从用户问题提取符号和中英文关键词，并按首次出现顺序去重。"""
+    """从用户问题提取符号和中英文关键词，并按首次出现顺序去重。
+
+    参数:
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `max_queries`：问题中提取的最大检索词数，类型为 `int`。
+    """
     candidates = re.findall(
         r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+"
         r"|[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*"

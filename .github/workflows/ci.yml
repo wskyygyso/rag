@@ -1,62 +1,83 @@
+# Pull Request 和 main 分支推送时执行统一质量门禁。
 name: CI
 
+# 只在代码评审和主分支合并时触发。
 on:
   pull_request:
   push:
     branches: ["main"]
 
+# CI 只需要读取仓库内容，默认不授予写权限。
 permissions:
   contents: read
 
 jobs:
+  # 在最低支持版本 Python 3.9 和运行版本 3.11 上并行验证。
   verify:
     runs-on: ubuntu-latest
     strategy:
+      # 一个版本失败时仍保留另一个版本的验证结果。
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.11"]
     steps:
+      # 获取当前提交代码。
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 安装目标 Python 并缓存 pip 下载。
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # 安装 Node，用于前端内联脚本语法检查。
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      # Compose 的 env_file 要求存在 .env；CI 使用无真实密钥的模板。
       - name: Prepare local environment file
         run: cp .env.example .env
 
+      # 安装应用和测试依赖。
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install '.[dev]'
 
+      # 执行全部单元和接口测试。
       - name: Run tests
         run: pytest -q
 
+      # 编译全部 Python 文件，检查语法解析错误。
       - name: Compile Python
         run: python -m compileall -q app tests scripts
 
+      # 强制检查类、函数和参数的中文上下文注释。
+      - name: Check comment coverage
+        run: python scripts/check_comment_coverage.py
+
+      # 校验 static/index.html 内联 JavaScript。
       - name: Check frontend syntax
         run: node scripts/check_frontend_syntax.js
 
+      # 运行不访问外部模型的固定诊断准确性基线。
       - name: Evaluate diagnosis baseline
         run: python scripts/evaluate_diagnosis.py
 
+      # 校验备份 shell 脚本语法。
       - name: Check shell syntax
         run: sh -n scripts/backup_metadata.sh
 
+      # 解析普通服务和 maintenance profile 的 Compose 配置。
       - name: Validate Compose
         run: |
           docker compose config > /dev/null
           docker compose --profile maintenance config > /dev/null
 
+      # 拒绝行尾空白和冲突标记等 diff 问题。
       - name: Check whitespace
         run: git diff --check

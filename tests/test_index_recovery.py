@@ -9,11 +9,21 @@ class _Pool:
     """捕获索引恢复 SQL 的连接池替身。"""
 
     def __init__(self, result: str = "UPDATE 2") -> None:
+        """初始化对象实例。
+
+        参数:
+            - `result`：模拟 PostgreSQL 更新命令返回的影响行数文本，类型为 `str`。
+        """
         self.result = result
         self.calls = []
 
     async def execute(self, query: str, *args: object) -> str:
-        """返回模拟更新数量。"""
+        """返回模拟更新数量。
+
+        参数:
+            - `query`：检索或查询文本，类型为 `str`。
+            - `*args`：可变位置参数集合。
+        """
         self.calls.append((query, args))
         return self.result
 

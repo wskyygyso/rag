@@ -23,7 +23,17 @@ def chunk_text(
     max_chars: int = 4000,
     overlap_lines: int = 3,
 ) -> List[Dict[str, Any]]:
-    """按行切分文本，保留来源、行号、哈希和少量上下文重叠。"""
+    """按行切分文本，保留来源、行号、哈希和少量上下文重叠。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `source_type`：分块来源类型，类型为 `str`。
+        - `source_id`：分块来源的稳定标识，类型为 `str`。
+        - `content`：待分块、解析或返回的文本内容，类型为 `str`。
+        - `file_path`：源代码或文档文件路径，类型为 `Optional[str]`。
+        - `max_chars`：单块或单字段最大字符数，类型为 `int`。
+        - `overlap_lines`：相邻文本分块重叠行数，类型为 `int`。
+    """
     if not project or not source_type or not source_id:
         raise ValueError("分块来源标识不能为空")
     if max_chars < 100 or max_chars > 50_000:
@@ -67,7 +77,13 @@ def chunk_text(
 
 
 def build_repository_chunks(root: str, project: str, max_chars: int = 4000) -> List[Dict[str, Any]]:
-    """扫描项目文本文件并生成可持久化的代码、配置和文档分块。"""
+    """扫描项目文本文件并生成可持久化的代码、配置和文档分块。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `max_chars`：单块或单字段最大字符数，类型为 `int`。
+    """
     try:
         repository = CodeRepository(root, project).path
     except CodeToolError as exc:
@@ -100,7 +116,14 @@ def build_repository_chunks(root: str, project: str, max_chars: int = 4000) -> L
 async def index_repository_documents(
     root: str, project: str, pool: asyncpg.Pool, max_chars: int = 4000
 ) -> int:
-    """扫描项目并事务性替换统一分块索引，返回写入分块数量。"""
+    """扫描项目并事务性替换统一分块索引，返回写入分块数量。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `max_chars`：单块或单字段最大字符数，类型为 `int`。
+    """
     chunks = build_repository_chunks(root, project, max_chars=max_chars)
     return await sync_document_chunks(pool, project, chunks)
 
@@ -108,7 +131,14 @@ async def index_repository_documents(
 async def search_document_chunks(
     pool: asyncpg.Pool, project: str, query: str, limit: int = 20
 ) -> List[Dict[str, Any]]:
-    """使用 PostgreSQL 全文索引召回项目分块，并返回来源和相关性分数。"""
+    """使用 PostgreSQL 全文索引召回项目分块，并返回来源和相关性分数。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     rows = await pool.fetch(
         """
         SELECT source_type, source_id, file_path, line_start, line_end, content, embedding,
@@ -163,14 +193,26 @@ async def search_document_chunks(
 async def replace_document_chunks(
     pool: asyncpg.Pool, project: str, chunks: List[Dict[str, Any]]
 ) -> int:
-    """兼容旧调用的项目分块同步入口。"""
+    """兼容旧调用的项目分块同步入口。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `chunks`：待写入或待统计的文档分块集合，类型为 `List[Dict[str, Any]]`。
+    """
     return await sync_document_chunks(pool, project, chunks)
 
 
 async def sync_document_chunks(
     pool: asyncpg.Pool, project: str, chunks: List[Dict[str, Any]]
 ) -> int:
-    """增量同步项目分块，仅更新变化内容并清理已删除来源。"""
+    """增量同步项目分块，仅更新变化内容并清理已删除来源。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `chunks`：待写入或待统计的文档分块集合，类型为 `List[Dict[str, Any]]`。
+    """
     source_types = sorted({chunk["source_type"] for chunk in chunks})
     source_ids = sorted({chunk["source_id"] for chunk in chunks})
     async with pool.acquire() as connection:

@@ -1,12 +1,21 @@
+# 本地真实环境变量和 Python 虚拟环境。
 .env
 .venv/
+
+# Python、pytest 和 lint 缓存。
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# 构建产物和 Python 打包元数据。
 dist/
 build/
 *.egg-info/
+
+# 操作系统和 IDE 本地文件。
 .DS_Store
 .idea/
+
+# 数据库备份可能包含敏感数据，禁止提交。
 backups/

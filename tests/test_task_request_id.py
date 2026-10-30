@@ -13,7 +13,12 @@ class _Pool:
         self.args = None
 
     async def fetchrow(self, query, *args):
-        """记录参数并返回空记录。"""
+        """记录参数并返回空记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         self.args = args
         return None
 

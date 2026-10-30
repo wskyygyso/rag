@@ -34,12 +34,24 @@ class CheckResult:
 
 
 def _result(name: str, status: str, message: str, **detail: Any) -> CheckResult:
-    """创建预检结果，统一状态值。"""
+    """创建预检结果，统一状态值。
+
+    参数:
+        - `name`：名称或标识，类型为 `str`。
+        - `status`：状态值，类型为 `str`。
+        - `message`：检查结果说明，类型为 `str`。
+        - `**detail`：结构化补充信息。
+    """
     return CheckResult(name=name, status=status, message=message, detail=detail)
 
 
 def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
-    """检查应用环境、认证、超时、保留期限和数据源配置。"""
+    """检查应用环境、认证、超时、保留期限和数据源配置。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `strict`：是否启用严格生产门禁，类型为 `bool`。
+    """
     results = []
     environment_status = "PASS" if settings.app_env == "production" else "WARN"
     results.append(
@@ -145,7 +157,11 @@ def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
 
 
 def enforce_production_settings(settings: Settings) -> None:
-    """生产环境关键静态配置不完整时拒绝启动，避免带病上线。"""
+    """生产环境关键静态配置不完整时拒绝启动，避免带病上线。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     if settings.app_env != "production":
         return
     failures = [
@@ -158,7 +174,11 @@ def enforce_production_settings(settings: Settings) -> None:
 
 
 async def check_metadata_database(settings: Settings) -> CheckResult:
-    """检查 RAgent 元数据库连接和核心表是否齐全。"""
+    """检查 RAgent 元数据库连接和核心表是否齐全。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     connection = None
     try:
         connection = await asyncpg.connect(settings.database_url, timeout=3)
@@ -182,7 +202,11 @@ async def check_metadata_database(settings: Settings) -> CheckResult:
 
 
 async def check_redis(settings: Settings) -> CheckResult:
-    """检查验证限流和任务基础设施所需的 Redis 连接。"""
+    """检查验证限流和任务基础设施所需的 Redis 连接。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     client = redis_asyncio.from_url(settings.redis_url, decode_responses=True)
     try:
         await client.ping()
@@ -194,7 +218,11 @@ async def check_redis(settings: Settings) -> CheckResult:
 
 
 async def check_validation_database(settings: Settings) -> Optional[CheckResult]:
-    """连接目标数据库并验证 READ ONLY 事务实际生效。"""
+    """连接目标数据库并验证 READ ONLY 事务实际生效。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     validation_url = (settings.validation_database_url or "").strip()
     if not validation_url or validation_url == (settings.database_url or "").strip():
         return None
@@ -219,7 +247,12 @@ async def check_validation_database(settings: Settings) -> Optional[CheckResult]
 
 
 async def run_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
-    """执行配置和外部依赖检查，按注册顺序返回全部结果。"""
+    """执行配置和外部依赖检查，按注册顺序返回全部结果。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `strict`：是否启用严格生产门禁，类型为 `bool`。
+    """
     results = static_preflight(settings, strict)
     results.append(await check_metadata_database(settings))
     results.append(await check_redis(settings))

@@ -1,18 +1,25 @@
+# RAgent 本地/单机部署编排：API、诊断 Worker、索引 Worker、Redis 和 PostgreSQL。
 services:
+  # HTTP API：处理认证、任务、报告、验证请求和前端页面。
   api:
     build: .
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # 本地开发配置从 .env 读取；生产应由部署平台注入 Secret Manager 值。
     env_file:
       - .env
+    # 仓库只读挂载，禁止 API 修改被诊断项目代码。
     volumes:
       - ./repositories:/repositories:ro
+    # 宿主机 8000 端口映射到 API 容器。
     ports:
       - "8000:8000"
+    # API 启动前等待 Redis 和 PostgreSQL 健康。
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # readiness 检查核心依赖，失败时容器标记 unhealthy。
     healthcheck:
       test:
         - CMD
@@ -24,6 +31,7 @@ services:
       retries: 5
       start_period: 10s
 
+  # 诊断 Worker：只消费 diagnosis 队列，避免被长索引任务阻塞。
   worker:
     build: .
     command: celery -A app.worker.celery_app worker --loglevel=INFO -Q diagnosis
@@ -37,6 +45,7 @@ services:
       postgres:
         condition: service_healthy
 
+  # 文档索引 Worker：只消费 index 队列，可与诊断 Worker 独立扩缩容。
   index-worker:
     build: .
     command: celery -A app.worker.celery_app worker --loglevel=INFO -Q index
@@ -50,6 +59,7 @@ services:
       postgres:
         condition: service_healthy
 
+  # Redis：验证限流、LLM 缓存、Celery broker 和结果后端。
   redis:
     image: redis:7-alpine
     healthcheck:
@@ -58,12 +68,15 @@ services:
       timeout: 3s
       retries: 10
 
+  # PostgreSQL：保存 RAgent 元数据、证据、反馈、索引和安全审计。
   postgres:
     image: postgres:16-alpine
+    # 本地默认账号仅供开发；生产必须替换密码并使用外部托管数据库。
     environment:
       POSTGRES_DB: ragent
       POSTGRES_USER: ragent
       POSTGRES_PASSWORD: ragent
+    # 命名卷持久化 PostgreSQL 数据，不能使用临时容器文件系统。
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -72,10 +85,13 @@ services:
       timeout: 3s
       retries: 10
 
+  # 维护 profile：显式执行数据库备份，不参与普通 docker compose up。
   backup:
     image: postgres:16-alpine
+    # 仅维护命令启用，普通启动不会创建备份容器。
     profiles: ["maintenance"]
     command: ["sh", "/scripts/backup_metadata.sh"]
+    # PostgreSQL 连接和备份目标参数；密码在生产中应由 Secret 管理。
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -83,13 +99,17 @@ services:
       PGUSER: ragent
       PGPASSWORD: ragent
       BACKUP_DIR: /backups
+      # 控制保留的 RAgent 备份份数，默认 7。
       BACKUP_KEEP: "${BACKUP_KEEP:-7}"
+    # 脚本只读挂载；备份文件写入被 Git 忽略的宿主 backups/ 目录。
     volumes:
       - ./scripts:/scripts:ro
       - ./backups:/backups
+    # 备份前必须等待 PostgreSQL 可连接。
     depends_on:
       postgres:
         condition: service_healthy
 
+# 持久化数据库数据卷。
 volumes:
   postgres_data:

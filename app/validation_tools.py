@@ -41,7 +41,18 @@ async def record_validation_audit(
     result_summary: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
 ) -> None:
-    """通过共享连接池写入验证审计记录，并在写入前递归脱敏摘要。"""
+    """通过共享连接池写入验证审计记录，并在写入前递归脱敏摘要。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `operation`：操作类型，类型为 `str`。
+        - `status`：状态值，类型为 `str`。
+        - `task_id`：诊断任务 ID，类型为 `Optional[str]`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `request_summary`：验证请求脱敏摘要，类型为 `Optional[Dict[str, Any]]`。
+        - `result_summary`：验证结果脱敏摘要，类型为 `Optional[Dict[str, Any]]`。
+        - `error`：失败原因或数据库异常，类型为 `Optional[str]`。
+    """
     try:
         await insert_validation_audit(
             pool,
@@ -59,7 +70,11 @@ async def record_validation_audit(
 
 
 def _redact_summary(value: Any) -> Any:
-    """递归脱敏审计摘要，并限制长文本，避免意外写入密钥或大字段。"""
+    """递归脱敏审计摘要，并限制长文本，避免意外写入密钥或大字段。
+
+    参数:
+        - `value`：待递归脱敏和长度限制的验证审计摘要，类型为 `Any`。
+    """
     if isinstance(value, str):
         return redact_sensitive(value)[:2000]
     if isinstance(value, dict):
@@ -79,8 +94,11 @@ def _redact_summary(value: Any) -> Any:
 def validate_readonly_sql(sql: str) -> str:
     """校验 SQL 只包含一条只读查询，并返回规范化 SQL。
 
-    允许 `SELECT` 查询和以 `WITH` 开头、最终执行 SELECT 的查询，拒绝写操作、
-    多语句和空查询。
+        允许 `SELECT` 查询和以 `WITH` 开头、最终执行 SELECT 的查询，拒绝写操作、
+        多语句和空查询。
+
+    参数:
+        - `sql`：待执行或展示的 SQL，类型为 `str`。
     """
     normalized = re.sub(r"/\*.*?\*/|--[^\n]*", " ", sql or "", flags=re.S).strip()
     if not normalized:
@@ -99,12 +117,21 @@ def validate_readonly_sql(sql: str) -> str:
 
 
 def redact_sensitive(value: str) -> str:
-    """对日志或数据库结果中的常见敏感键值进行脱敏。"""
+    """对日志或数据库结果中的常见敏感键值进行脱敏。
+
+    参数:
+        - `value`：待隐藏 Token、密码或 Cookie 的日志或数据库文本，类型为 `str`。
+    """
     return SENSITIVE_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}***", value)
 
 
 def _redact_result_value(key: str, value: Any) -> str:
-    """按字段名和字段内容共同脱敏数据库结果，防止裸敏感列透出。"""
+    """按字段名和字段内容共同脱敏数据库结果，防止裸敏感列透出。
+
+    参数:
+        - `key`：Redis、配置或字典键，类型为 `str`。
+        - `value`：数据库结果中待按字段名脱敏的列值，类型为 `Any`。
+    """
     if SENSITIVE_KEY_PATTERN.search(key):
         return "***"
     return redact_sensitive(str(value))
@@ -120,8 +147,16 @@ async def query_database(
 ) -> Dict[str, Any]:
     """执行只读数据库查询并返回脱敏结果。
 
-    ``max_rows`` 限制返回记录数，``max_result_bytes`` 限制序列化后的响应大小；
-    连接超时、查询超时和数据库异常统一转换为业务异常，避免泄露底层连接细节。
+        ``max_rows`` 限制返回记录数，``max_result_bytes`` 限制序列化后的响应大小；
+        连接超时、查询超时和数据库异常统一转换为业务异常，避免泄露底层连接细节。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+        - `sql`：待执行或展示的 SQL，类型为 `str`。
+        - `params`：SQL 绑定参数，类型为 `Optional[List[Any]]`。
+        - `max_rows`：最大返回行数，类型为 `int`。
+        - `timeout_seconds`：超时时间秒数，类型为 `float`。
+        - `max_result_bytes`：结果最大字节数，类型为 `int`。
     """
     if max_rows < 1 or max_rows > 1000:
         raise ValidationToolError("最大返回行数必须在 1 到 1000 之间")
@@ -167,7 +202,14 @@ def read_config(
     relative_path: str,
     max_bytes: int = 512_000,
 ) -> Dict[str, Any]:
-    """读取项目配置文件并返回脱敏后的内容。"""
+    """读取项目配置文件并返回脱敏后的内容。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `relative_path`：项目内相对路径，类型为 `str`。
+        - `max_bytes`：最大读取字节数，类型为 `int`。
+    """
     try:
         file_path = CodeRepository(root, project).safe_file(relative_path)
     except CodeToolError as exc:
@@ -189,7 +231,15 @@ def search_logs(
     query: str,
     max_results: int = 100,
 ) -> Dict[str, Any]:
-    """在项目日志文件中按关键词检索并对匹配内容脱敏。"""
+    """在项目日志文件中按关键词检索并对匹配内容脱敏。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `relative_path`：项目内相对路径，类型为 `str`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `max_results`：最大结果数量，类型为 `int`。
+    """
     if not query or len(query) > 200:
         raise ValidationToolError("日志关键词不能为空且不能超过 200 个字符")
     if max_results < 1 or max_results > 1000:

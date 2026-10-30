@@ -10,12 +10,23 @@ class _Pool:
     """模拟失败任务重置和任务查询的连接池。"""
 
     def __init__(self, status: str = "FAILED", retry_count: int = 0):
-        """保存待模拟的任务状态和重试次数。"""
+        """保存待模拟的任务状态和重试次数。
+
+        参数:
+            - `status`：状态值，类型为 `str`。
+            - `retry_count`：任务已人工重试次数，类型为 `int`。
+        """
         self.status = status
         self.retry_count = retry_count
 
     async def fetchrow(self, query, task_id, *args):
-        """按更新或查询 SQL 返回对应任务记录。"""
+        """按更新或查询 SQL 返回对应任务记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `task_id`：诊断任务 ID。
+            - `*args`：可变位置参数集合。
+        """
         if "retry_count = retry_count + 1" in query:
             if self.status != "FAILED" or self.retry_count >= 3:
                 return None
@@ -49,7 +60,11 @@ class _QueuedTask:
         self.task_ids = []
 
     def delay(self, task_id):
-        """记录任务 ID，模拟异步队列投递。"""
+        """记录任务 ID，模拟异步队列投递。
+
+        参数:
+            - `task_id`：诊断任务 ID。
+        """
         self.task_ids.append(task_id)
 
 
@@ -57,12 +72,20 @@ class _BrokenTask:
     """模拟无法连接队列的 Celery 任务入口。"""
 
     def delay(self, task_id):
-        """抛出投递异常，验证任务状态恢复逻辑。"""
+        """抛出投递异常，验证任务状态恢复逻辑。
+
+        参数:
+            - `task_id`：诊断任务 ID。
+        """
         raise RuntimeError("broker unavailable")
 
 
 def test_failed_diagnosis_can_be_retried(monkeypatch) -> None:
-    """验证失败任务会重置并重新投递到 Worker。"""
+    """验证失败任务会重置并重新投递到 Worker。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     queued = _QueuedTask()
     monkeypatch.setattr(worker, "run_diagnosis_task", queued)
     app.state.db_pool = _Pool()
@@ -91,7 +114,11 @@ def test_retry_rejects_non_failed_or_exhausted_task() -> None:
 
 
 def test_retry_marks_task_failed_when_queue_is_unavailable(monkeypatch) -> None:
-    """验证队列投递失败时接口返回 503，避免任务停留在排队状态。"""
+    """验证队列投递失败时接口返回 503，避免任务停留在排队状态。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     pool = _Pool()
     monkeypatch.setattr(worker, "run_diagnosis_task", _BrokenTask())
     app.state.db_pool = pool

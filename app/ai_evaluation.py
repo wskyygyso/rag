@@ -4,7 +4,12 @@ from typing import Any, Dict, Iterable, Set
 
 
 def _recall(expected: Iterable[str], actual: Set[str]) -> float:
-    """计算证据引用召回率，空期望视为完全命中。"""
+    """计算证据引用召回率，空期望视为完全命中。
+
+    参数:
+        - `expected`：评测期望命中的集合，类型为 `Iterable[str]`。
+        - `actual`：实际命中的结果集合，类型为 `Set[str]`。
+    """
     expected_set = {str(item) for item in expected}
     if not expected_set:
         return 1.0
@@ -12,7 +17,12 @@ def _recall(expected: Iterable[str], actual: Set[str]) -> float:
 
 
 def evaluate_ai_case(case: Dict[str, Any], diagnosis: Dict[str, Any]) -> Dict[str, Any]:
-    """按证据引用、不确定性、建议动作和原因数量评估单个 AI 输出。"""
+    """按证据引用、不确定性、建议动作和原因数量评估单个 AI 输出。
+
+    参数:
+        - `case`：评测用例数据，类型为 `Dict[str, Any]`。
+        - `diagnosis`：AI 诊断结构化结果，类型为 `Dict[str, Any]`。
+    """
     causes = diagnosis.get("possible_causes") or []
     actual_refs = {
         str(ref)
@@ -47,7 +57,11 @@ def evaluate_ai_case(case: Dict[str, Any], diagnosis: Dict[str, Any]) -> Dict[st
 
 
 def summarize_ai_evaluations(results: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-    """汇总 AI 用例通过率和平均证据引用召回。"""
+    """汇总 AI 用例通过率和平均证据引用召回。
+
+    参数:
+        - `results`：评测结果集合，类型为 `Iterable[Dict[str, Any]]`。
+    """
     items = list(results)
     executed = [item for item in items if not item.get("skipped")]
     passed = sum(1 for item in executed if item["passed"])

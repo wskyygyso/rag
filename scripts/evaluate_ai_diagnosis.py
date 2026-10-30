@@ -19,7 +19,13 @@ from app.settings import get_settings
 
 
 def build_case_result(root: str, case: Dict[str, Any], index: Dict[str, Any]) -> Dict[str, Any]:
-    """为单个评测用例收集代码证据、符号、配置和 SQL 摘要。"""
+    """为单个评测用例收集代码证据、符号、配置和 SQL 摘要。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `case`：评测用例数据，类型为 `Dict[str, Any]`。
+        - `index`：项目代码或符号索引，类型为 `Dict[str, Any]`。
+    """
     queries = extract_search_queries(case["question"])
     evidence = []
     seen = set()
@@ -52,7 +58,12 @@ def build_case_result(root: str, case: Dict[str, Any], index: Dict[str, Any]) ->
 
 
 async def run_cases(root: str, cases: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """逐项目复用索引，调用真实 LLM 并评估结构化输出。"""
+    """逐项目复用索引，调用真实 LLM 并评估结构化输出。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `cases`：评测用例集合，类型为 `List[Dict[str, Any]]`。
+    """
     settings = get_settings()
     indexes = {}
     results = []

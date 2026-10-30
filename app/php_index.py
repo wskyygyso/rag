@@ -25,12 +25,22 @@ IGNORED_CALLS = {"if", "for", "foreach", "while", "switch", "catch", "function",
 
 
 def _line_number(source: str, position: int) -> int:
-    """根据字符串偏移量计算从 1 开始的源代码行号。"""
+    """根据字符串偏移量计算从 1 开始的源代码行号。
+
+    参数:
+        - `source`：PHP 源码文本，类型为 `str`。
+        - `position`：源码字符位置，类型为 `int`。
+    """
     return source.count("\n", 0, position) + 1
 
 
 def _enclosing_class(classes: List[Tuple[int, str]], position: int) -> Optional[str]:
-    """返回声明位置之前最近的类名，用于组装方法全限定名。"""
+    """返回声明位置之前最近的类名，用于组装方法全限定名。
+
+    参数:
+        - `classes`：PHP 类声明及其源码位置，类型为 `List[Tuple[int, str]]`。
+        - `position`：源码字符位置，类型为 `int`。
+    """
     current = None
     for class_position, class_name in classes:
         if class_position > position:
@@ -40,7 +50,12 @@ def _enclosing_class(classes: List[Tuple[int, str]], position: int) -> Optional[
 
 
 def _enclosing_method(methods: List[Tuple[int, str]], position: int) -> Optional[str]:
-    """返回调用位置之前最近的方法名，用于建立调用边的起点。"""
+    """返回调用位置之前最近的方法名，用于建立调用边的起点。
+
+    参数:
+        - `methods`：PHP 方法声明及其源码位置，类型为 `List[Tuple[int, str]]`。
+        - `position`：源码字符位置，类型为 `int`。
+    """
     current = None
     for method_position, method_name in methods:
         if method_position > position:
@@ -52,9 +67,9 @@ def _enclosing_method(methods: List[Tuple[int, str]], position: int) -> Optional
 def parse_php_source(source: str, file_path: str) -> Dict[str, List[Dict]]:
     """解析 PHP 源码中的符号、调用关系、配置读取和 SQL 片段。
 
-    Args:
-        source: PHP 文件全文。
-        file_path: 文件相对路径，用于写入证据来源。
+    参数:
+        - `source`：PHP 文件全文，类型为 `str`。
+        - `file_path`：源码在项目中的相对路径，用于写入证据来源，类型为 `str`。
 
     Returns:
         包含 `symbols`、`references`、`configs` 和 `sql` 四类结果的字典。
@@ -127,7 +142,11 @@ def parse_php_source(source: str, file_path: str) -> Dict[str, List[Dict]]:
 
 
 def iter_php_files(repository: CodeRepository) -> Iterable[Path]:
-    """遍历项目中的 PHP 文件，并跳过依赖和缓存目录。"""
+    """遍历项目中的 PHP 文件，并跳过依赖和缓存目录。
+
+    参数:
+        - `repository`：已验证的仓库对象，类型为 `CodeRepository`。
+    """
     ignored = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
     for path in repository.path.rglob("*.php"):
         if path.is_file() and not any(part in ignored for part in path.parts):
@@ -135,7 +154,12 @@ def iter_php_files(repository: CodeRepository) -> Iterable[Path]:
 
 
 def index_repository(root: str, project: str) -> Dict[str, List[Dict]]:
-    """扫描一个项目并合并所有 PHP 文件的符号和引用结果。"""
+    """扫描一个项目并合并所有 PHP 文件的符号和引用结果。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+    """
     repository = CodeRepository(root, project)
     result: Dict[str, List[Dict]] = {
         "symbols": [],
@@ -160,7 +184,13 @@ def trace_call_chain(
 ) -> Dict[str, List[Dict]]:
     """从指定入口沿静态调用关系展开调用链。
 
-    未找到定义的外部目标仍会保留为边，但不会伪造目标文件和行号。
+        未找到定义的外部目标仍会保留为边，但不会伪造目标文件和行号。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `entry`：调用链入口符号，类型为 `str`。
+        - `depth`：调用链展开深度，类型为 `int`。
     """
     if depth < 1 or depth > 10:
         raise ValueError("调用链深度必须在 1 到 10 之间")
@@ -173,7 +203,13 @@ def trace_index_call_chain(
     entry: str,
     depth: int = 5,
 ) -> Dict[str, List[Dict]]:
-    """基于已有项目索引展开调用链，避免重复扫描 PHP 仓库。"""
+    """基于已有项目索引展开调用链，避免重复扫描 PHP 仓库。
+
+    参数:
+        - `index`：项目代码或符号索引，类型为 `Dict[str, List[Dict]]`。
+        - `entry`：调用链入口符号，类型为 `str`。
+        - `depth`：调用链展开深度，类型为 `int`。
+    """
     if depth < 1 or depth > 10:
         raise ValueError("调用链深度必须在 1 到 10 之间")
     symbols = {item["symbol_name"]: item for item in index["symbols"]}

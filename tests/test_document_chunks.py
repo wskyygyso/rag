@@ -42,7 +42,11 @@ def test_chunk_text_rejects_invalid_boundaries() -> None:
 
 
 def test_build_repository_chunks_skips_dependencies_and_classifies_sources(tmp_path) -> None:
-    """验证仓库扫描跳过依赖目录，并区分 PHP 代码和普通文档。"""
+    """验证仓库扫描跳过依赖目录，并区分 PHP 代码和普通文档。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
     project = tmp_path / "waky3"
     (project / "src").mkdir(parents=True)
     (project / "vendor").mkdir()

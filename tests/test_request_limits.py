@@ -10,7 +10,11 @@ from app.request_limits import RequestBodyTooLarge, read_limited_body
 
 
 def _stream_request(chunks):
-    """构造能按块返回请求体的 Starlette 请求。"""
+    """构造能按块返回请求体的 Starlette 请求。
+
+    参数:
+        - `chunks`：待写入或待统计的文档分块集合。
+    """
     messages = iter([{"type": "http.request", "body": chunk, "more_body": True} for chunk in chunks])
     messages = iter(list(messages) + [{"type": "http.request", "body": b"", "more_body": False}])
 
@@ -44,7 +48,11 @@ async def test_streamed_body_rejects_after_limit_without_buffering_rest() -> Non
 
 
 def test_api_rejects_oversized_request_body(monkeypatch) -> None:
-    """验证 API 中间件在业务解析前返回 413。"""
+    """验证 API 中间件在业务解析前返回 413。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
     previous = main.settings.max_request_body_bytes
     main.settings.max_request_body_bytes = 20
     try:

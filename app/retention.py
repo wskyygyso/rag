@@ -86,7 +86,11 @@ RETENTION_TARGETS = (
 
 
 def _affected_rows(result: str) -> int:
-    """从 PostgreSQL DELETE 命令结果中提取受影响行数。"""
+    """从 PostgreSQL DELETE 命令结果中提取受影响行数。
+
+    参数:
+        - `result`：PostgreSQL DELETE 命令返回的执行结果，类型为 `str`。
+    """
     suffix = result.rsplit(" ", 1)[-1]
     return int(suffix) if suffix.isdigit() else 0
 
@@ -94,7 +98,13 @@ def _affected_rows(result: str) -> int:
 def _validate_retention_args(
     retention_days: Dict[str, int], batch_size: int, max_batches: int
 ) -> None:
-    """校验期限、批大小和最大批次数，避免误删和非终止循环。"""
+    """校验期限、批大小和最大批次数，避免误删和非终止循环。
+
+    参数:
+        - `retention_days`：各数据目标的保留天数配置，类型为 `Dict[str, int]`。
+        - `batch_size`：单批处理数量，类型为 `int`。
+        - `max_batches`：允许执行的最大批次数，类型为 `int`。
+    """
     for name, days in retention_days.items():
         if days < 1 or days > 3650:
             raise ValueError(f"{name} 保留天数必须在 1 到 3650 天之间")
@@ -112,7 +122,15 @@ async def cleanup_retention(
     max_batches: int = 100,
     apply: bool = False,
 ) -> Dict[str, Any]:
-    """统计过期数据；应用模式下按小批次删除并返回完整执行状态。"""
+    """统计过期数据；应用模式下按小批次删除并返回完整执行状态。
+
+    参数:
+        - `pool`：数据库连接池或测试替身。
+        - `retention_days`：各数据目标的保留天数配置，类型为 `Dict[str, int]`。
+        - `batch_size`：单批处理数量，类型为 `int`。
+        - `max_batches`：允许执行的最大批次数，类型为 `int`。
+        - `apply`：是否真正执行变更，类型为 `bool`。
+    """
     expected_names = {target.name for target in RETENTION_TARGETS}
     if set(retention_days) != expected_names:
         raise ValueError("保留策略必须包含全部数据目标")

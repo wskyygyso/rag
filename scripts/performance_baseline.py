@@ -12,7 +12,12 @@ import httpx
 
 
 def percentile(values: Sequence[float], ratio: float) -> float:
-    """使用最近秩法计算百分位，空样本返回 0。"""
+    """使用最近秩法计算百分位，空样本返回 0。
+
+    参数:
+        - `values`：Prometheus 标签键值集合，类型为 `Sequence[float]`。
+        - `ratio`：百分位比例，类型为 `float`。
+    """
     if not values:
         return 0.0
     if ratio <= 0 or ratio > 1:
@@ -28,7 +33,14 @@ def summarize_samples(
     errors: int,
     elapsed_seconds: float,
 ) -> Dict[str, Any]:
-    """汇总延迟、错误率、状态码和吞吐指标。"""
+    """汇总延迟、错误率、状态码和吞吐指标。
+
+    参数:
+        - `latencies_ms`：请求延迟毫秒样本，类型为 `List[float]`。
+        - `status_counts`：HTTP 状态码计数，类型为 `Dict[str, int]`。
+        - `errors`：性能测试失败请求数，类型为 `int`。
+        - `elapsed_seconds`：性能测试总耗时，类型为 `float`。
+    """
     total = len(latencies_ms)
     error_rate = errors / total if total else 1.0
     return {
@@ -54,7 +66,14 @@ async def run_baseline(
     requests_count: int,
     concurrency: int,
 ) -> Dict[str, Any]:
-    """按指定并发执行请求，并返回可机器读取的性能摘要。"""
+    """按指定并发执行请求，并返回可机器读取的性能摘要。
+
+    参数:
+        - `client`：HTTP 异步客户端，类型为 `httpx.AsyncClient`。
+        - `path`：文件或请求路径，类型为 `str`。
+        - `requests_count`：性能测试总请求数，类型为 `int`。
+        - `concurrency`：并发请求数，类型为 `int`。
+    """
     if requests_count < 1 or concurrency < 1:
         raise ValueError("请求数和并发数必须为正数")
     semaphore = asyncio.Semaphore(concurrency)
@@ -103,7 +122,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    """执行基线并返回阈值检查退出码。"""
+    """执行基线并返回阈值检查退出码。
+
+    参数:
+        - `args`：可变位置参数集合，类型为 `argparse.Namespace`。
+    """
     headers = {}
     api_key = os.getenv("RAGENT_API_KEY")
     if api_key:

@@ -14,7 +14,12 @@ class RateLimiter:
     """按调用方标识维护固定时间窗口计数的限流器。"""
 
     def __init__(self, limit: int, window_seconds: float = 60.0) -> None:
-        """创建限流器；``limit`` 必须为正数，窗口必须大于零。"""
+        """创建限流器；``limit`` 必须为正数，窗口必须大于零。
+
+        参数:
+            - `limit`：单次结果数量上限，类型为 `int`。
+            - `window_seconds`：限流固定窗口秒数，类型为 `float`。
+        """
         if limit < 1 or window_seconds <= 0:
             raise ValueError("限流阈值和时间窗口必须为正数")
         self.limit = limit
@@ -23,7 +28,11 @@ class RateLimiter:
         self._lock = Lock()
 
     def allow(self, key: str) -> bool:
-        """判断调用方在当前窗口内是否还可以执行一次请求。"""
+        """判断调用方在当前窗口内是否还可以执行一次请求。
+
+        参数:
+            - `key`：Redis、配置或字典键，类型为 `str`。
+        """
         now = time.monotonic()
         with self._lock:
             events = self._events[key]
@@ -48,7 +57,14 @@ class RedisRateLimiter:
     """
 
     def __init__(self, client, limit: int, window_seconds: int, namespace: str = "rag:rate") -> None:
-        """创建共享限流器；客户端需兼容 redis.asyncio 的 eval 接口。"""
+        """创建共享限流器；客户端需兼容 redis.asyncio 的 eval 接口。
+
+        参数:
+            - `client`：HTTP 异步客户端。
+            - `limit`：单次结果数量上限，类型为 `int`。
+            - `window_seconds`：限流固定窗口秒数，类型为 `int`。
+            - `namespace`：Redis 键前缀或代码命名空间，类型为 `str`。
+        """
         if limit < 1 or window_seconds <= 0:
             raise ValueError("限流阈值和时间窗口必须为正数")
         self.client = client
@@ -64,12 +80,23 @@ class RedisRateLimiter:
         window_seconds: int,
         namespace: str = "rag:rate",
     ) -> "RedisRateLimiter":
-        """根据 Redis URL 创建共享限流器，连接在实际请求时惰性建立。"""
+        """根据 Redis URL 创建共享限流器，连接在实际请求时惰性建立。
+
+        参数:
+            - `redis_url`：Redis 连接地址，类型为 `str`。
+            - `limit`：单次结果数量上限，类型为 `int`。
+            - `window_seconds`：限流固定窗口秒数，类型为 `int`。
+            - `namespace`：Redis 键前缀或代码命名空间，类型为 `str`。
+        """
         client = redis_asyncio.from_url(redis_url, decode_responses=True)
         return cls(client, limit, window_seconds, namespace)
 
     async def allow(self, key: str) -> bool:
-        """原子增加窗口计数并返回当前请求是否未超过限制。"""
+        """原子增加窗口计数并返回当前请求是否未超过限制。
+
+        参数:
+            - `key`：Redis、配置或字典键，类型为 `str`。
+        """
         bucket = math.floor(time.time() / self.window_seconds)
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         redis_key = f"{self.namespace}:{digest}:{bucket}"

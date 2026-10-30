@@ -68,7 +68,18 @@ async def _audit(
     result_summary: Optional[dict] = None,
     error: Optional[str] = None,
 ) -> None:
-    """向共享连接池写入审计；数据库不可用时跳过审计而不阻断验证接口。"""
+    """向共享连接池写入审计；数据库不可用时跳过审计而不阻断验证接口。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `operation`：操作类型，类型为 `str`。
+        - `status`：状态值，类型为 `str`。
+        - `task_id`：诊断任务 ID，类型为 `Optional[str]`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `request_summary`：验证请求脱敏摘要，类型为 `Optional[dict]`。
+        - `result_summary`：验证结果脱敏摘要，类型为 `Optional[dict]`。
+        - `error`：失败原因或数据库异常，类型为 `Optional[str]`。
+    """
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         return
@@ -85,7 +96,11 @@ async def _audit(
 
 
 def _client_key(request: Request) -> str:
-    """优先使用认证主体限流，未认证时回退到客户端地址。"""
+    """优先使用认证主体限流，未认证时回退到客户端地址。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     identity = api_identity(request)
     if identity is not None:
         return f"subject:{identity.subject}"
@@ -93,7 +108,11 @@ def _client_key(request: Request) -> str:
 
 
 async def _check_rate_limit(request: Request) -> None:
-    """使用应用共享限流器检查请求，后端不可用时安全拒绝验证请求。"""
+    """使用应用共享限流器检查请求，后端不可用时安全拒绝验证请求。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     limiter = getattr(request.app.state, "validation_rate_limiter", rate_limiter)
     try:
         allowed = limiter.allow(_client_key(request))
@@ -112,7 +131,12 @@ async def _check_rate_limit(request: Request) -> None:
 
 @router.post("/database/query")
 async def database_query(payload: DatabaseQueryRequest, request: Request) -> dict:
-    """执行只读 SQL，并记录查询审计摘要。"""
+    """执行只读 SQL，并记录查询审计摘要。
+
+    参数:
+        - `payload`：HTTP 请求体或 LLM 响应载荷，类型为 `DatabaseQueryRequest`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     require_project_access(request, payload.project)
     await _check_rate_limit(request)
     try:
@@ -157,7 +181,12 @@ async def database_query(payload: DatabaseQueryRequest, request: Request) -> dic
 
 @router.post("/config/read")
 async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
-    """读取项目配置文件，返回已脱敏内容。"""
+    """读取项目配置文件，返回已脱敏内容。
+
+    参数:
+        - `payload`：HTTP 请求体或 LLM 响应载荷，类型为 `ConfigReadRequest`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     require_project_access(request, payload.project)
     await _check_rate_limit(request)
     try:
@@ -187,7 +216,12 @@ async def config_read(payload: ConfigReadRequest, request: Request) -> dict:
 
 @router.post("/logs/search")
 async def logs_search(payload: LogSearchRequest, request: Request) -> dict:
-    """检索项目日志关键词，返回已脱敏的匹配行。"""
+    """检索项目日志关键词，返回已脱敏的匹配行。
+
+    参数:
+        - `payload`：HTTP 请求体或 LLM 响应载荷，类型为 `LogSearchRequest`。
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     require_project_access(request, payload.project)
     await _check_rate_limit(request)
     try:

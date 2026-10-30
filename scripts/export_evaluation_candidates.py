@@ -27,7 +27,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    """连接元数据库导出候选，并拒绝覆盖已有文件。"""
+    """连接元数据库导出候选，并拒绝覆盖已有文件。
+
+    参数:
+        - `args`：可变位置参数集合，类型为 `argparse.Namespace`。
+    """
     if args.days < 1 or args.days > 3650 or args.limit < 1 or args.limit > 1000:
         raise SystemExit("--days 或 --limit 超出允许范围")
     settings = get_settings()

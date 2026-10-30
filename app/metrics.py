@@ -58,7 +58,11 @@ def begin_http_request() -> float:
 
 
 def route_template(request: Request) -> str:
-    """优先使用已匹配路由模板，否则将动态路径归一化，限制标签基数。"""
+    """优先使用已匹配路由模板，否则将动态路径归一化，限制标签基数。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     route = request.scope.get("route")
     route_path = getattr(route, "path", None)
     if route_path:
@@ -82,7 +86,13 @@ def route_template(request: Request) -> str:
 
 
 def finish_http_request(request: Request, started_at: float, status_code: int) -> None:
-    """记录请求计数、状态码和延迟直方图，并减少并发请求计数。"""
+    """记录请求计数、状态码和延迟直方图，并减少并发请求计数。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `started_at`：请求开始或运行开始时间，类型为 `float`。
+        - `status_code`：HTTP 响应状态码，类型为 `int`。
+    """
     global _IN_FLIGHT
     duration = max(0.0, time.perf_counter() - started_at)
     key = (request.method, route_template(request), status_code)
@@ -98,12 +108,20 @@ def finish_http_request(request: Request, started_at: float, status_code: int) -
 
 
 def _escape_label(value: str) -> str:
-    """转义 Prometheus 标签中的反斜杠、引号和换行。"""
+    """转义 Prometheus 标签中的反斜杠、引号和换行。
+
+    参数:
+        - `value`：待写入 Prometheus 标签的原始文本，类型为 `str`。
+    """
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 def _labels(**values: str) -> str:
-    """生成稳定排序的 Prometheus 标签集合。"""
+    """生成稳定排序的 Prometheus 标签集合。
+
+    参数:
+        - `**values`：Prometheus 标签键值集合。
+    """
     content = ",".join(
         f'{key}="{_escape_label(str(value))}"' for key, value in sorted(values.items())
     )
@@ -167,7 +185,11 @@ def render_runtime_metrics() -> str:
 
 
 async def render_database_metrics(pool) -> str:
-    """查询任务状态、任务操作和安全拒绝聚合指标，采集失败时标记数据库不可用。"""
+    """查询任务状态、任务操作和安全拒绝聚合指标，采集失败时标记数据库不可用。
+
+    参数:
+        - `pool`：数据库连接池或测试替身。
+    """
     global _DATABASE_COLLECTION_ERRORS
     try:
         task_rows, operation_rows, security_rows = await asyncio.wait_for(
@@ -230,7 +252,11 @@ async def render_database_metrics(pool) -> str:
 
 @router.get("/metrics", response_class=PlainTextResponse)
 async def metrics_endpoint(request: Request) -> PlainTextResponse:
-    """返回 Prometheus 可抓取的文本指标；启用认证时沿用 API Key 保护。"""
+    """返回 Prometheus 可抓取的文本指标；启用认证时沿用 API Key 保护。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         database_content = "\n".join(

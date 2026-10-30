@@ -13,7 +13,12 @@ class _Pool:
         self.calls = []
 
     async def execute(self, query, *args):
-        """保存 SQL 和参数，模拟异步写入。"""
+        """保存 SQL 和参数，模拟异步写入。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         self.calls.append((query, args))
 
 

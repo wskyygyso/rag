@@ -34,7 +34,12 @@ class DocumentIndexResult:
 
 
 def _repository_revision(root: str, project: str) -> Optional[str]:
-    """读取项目 Git HEAD，非 Git 仓库或命令失败时返回 None。"""
+    """读取项目 Git HEAD，非 Git 仓库或命令失败时返回 None。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+    """
     try:
         return subprocess.run(
             ["git", "-C", str(Path(root) / project), "rev-parse", "HEAD"],
@@ -48,7 +53,12 @@ def _repository_revision(root: str, project: str) -> Optional[str]:
 
 
 async def _run_detailed(project: str, dry_run: bool = False) -> DocumentIndexResult:
-    """执行索引或复用同版本索引，并返回分块数量和复用状态。"""
+    """执行索引或复用同版本索引，并返回分块数量和复用状态。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `dry_run`：是否仅扫描而不写入数据库，类型为 `bool`。
+    """
     settings = get_settings()
     if dry_run:
         return DocumentIndexResult(
@@ -80,7 +90,12 @@ async def _run_detailed(project: str, dry_run: bool = False) -> DocumentIndexRes
 
 
 async def _run(project: str, dry_run: bool = False) -> int:
-    """兼容旧调用方，仅返回文档分块数量。"""
+    """兼容旧调用方，仅返回文档分块数量。
+
+    参数:
+        - `project`：项目标识，类型为 `str`。
+        - `dry_run`：是否仅扫描而不写入数据库，类型为 `bool`。
+    """
     result = await _run_detailed(project, dry_run)
     return result.chunk_count
 

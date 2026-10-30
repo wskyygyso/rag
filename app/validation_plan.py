@@ -40,7 +40,11 @@ class ValidationPlan(BaseModel):
 
 
 def validation_plan_dict(plan: Optional[ValidationPlan]) -> Optional[Dict[str, Any]]:
-    """把验证计划转换为可写入 JSONB 的字典；未请求验证时返回 None。"""
+    """把验证计划转换为可写入 JSONB 的字典；未请求验证时返回 None。
+
+    参数:
+        - `plan`：按需只读验证计划，类型为 `Optional[ValidationPlan]`。
+    """
     if plan is None:
         return None
     return plan.model_dump(mode="json")

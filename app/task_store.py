@@ -187,7 +187,11 @@ CREATE INDEX IF NOT EXISTS idx_document_index_runs_project_started
 
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
-    """创建数据库连接池，并确保任务和证据表存在。"""
+    """创建数据库连接池，并确保任务和证据表存在。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
@@ -249,7 +253,11 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
 
 
 def _decode_task(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
-    """将 asyncpg 记录转换为可 JSON 序列化的任务字典。"""
+    """将 asyncpg 记录转换为可 JSON 序列化的任务字典。
+
+    参数:
+        - `row`：单条数据库记录，类型为 `Optional[asyncpg.Record]`。
+    """
     if row is None:
         return None
     task = dict(row)
@@ -274,7 +282,18 @@ async def insert_task(
     validation_plan: Optional[Dict[str, Any]] = None,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """插入排队状态的诊断任务，并保存可选的只读验证计划。"""
+    """插入排队状态的诊断任务，并保存可选的只读验证计划。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户提交的诊断问题，类型为 `str`。
+        - `environment`：诊断目标环境，类型为 `str`。
+        - `created_by`：任务创建者标识，类型为 `Optional[str]`。
+        - `validation_plan`：创建任务时提交的验证计划，类型为 `Optional[Dict[str, Any]]`。
+        - `request_id`：HTTP 请求关联 ID，类型为 `Optional[str]`。
+    """
     row = await pool.fetchrow(
         """
         INSERT INTO diagnostic_tasks
@@ -294,7 +313,12 @@ async def insert_task(
 
 
 async def get_task(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str, Any]]:
-    """根据任务 ID 查询任务，不存在时返回 None。"""
+    """根据任务 ID 查询任务，不存在时返回 None。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     row = await pool.fetchrow("SELECT * FROM diagnostic_tasks WHERE id = $1", task_id)
     return _decode_task(row)
 
@@ -310,12 +334,28 @@ async def list_tasks(
     offset: int = 0,
     limit: int = 20,
 ) -> list[Dict[str, Any]]:
-    """按筛选条件分页读取历史诊断任务，并仅返回报告列表所需字段。"""
+    """按筛选条件分页读取历史诊断任务，并仅返回报告列表所需字段。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `status`：状态值，类型为 `Optional[str]`。
+        - `query`：检索或查询文本，类型为 `Optional[str]`。
+        - `request_id`：HTTP 请求关联 ID，类型为 `Optional[str]`。
+        - `days`：最近天数范围，类型为 `Optional[int]`。
+        - `offset`：分页起始偏移，类型为 `int`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     conditions = []
     values: list[Any] = []
 
     def add_condition(sql: str, value: Any) -> None:
-        """追加带位置参数的安全筛选条件。"""
+        """追加带位置参数的安全筛选条件。
+
+        参数:
+            - `sql`：待执行或展示的 SQL，类型为 `str`。
+            - `value`：SQL 条件占位符对应的绑定参数值，类型为 `Any`。
+        """
         values.append(value)
         conditions.append(sql.replace("$VALUE", f"${len(values)}"))
 
@@ -365,7 +405,17 @@ async def update_task(
     result: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """按需更新任务状态、进度、结果或错误信息。"""
+    """按需更新任务状态、进度、结果或错误信息。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `status`：状态值，类型为 `Optional[str]`。
+        - `progress`：任务完成百分比，类型为 `Optional[int]`。
+        - `current_step`：任务当前执行步骤说明，类型为 `Optional[str]`。
+        - `result`：任务完成时需要持久化的诊断报告结果，类型为 `Optional[Dict[str, Any]]`。
+        - `error`：失败原因或数据库异常，类型为 `Optional[str]`。
+    """
     row = await pool.fetchrow(
         """
         UPDATE diagnostic_tasks
@@ -389,7 +439,12 @@ async def update_task(
 
 
 async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str, Any]]:
-    """将未结束任务原子地标记为已取消。"""
+    """将未结束任务原子地标记为已取消。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     row = await pool.fetchrow(
         """
         UPDATE diagnostic_tasks
@@ -405,7 +460,13 @@ async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str,
 async def prepare_task_retry(
     pool: asyncpg.Pool, task_id: str, max_retries: int = 3
 ) -> Optional[Dict[str, Any]]:
-    """将失败任务原子重置为排队状态，并限制人工重试次数。"""
+    """将失败任务原子重置为排队状态，并限制人工重试次数。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `max_retries`：任务允许的最大重试次数，类型为 `int`。
+    """
     row = await pool.fetchrow(
         """
         UPDATE diagnostic_tasks
@@ -426,7 +487,12 @@ async def prepare_task_retry(
 
 
 async def clear_task_evidence(pool: asyncpg.Pool, task_id: str) -> None:
-    """清理任务旧证据，避免人工重试后重复保存相同上下文。"""
+    """清理任务旧证据，避免人工重试后重复保存相同上下文。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     await pool.execute("DELETE FROM diagnostic_evidence WHERE task_id = $1", task_id)
 
 
@@ -441,7 +507,18 @@ async def insert_task_operation(
     request_id: Optional[str] = None,
     detail: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """写入任务操作审计，调用方应传入不含敏感信息的操作摘要。"""
+    """写入任务操作审计，调用方应传入不含敏感信息的操作摘要。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `operation`：操作类型，类型为 `str`。
+        - `from_status`：状态变更前值，类型为 `Optional[str]`。
+        - `to_status`：状态变更后值，类型为 `Optional[str]`。
+        - `actor`：操作主体标识，类型为 `Optional[str]`。
+        - `request_id`：HTTP 请求关联 ID，类型为 `Optional[str]`。
+        - `detail`：结构化补充信息，类型为 `Optional[Dict[str, Any]]`。
+    """
     await pool.execute(
         """
         INSERT INTO diagnostic_task_operations
@@ -470,7 +547,19 @@ async def insert_security_audit(
     actor: Optional[str] = None,
     request_id: Optional[str] = None,
 ) -> None:
-    """写入认证或授权拒绝摘要，调用方不得传入请求头或原始 API Key。"""
+    """写入认证或授权拒绝摘要，调用方不得传入请求头或原始 API Key。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `event_type`：安全审计事件类型，类型为 `str`。
+        - `status_code`：HTTP 响应状态码，类型为 `int`。
+        - `reason`：安全拒绝原因，类型为 `str`。
+        - `method`：HTTP 请求方法，类型为 `str`。
+        - `path`：文件或请求路径，类型为 `str`。
+        - `client_address`：调用方客户端地址，类型为 `Optional[str]`。
+        - `actor`：操作主体标识，类型为 `Optional[str]`。
+        - `request_id`：HTTP 请求关联 ID，类型为 `Optional[str]`。
+    """
     await pool.execute(
         """
         INSERT INTO security_audit
@@ -491,7 +580,13 @@ async def insert_security_audit(
 async def list_task_operations(
     pool: asyncpg.Pool, task_id: str, limit: int = 100
 ) -> list[Dict[str, Any]]:
-    """按时间倒序返回任务操作审计轨迹，并限制单次读取数量。"""
+    """按时间倒序返回任务操作审计轨迹，并限制单次读取数量。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     rows = await pool.fetch(
         """
         SELECT id, task_id, operation, from_status, to_status, actor, request_id, detail, created_at
@@ -515,7 +610,13 @@ async def list_task_operations(
 
 
 async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, Any]) -> None:
-    """保存一条诊断证据，并记录其来源工具和上下文。"""
+    """保存一条诊断证据，并记录其来源工具和上下文。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `evidence`：诊断证据记录，类型为 `Dict[str, Any]`。
+    """
     await pool.execute(
         """
         INSERT INTO diagnostic_evidence
@@ -537,7 +638,13 @@ async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, 
 async def replace_symbol_index(
     pool: asyncpg.Pool, project: str, index: Dict[str, Any]
 ) -> int:
-    """原子替换项目符号索引，并返回写入的符号数量。"""
+    """原子替换项目符号索引，并返回写入的符号数量。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `index`：项目代码或符号索引，类型为 `Dict[str, Any]`。
+    """
     symbols = index.get("symbols", [])
     references = index.get("references", [])
     references_by_source: Dict[str, list] = {}
@@ -577,7 +684,18 @@ async def insert_validation_audit(
     result_summary: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
 ) -> None:
-    """写入一条验证工具审计记录，调用方应传入已脱敏摘要。"""
+    """写入一条验证工具审计记录，调用方应传入已脱敏摘要。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `operation`：操作类型，类型为 `str`。
+        - `status`：状态值，类型为 `str`。
+        - `task_id`：诊断任务 ID，类型为 `Optional[str]`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+        - `request_summary`：验证请求脱敏摘要，类型为 `Optional[Dict[str, Any]]`。
+        - `result_summary`：验证结果脱敏摘要，类型为 `Optional[Dict[str, Any]]`。
+        - `error`：失败原因或数据库异常，类型为 `Optional[str]`。
+    """
     await pool.execute(
         """
         INSERT INTO validation_audit
@@ -595,7 +713,11 @@ async def insert_validation_audit(
 
 
 def _decode_feedback(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
-    """将反馈记录转换为接口可返回的字典，并规范化创建时间。"""
+    """将反馈记录转换为接口可返回的字典，并规范化创建时间。
+
+    参数:
+        - `row`：单条数据库记录，类型为 `Optional[asyncpg.Record]`。
+    """
     if row is None:
         return None
     feedback = dict(row)
@@ -612,7 +734,15 @@ async def insert_feedback(
     comment: Optional[str] = None,
     submitted_by: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """保存一条诊断任务人工反馈，并返回脱离数据库类型的记录。"""
+    """保存一条诊断任务人工反馈，并返回脱离数据库类型的记录。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `rating`：人工反馈类型，类型为 `str`。
+        - `comment`：人工反馈说明，类型为 `Optional[str]`。
+        - `submitted_by`：反馈提交者标识，类型为 `Optional[str]`。
+    """
     row = await pool.fetchrow(
         """
         INSERT INTO diagnostic_feedback (task_id, rating, comment, submitted_by)
@@ -630,7 +760,13 @@ async def insert_feedback(
 async def list_feedback(
     pool: asyncpg.Pool, task_id: str, limit: int = 50
 ) -> list[Dict[str, Any]]:
-    """按时间倒序返回诊断任务反馈，并限制单次读取数量。"""
+    """按时间倒序返回诊断任务反馈，并限制单次读取数量。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+    """
     rows = await pool.fetch(
         """
         SELECT id, task_id, rating, comment, submitted_by, created_at
@@ -651,7 +787,12 @@ async def list_feedback(
 
 
 async def summarize_feedback(pool: asyncpg.Pool, task_id: str) -> Dict[str, Any]:
-    """汇总任务反馈数量和最近反馈时间，供质量看板使用。"""
+    """汇总任务反馈数量和最近反馈时间，供质量看板使用。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `task_id`：诊断任务 ID，类型为 `str`。
+    """
     rows = await pool.fetch(
         """
         SELECT rating, COUNT(*) AS count, MAX(created_at) AS latest_at
@@ -681,7 +822,12 @@ async def summarize_feedback(pool: asyncpg.Pool, task_id: str) -> Dict[str, Any]
 
 
 async def summarize_project_feedback(pool: asyncpg.Pool, project: str) -> Dict[str, Any]:
-    """按项目汇总多个诊断任务的反馈数量、任务数和最近反馈时间。"""
+    """按项目汇总多个诊断任务的反馈数量、任务数和最近反馈时间。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+    """
     rows = await pool.fetch(
         """
         SELECT f.rating, COUNT(*) AS count, COUNT(DISTINCT f.task_id) AS task_count,
@@ -729,7 +875,12 @@ async def summarize_project_feedback(pool: asyncpg.Pool, project: str) -> Dict[s
 
 
 async def start_document_index_run(pool: asyncpg.Pool, project: str) -> int:
-    """创建一条运行中的文档索引记录并返回运行 ID。"""
+    """创建一条运行中的文档索引记录并返回运行 ID。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+    """
     return await start_document_index_run_with_revision(pool, project)
 
 
@@ -739,7 +890,14 @@ async def find_reusable_document_index_run(
     repository_revision: str,
     index_version: str = "v1",
 ) -> Optional[Dict[str, Any]]:
-    """返回同仓库版本、同索引版本且分块完整的最近成功运行。"""
+    """返回同仓库版本、同索引版本且分块完整的最近成功运行。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `repository_revision`：仓库提交版本，类型为 `str`。
+        - `index_version`：文档索引版本，类型为 `str`。
+    """
     row = await pool.fetchrow(
         """
         SELECT r.id, r.chunk_count, r.repository_revision, r.index_version,
@@ -765,7 +923,13 @@ async def find_reusable_document_index_run(
 async def recover_stale_document_index_runs(
     pool: asyncpg.Pool, project: str, stale_minutes: int = 60
 ) -> int:
-    """将项目超时未结束的索引运行标记为失败，并返回恢复数量。"""
+    """将项目超时未结束的索引运行标记为失败，并返回恢复数量。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `stale_minutes`：判定悬挂状态的分钟数，类型为 `int`。
+    """
     if stale_minutes < 1 or stale_minutes > 7 * 24 * 60:
         raise ValueError("索引超时窗口必须在 1 分钟到 7 天之间")
     result = await pool.execute(
@@ -787,7 +951,12 @@ async def recover_stale_document_index_runs(
 async def recover_stale_diagnosis_tasks(
     pool: asyncpg.Pool, stale_minutes: int = 10
 ) -> int:
-    """将超过执行窗口仍处于运行阶段的任务标记为失败，恢复 Worker 中断状态。"""
+    """将超过执行窗口仍处于运行阶段的任务标记为失败，恢复 Worker 中断状态。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `stale_minutes`：判定悬挂状态的分钟数，类型为 `int`。
+    """
     if stale_minutes < 1 or stale_minutes > 7 * 24 * 60:
         raise ValueError("诊断任务超时窗口必须在 1 分钟到 7 天之间")
     result = await pool.execute(
@@ -812,7 +981,14 @@ async def start_document_index_run_with_revision(
     repository_revision: Optional[str] = None,
     index_version: str = "v1",
 ) -> int:
-    """创建带仓库提交版本和索引版本的运行记录。"""
+    """创建带仓库提交版本和索引版本的运行记录。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `repository_revision`：仓库提交版本，类型为 `Optional[str]`。
+        - `index_version`：文档索引版本，类型为 `str`。
+    """
     row = await pool.fetchrow(
         """
         INSERT INTO document_index_runs (project, status, repository_revision, index_version)
@@ -833,7 +1009,15 @@ async def finish_document_index_run(
     chunk_count: int = 0,
     error: Optional[str] = None,
 ) -> None:
-    """完成文档索引运行记录，保存数量或受控错误信息。"""
+    """完成文档索引运行记录，保存数量或受控错误信息。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `run_id`：运行记录 ID，类型为 `int`。
+        - `status`：状态值，类型为 `str`。
+        - `chunk_count`：文档分块数量，类型为 `int`。
+        - `error`：失败原因或数据库异常，类型为 `Optional[str]`。
+    """
     await pool.execute(
         """
         UPDATE document_index_runs
@@ -848,7 +1032,13 @@ async def finish_document_index_run(
 
 
 async def cleanup_document_index_runs(pool: asyncpg.Pool, project: str, keep: int = 50) -> int:
-    """保留项目最近若干条索引运行记录并删除更早的终态记录。"""
+    """保留项目最近若干条索引运行记录并删除更早的终态记录。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `keep`：每个项目保留的索引运行记录数，类型为 `int`。
+    """
     if keep < 1 or keep > 1000:
         raise ValueError("索引运行保留数量必须在 1 到 1000 之间")
     result = await pool.execute(

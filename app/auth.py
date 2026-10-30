@@ -30,7 +30,11 @@ class ApiIdentity:
 
 @lru_cache(maxsize=8)
 def _parse_api_keys(raw_config: str) -> Dict[str, ApiIdentity]:
-    """解析 API Key JSON 配置，非法配置直接拒绝而不是静默放行。"""
+    """解析 API Key JSON 配置，非法配置直接拒绝而不是静默放行。
+
+    参数:
+        - `raw_config`：原始配置文本，类型为 `str`。
+    """
     try:
         config = json.loads(raw_config or "{}")
     except json.JSONDecodeError as exc:
@@ -69,7 +73,11 @@ def _parse_api_keys(raw_config: str) -> Dict[str, ApiIdentity]:
 
 
 def validate_auth_settings(settings: Settings) -> None:
-    """在应用启动时校验认证配置，启用认证后不得使用空密钥集合。"""
+    """在应用启动时校验认证配置，启用认证后不得使用空密钥集合。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     if not settings.auth_enabled:
         return
     if not _parse_api_keys(settings.api_keys_json):
@@ -77,7 +85,11 @@ def validate_auth_settings(settings: Settings) -> None:
 
 
 def _presented_key(request: Request) -> Optional[str]:
-    """从 X-API-Key 或 Bearer Authorization 中提取调用方密钥。"""
+    """从 X-API-Key 或 Bearer Authorization 中提取调用方密钥。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     api_key = request.headers.get("X-API-Key")
     if api_key:
         return api_key
@@ -89,7 +101,12 @@ def _presented_key(request: Request) -> Optional[str]:
 
 
 def authenticate_request(request: Request, settings: Settings) -> Optional[ApiIdentity]:
-    """校验 API Key 和请求方法所需 scope，返回调用方身份。"""
+    """校验 API Key 和请求方法所需 scope，返回调用方身份。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     if not settings.auth_enabled:
         return None
     try:
@@ -125,7 +142,12 @@ def authenticate_request(request: Request, settings: Settings) -> Optional[ApiId
 
 
 async def record_security_denial(request: Request, exc: HTTPException) -> None:
-    """尽力写入认证或授权拒绝摘要，审计故障不改变原始安全响应。"""
+    """尽力写入认证或授权拒绝摘要，审计故障不改变原始安全响应。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `exc`：当前捕获的异常，类型为 `HTTPException`。
+    """
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
         return
@@ -149,7 +171,12 @@ async def record_security_denial(request: Request, exc: HTTPException) -> None:
 
 
 async def security_http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """记录路由内 401/403 拒绝，并返回与 FastAPI 默认格式一致的响应。"""
+    """记录路由内 401/403 拒绝，并返回与 FastAPI 默认格式一致的响应。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `exc`：当前捕获的异常，类型为 `HTTPException`。
+    """
     if exc.status_code in {401, 403}:
         await record_security_denial(request, exc)
     return JSONResponse(
@@ -164,7 +191,13 @@ async def auth_guard(
     call_next: Callable[[Request], Awaitable[Response]],
     settings: Settings,
 ) -> Response:
-    """保护所有 API 路径；健康检查、文档和前端页面保持公开。"""
+    """保护所有 API 路径；健康检查、文档和前端页面保持公开。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `call_next`：继续调用下游中间件或路由的异步函数，类型为 `Callable[[Request], Awaitable[Response]]`。
+        - `settings`：应用运行配置，类型为 `Settings`。
+    """
     path = request.url.path
     if not settings.auth_enabled or not path.startswith("/api/") or path in PUBLIC_PATHS:
         return await call_next(request)
@@ -181,12 +214,21 @@ async def auth_guard(
 
 
 def api_identity(request: Request) -> Optional[ApiIdentity]:
-    """读取中间件认证后写入请求上下文的调用方身份。"""
+    """读取中间件认证后写入请求上下文的调用方身份。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+    """
     return getattr(request.state, "api_identity", None)
 
 
 def require_project_access(request: Request, project: Optional[str]) -> None:
-    """校验当前调用方是否允许访问指定项目；未启用认证时保持原行为。"""
+    """校验当前调用方是否允许访问指定项目；未启用认证时保持原行为。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `project`：项目标识，类型为 `Optional[str]`。
+    """
     identity = api_identity(request)
     if identity is None:
         if get_settings().auth_enabled:
@@ -199,7 +241,12 @@ def require_project_access(request: Request, project: Optional[str]) -> None:
 
 
 def operation_actor(request: Request, fallback: Optional[str] = None) -> Optional[str]:
-    """优先使用可信认证身份作为操作审计主体，开发模式兼容 X-Actor。"""
+    """优先使用可信认证身份作为操作审计主体，开发模式兼容 X-Actor。
+
+    参数:
+        - `request`：FastAPI 请求上下文，类型为 `Request`。
+        - `fallback`：认证不可用时的回退操作人，类型为 `Optional[str]`。
+    """
     identity = api_identity(request)
     if identity is not None:
         return identity.subject

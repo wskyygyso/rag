@@ -1,6 +1,10 @@
+# Prometheus 告警规则。
+# severity=critical 表示需要立即处理，warning 表示需要关注趋势。
+# for 表示表达式持续满足多久后触发，避免瞬时抖动误报。
 groups:
   - name: php-diagnostic-ragent
     rules:
+      # 数据库指标采集失败意味着核心状态统计不可用。
       - alert: RagentDatabaseMetricsDown
         expr: ragent_database_up == 0
         for: 2m
@@ -10,6 +14,7 @@ groups:
           summary: RAgent 数据库指标采集失败
           description: 指标接口连续 2 分钟无法读取 PostgreSQL，请检查数据库连接和任务表。
 
+      # API 5xx 比例持续超过 5% 时触发。
       - alert: RagentHttpErrorRateHigh
         expr: |
           (
@@ -24,6 +29,7 @@ groups:
           summary: RAgent HTTP 5xx 比例超过 5%
           description: 最近 5 分钟服务端错误比例持续过高。
 
+      # API P95 延迟持续超过 2 秒时检查数据库和队列。
       - alert: RagentHttpP95LatencyHigh
         expr: |
           histogram_quantile(
@@ -37,6 +43,7 @@ groups:
           summary: RAgent HTTP P95 延迟超过 2 秒
           description: 最近 5 分钟 API P95 延迟持续过高，请检查数据库和队列依赖。
 
+      # 当前并发请求持续过高，可能存在慢请求或线程阻塞。
       - alert: RagentInFlightRequestsHigh
         expr: ragent_http_in_flight_requests > 100
         for: 5m
@@ -46,6 +53,7 @@ groups:
           summary: RAgent 并发请求持续过高
           description: 当前并发请求持续超过 100，请检查慢请求和下游依赖。
 
+      # 认证或授权拒绝激增，提示异常访问或密钥配置问题。
       - alert: RagentSecurityDenialsSpike
         expr: sum(increase(ragent_security_denials_total[5m])) > 20
         for: 1m
@@ -55,6 +63,7 @@ groups:
           summary: RAgent 认证或授权拒绝短时激增
           description: 最近 5 分钟安全拒绝超过 20 次，请检查异常访问或密钥配置。
 
+      # 人工重试突然增多，提示 Worker 或外部依赖异常。
       - alert: RagentTaskRetrySpike
         expr: sum(increase(ragent_task_operations_total{operation="RETRY"}[10m])) > 5
         for: 5m
@@ -64,6 +73,7 @@ groups:
           summary: RAgent 诊断任务重试次数异常
           description: 最近 10 分钟人工重试超过 5 次，请检查 Worker 和外部依赖。
 
+      # 失败任务累计超过阈值，需要检查错误分布。
       - alert: RagentFailedTasksPresent
         expr: sum(ragent_diagnosis_tasks{status="FAILED"}) > 5
         for: 10m
@@ -73,6 +83,7 @@ groups:
           summary: RAgent 存在较多失败诊断任务
           description: 当前失败任务累计超过 5 个，请检查失败原因和重试状态。
 
+      # 指标接口自身连续采集失败，避免形成监控盲区。
       - alert: RagentMetricsCollectionErrors
         expr: increase(ragent_database_metrics_collection_errors_total[10m]) > 2
         for: 5m

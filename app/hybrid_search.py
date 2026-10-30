@@ -16,7 +16,11 @@ SOURCE_WEIGHTS = {"code": 1.0, "symbol": 0.9, "chunk": 0.85, "history": 0.6}
 
 
 def _tokens(query: str) -> List[str]:
-    """提取中英文检索词并去重，供符号结果匹配和排序使用。"""
+    """提取中英文检索词并去重，供符号结果匹配和排序使用。
+
+    参数:
+        - `query`：检索或查询文本，类型为 `str`。
+    """
     words = re.findall(r"[A-Za-z_][A-Za-z0-9_:]*|[\u4e00-\u9fff]{2,}", query.lower())
     return list(dict.fromkeys(words))
 
@@ -29,7 +33,16 @@ async def _search_history(
     offset: int,
     history_days: Optional[int],
 ) -> List[Dict[str, Any]]:
-    """从已完成诊断任务中召回包含关键词的问题，并仅返回安全摘要。"""
+    """从已完成诊断任务中召回包含关键词的问题，并仅返回安全摘要。
+
+    参数:
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：项目标识，类型为 `str`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+        - `offset`：分页起始偏移，类型为 `int`。
+        - `history_days`：历史诊断结果最近天数范围，类型为 `Optional[int]`。
+    """
     since = (
         datetime.now(timezone.utc) - timedelta(days=history_days)
         if history_days is not None
@@ -74,7 +87,18 @@ async def search_hybrid(
     history_days: Optional[int] = None,
     source_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """合并多来源召回结果，按来源权重和原始相关性分数统一排序。"""
+    """合并多来源召回结果，按来源权重和原始相关性分数统一排序。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `query`：检索或查询文本，类型为 `str`。
+        - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `limit`：单次结果数量上限，类型为 `int`。
+        - `history_offset`：历史诊断结果分页偏移，类型为 `int`。
+        - `history_days`：历史诊断结果最近天数范围，类型为 `Optional[int]`。
+        - `source_types`：混合检索来源筛选类型，类型为 `Optional[List[str]]`。
+    """
     query = query.strip()
     if not query or len(query) > 200:
         raise CodeToolError("检索关键词不能为空且不能超过 200 个字符")

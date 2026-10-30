@@ -11,7 +11,12 @@ class _Pool:
     """返回固定历史任务列表的连接池替身。"""
 
     async def fetch(self, query, *args):
-        """返回带时间字段的历史任务摘要。"""
+        """返回带时间字段的历史任务摘要。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `*args`：可变位置参数集合。
+        """
         assert "ORDER BY created_at DESC" in query
         assert "request_id = $" in query
         assert args[-2:] == (0, 10)

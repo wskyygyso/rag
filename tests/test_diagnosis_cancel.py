@@ -9,11 +9,20 @@ class _Pool:
     """模拟任务取消与任务查询的连接池。"""
 
     def __init__(self, status: str = "RUNNING"):
-        """保存任务当前状态。"""
+        """保存任务当前状态。
+
+        参数:
+            - `status`：状态值，类型为 `str`。
+        """
         self.status = status
 
     async def fetchrow(self, query, task_id):
-        """根据更新或查询 SQL 返回任务记录。"""
+        """根据更新或查询 SQL 返回任务记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `task_id`：诊断任务 ID。
+        """
         if task_id == "missing":
             return None
         if query.lstrip().startswith("UPDATE"):
@@ -35,7 +44,13 @@ class _Pool:
         }
 
     async def fetch(self, query, task_id, limit):
-        """返回一条任务操作审计记录。"""
+        """返回一条任务操作审计记录。
+
+        参数:
+            - `query`：检索或查询文本。
+            - `task_id`：诊断任务 ID。
+            - `limit`：单次结果数量上限。
+        """
         return [{"id": 1, "task_id": task_id, "operation": "CANCEL", "from_status": "RUNNING", "to_status": "CANCELLED", "actor": "reviewer", "detail": {}, "created_at": "2026-10-08T00:00:00+08:00"}]
 
 

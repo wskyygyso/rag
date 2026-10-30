@@ -10,7 +10,12 @@ from scripts import index_document_repository
 
 @pytest.mark.asyncio
 async def test_document_index_reuses_complete_same_revision(monkeypatch, tmp_path: Path) -> None:
-    """验证同 Git SHA 和索引版本且分块完整时跳过重建。"""
+    """验证同 Git SHA 和索引版本且分块完整时跳过重建。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具。
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
     pool = SimpleNamespace()
 
     async def close():
@@ -18,12 +23,24 @@ async def test_document_index_reuses_complete_same_revision(monkeypatch, tmp_pat
         return None
 
     async def reusable(current_pool, project, revision, version):
-        """返回可复用的运行记录。"""
+        """返回可复用的运行记录。
+
+        参数:
+            - `current_pool`：当前步骤使用的数据库连接池。
+            - `project`：项目标识。
+            - `revision`：仓库版本。
+            - `version`：索引版本标识。
+        """
         assert (project, revision, version) == ("waky3", "abc123", "v1")
         return {"chunk_count": 42}
 
     async def should_not_index(*args, **kwargs):
-        """复用后不应执行索引。"""
+        """复用后不应执行索引。
+
+        参数:
+            - `*args`：可变位置参数集合。
+            - `**kwargs`：按关键字传入的附加参数集合。
+        """
         raise AssertionError("不应重建索引")
 
     pool.close = close
@@ -44,10 +61,19 @@ async def test_document_index_reuses_complete_same_revision(monkeypatch, tmp_pat
 
 
 async def _recover(current_pool, project):
-    """模拟无悬挂索引。"""
+    """模拟无悬挂索引。
+
+    参数:
+        - `current_pool`：当前步骤使用的数据库连接池。
+        - `project`：项目标识。
+    """
     return 0
 
 
 async def _return(value):
-    """为异步 monkeypatch 返回固定值。"""
+    """为异步 monkeypatch 返回固定值。
+
+    参数:
+        - `value`：异步 monkeypatch 需要直接返回的固定对象。
+    """
     return value

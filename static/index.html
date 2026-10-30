@@ -129,7 +129,12 @@
       const $ = (id) => document.getElementById(id);
       const nativeFetch = window.fetch.bind(window);
 
-      // 为所有 API 请求附加当前页面内存中的 API Key。
+      /**
+       * 为 API 请求附加当前页面内存中的 API Key。
+       * @param {RequestInfo|URL} input 请求地址或 Request 对象。
+       * @param {RequestInit} init 原始 fetch 配置。
+       * @returns {Promise<Response>} 带认证头的 fetch Promise。
+       */
       function apiFetch(input, init = {}) {
         const headers = new Headers(init.headers || {});
         const apiKey = $("api-key").value.trim();
@@ -137,13 +142,16 @@
         return nativeFetch(input, { ...init, headers });
       }
 
-      // 停止当前进度流，避免切换任务后保留旧连接。
+      /** 停止当前任务进度流，避免切换任务后保留旧连接。 */
       function stopWatching() {
         if (state.eventController) state.eventController.abort();
         state.eventController = null;
       }
 
-      // 将 API 任务摘要同步到页面，避免把服务端文本作为 HTML 执行。
+      /**
+       * 将 API 任务摘要同步到页面，并以纯文本方式渲染。
+       * @param {Object} task 诊断任务状态摘要。
+       */
       function renderTask(task) {
         $("task-id").textContent = task.task_id || "-";
         $("task-status").textContent = task.status || "-";
@@ -155,7 +163,11 @@
         $("retry-task").hidden = task.status !== "FAILED";
       }
 
-      // 拉取 Markdown 报告并在页面中以纯文本预览。
+      /**
+       * 拉取 Markdown 报告并在页面中以纯文本预览。
+       * @param {string} taskId 诊断任务 ID。
+       * @returns {Promise<void>}
+       */
       async function loadReport(taskId) {
         const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
         if (!response.ok) throw new Error(`报告获取失败（${response.status}）`);
@@ -163,7 +175,11 @@
         $("copy-report").disabled = false;
       }
 
-      // 拉取已有人工反馈，帮助审阅者确认提交结果。
+      /**
+       * 拉取任务人工反馈和反馈类型统计。
+       * @param {string} taskId 诊断任务 ID。
+       * @returns {Promise<void>}
+       */
       async function loadFeedback(taskId) {
         const base = `/api/diagnoses/${encodeURIComponent(taskId)}/feedback`;
         const [response, summaryResponse] = await Promise.all([apiFetch(base), apiFetch(`${base}/summary`)]);
@@ -176,7 +192,11 @@
           : `${header}\n\n暂无反馈。`;
       }
 
-      // 拉取任务创建、取消和重试等操作审计轨迹。
+      /**
+       * 拉取任务创建、取消和重试操作审计轨迹。
+       * @param {string} taskId 诊断任务 ID。
+       * @returns {Promise<void>}
+       */
       async function loadOperations(taskId) {
         const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/operations?limit=100`);
         if (!response.ok) throw new Error(`操作轨迹获取失败（${response.status}）`);
@@ -186,7 +206,11 @@
           : "暂无操作记录。";
       }
 
-      // 使用 fetch 流读取 SSE，以便认证模式下携带 API Key。
+      /**
+       * 使用 fetch 流读取 SSE，以便认证模式下携带 API Key。
+       * @param {string} taskId 诊断任务 ID。
+       * @returns {Promise<void>}
+       */
       async function watchTask(taskId) {
         stopWatching();
         const controller = new AbortController();
@@ -226,7 +250,11 @@
         }
       }
 
-      // 创建诊断任务，并把返回的任务 ID 交给 SSE 进度订阅。
+      /**
+       * 创建诊断任务并订阅执行进度。
+       * @param {SubmitEvent} event 诊断表单提交事件。
+       * @returns {Promise<void>}
+       */
       $("diagnosis-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         $("submit").disabled = true;
@@ -254,7 +282,11 @@
         }
       });
 
-      // 提交当前任务的人工反馈，并刷新反馈列表。
+      /**
+       * 提交当前任务人工反馈并刷新反馈列表。
+       * @param {SubmitEvent} event 反馈表单提交事件。
+       * @returns {Promise<void>}
+       */
       $("feedback-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!state.taskId) return;
@@ -275,13 +307,17 @@
         }
       });
 
-      // 加载当前项目最近任务，便于从前端回看历史诊断。
+      /** 重新加载当前项目的最近诊断任务。 */
       $("history-load").addEventListener("click", async () => {
         state.historyOffset = 0;
         await loadHistory(false);
       });
 
-      // 根据历史摘要创建安全的纯文本按钮，点击后加载任务报告和反馈。
+      /**
+       * 根据历史摘要创建纯文本任务按钮。
+       * @param {Array<Object>} items 历史任务摘要集合。
+       * @param {boolean} append 是否追加到已有列表。
+       */
       function renderHistory(items, append) {
         const list = $("history-list");
         if (!append) list.replaceChildren();
@@ -310,7 +346,11 @@
         });
       }
 
-      // 分页加载历史任务，达到返回数量时显示下一页按钮。
+      /**
+       * 分页加载历史任务并更新“加载更多”状态。
+       * @param {boolean} append 是否追加到已有任务列表。
+       * @returns {Promise<void>}
+       */
       async function loadHistory(append) {
         const project = encodeURIComponent($("project").value.trim());
         const status = encodeURIComponent($("history-status").value);
@@ -334,7 +374,7 @@
 
       $("history-more").addEventListener("click", () => loadHistory(true));
 
-      // 加载当前项目的反馈质量摘要，和历史任务筛选保持同一项目范围。
+      /** 加载当前项目的反馈质量摘要。 */
       async function loadProjectSummary() {
         const project = encodeURIComponent($("project").value.trim());
         const response = await apiFetch(`/api/feedback/${project}/summary`);
@@ -343,7 +383,7 @@
         $("project-summary").textContent = `项目反馈摘要：共 ${data.total} 条，涉及 ${data.task_count} 个任务；正确 ${data.counts.correct}，不准确 ${data.counts.inaccurate}，证据不足 ${data.counts.insufficient_evidence}，转人工 ${data.counts.escalate}`;
       }
 
-      // 将当前失败任务重新排队，并重新订阅执行进度。
+      /** 将当前失败任务重新排队并重新订阅执行进度。 */
       $("retry-task").addEventListener("click", async () => {
         if (!state.taskId) return;
         $("retry-task").disabled = true;
@@ -366,7 +406,7 @@
         }
       });
 
-      // 取消当前未结束任务，并立即刷新任务状态。
+      /** 取消当前未结束任务并刷新任务状态。 */
       $("cancel-task").addEventListener("click", async () => {
         if (!state.taskId) return;
         $("cancel-task").disabled = true;
@@ -388,7 +428,7 @@
         }
       });
 
-      // 将纯文本 Markdown 报告写入剪贴板，失败时给出明确提示。
+      /** 将当前 Markdown 报告文本写入剪贴板。 */
       $("copy-report").addEventListener("click", async () => {
         try {
           await navigator.clipboard.writeText($("report").textContent);
@@ -398,7 +438,11 @@
         }
       });
 
-      // 使用认证请求下载报告，避免直接导航丢失 API Key 请求头。
+      /**
+       * 使用认证请求下载 Markdown 报告。
+       * @param {MouseEvent} event 报告下载链接点击事件。
+       * @returns {Promise<void>}
+       */
       $("report-link").addEventListener("click", async (event) => {
         event.preventDefault();
         if (!state.taskId) return;

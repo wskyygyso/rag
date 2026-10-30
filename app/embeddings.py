@@ -20,7 +20,11 @@ class EmbeddingProvider(Protocol):
     dimension: int
 
     def embed(self, text: str) -> List[float]:
-        """将文本转换为固定维度的归一化向量。"""
+        """将文本转换为固定维度的归一化向量。
+
+        参数:
+            - `text`：待生成向量的文本，类型为 `str`。
+        """
 
 
 class DeterministicEmbeddingProvider:
@@ -29,13 +33,21 @@ class DeterministicEmbeddingProvider:
     model_name = EMBEDDING_MODEL
 
     def __init__(self, dimension: int = EMBEDDING_DIMENSION) -> None:
-        """创建指定维度的确定性向量提供方。"""
+        """创建指定维度的确定性向量提供方。
+
+        参数:
+            - `dimension`：向量维度，类型为 `int`。
+        """
         if dimension < 8 or dimension > 2048:
             raise ValueError("向量维度必须在 8 到 2048 之间")
         self.dimension = dimension
 
     def embed(self, text: str) -> List[float]:
-        """生成归一化哈希特征向量。"""
+        """生成归一化哈希特征向量。
+
+        参数:
+            - `text`：待生成向量的文本，类型为 `str`。
+        """
         vector = [0.0] * self.dimension
         tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_:]*|[\u4e00-\u9fff]{2,}", text.lower())
         for token in tokens:
@@ -48,19 +60,34 @@ class DeterministicEmbeddingProvider:
 
 
 def get_embedding_provider(name: str = EMBEDDING_MODEL, dimension: int = EMBEDDING_DIMENSION) -> EmbeddingProvider:
-    """按名称返回 embedding 提供方；未知提供方明确报错，避免静默混用模型。"""
+    """按名称返回 embedding 提供方；未知提供方明确报错，避免静默混用模型。
+
+    参数:
+        - `name`：名称或标识，类型为 `str`。
+        - `dimension`：向量维度，类型为 `int`。
+    """
     if name != EMBEDDING_MODEL:
         raise ValueError(f"暂不支持 embedding 提供方: {name}")
     return DeterministicEmbeddingProvider(dimension)
 
 
 def embed_text(text: str, dimension: int = EMBEDDING_DIMENSION) -> List[float]:
-    """使用哈希特征生成归一化文本向量，保证同一文本结果稳定。"""
+    """使用哈希特征生成归一化文本向量，保证同一文本结果稳定。
+
+    参数:
+        - `text`：待生成向量的文本，类型为 `str`。
+        - `dimension`：向量维度，类型为 `int`。
+    """
     return get_embedding_provider(dimension=dimension).embed(text)
 
 
 def cosine_similarity(left: List[float], right: Optional[List[float]]) -> float:
-    """计算同维向量余弦相似度；缺失或维度不一致时返回零。"""
+    """计算同维向量余弦相似度；缺失或维度不一致时返回零。
+
+    参数:
+        - `left`：余弦相似度左向量，类型为 `List[float]`。
+        - `right`：余弦相似度右向量，类型为 `Optional[List[float]]`。
+    """
     if not right or len(left) != len(right):
         return 0.0
     return max(-1.0, min(1.0, sum(a * b for a, b in zip(left, right))))
