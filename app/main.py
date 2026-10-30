@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.auth import auth_guard, security_http_exception_handler, validate_auth_settings
+from app.ai_quality_api import router as ai_quality_router
 from app.health import get_health
 from app.metrics import begin_http_request, finish_http_request, router as metrics_router
 from app.llm_diagnosis import validate_llm_settings
@@ -117,6 +118,7 @@ app.include_router(validation_router)
 app.include_router(hybrid_router)
 app.include_router(index_router)
 app.include_router(metrics_router)
+app.include_router(ai_quality_router)
 
 
 @app.get("/health")

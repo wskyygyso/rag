@@ -23,6 +23,8 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "history-request-id" in response.text
     assert "/api/feedback/" in response.text
     assert "loadProjectSummary" in response.text
+    assert "ai-quality" in response.text
+    assert "/api/ai/" in response.text
     assert "operation-list" in response.text
     assert "loadOperations" in response.text
     assert "X-API-Key" in response.text

@@ -92,6 +92,7 @@
         </div>
         <div id="history-list" class="muted">暂无历史任务。</div>
         <p id="project-summary" class="muted">项目反馈摘要：暂无数据</p>
+        <p id="ai-quality" class="muted">AI 质量摘要：暂无数据</p>
       </section>
 
       <section class="card">
@@ -366,7 +367,7 @@
           state.historyOffset += data.items.length;
           $("history-more").hidden = data.items.length < data.limit;
           $("history-message").textContent = `已加载 ${state.historyOffset} 条任务`;
-          if (!append) await loadProjectSummary();
+          if (!append) await Promise.all([loadProjectSummary(), loadAiQuality()]);
         } catch (error) {
           $("history-message").textContent = error.message;
         }
@@ -381,6 +382,17 @@
         if (!response.ok) throw new Error(`项目反馈摘要获取失败（${response.status}）`);
         const data = await response.json();
         $("project-summary").textContent = `项目反馈摘要：共 ${data.total} 条，涉及 ${data.task_count} 个任务；正确 ${data.counts.correct}，不准确 ${data.counts.inaccurate}，证据不足 ${data.counts.insufficient_evidence}，转人工 ${data.counts.escalate}`;
+      }
+
+      /** 加载当前项目 AI 调用量、缓存、token、延迟和反馈质量摘要。 */
+      async function loadAiQuality() {
+        const project = encodeURIComponent($("project").value.trim());
+        const days = encodeURIComponent($("history-days").value || "30");
+        const response = await apiFetch(`/api/ai/${project}/quality?days=${days}`);
+        if (!response.ok) throw new Error(`AI 质量摘要获取失败（${response.status}）`);
+        const data = await response.json();
+        const hitRate = `${Math.round(data.cache_hit_rate * 100)}%`;
+        $("ai-quality").textContent = `AI 质量摘要：${data.ai_tasks} 个任务，缓存命中 ${hitRate}，平均 ${data.latency_ms.avg}ms，消耗 ${data.tokens.total} tokens；正确 ${data.feedback.correct}，不准确 ${data.feedback.inaccurate}`;
       }
 
       /** 将当前失败任务重新排队并重新订阅执行进度。 */

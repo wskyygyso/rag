@@ -94,6 +94,11 @@ CREATE INDEX IF NOT EXISTS idx_diagnostic_feedback_task_created
     ON diagnostic_feedback (task_id, created_at DESC)
 """
 
+CREATE_TASKS_QUALITY_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_diagnostic_tasks_project_updated
+    ON diagnostic_tasks (project, updated_at DESC)
+"""
+
 CREATE_TASK_OPERATIONS_SQL = """
 CREATE TABLE IF NOT EXISTS diagnostic_task_operations (
     id BIGSERIAL PRIMARY KEY,
@@ -195,6 +200,7 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
+        await connection.execute(CREATE_TASKS_QUALITY_INDEX_SQL)
         await connection.execute(
             "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS validation_plan JSONB"
         )
