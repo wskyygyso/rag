@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_timeout_seconds: float = 30.0
     llm_min_evidence_items: int = 1
+    llm_cache_enabled: bool = True
+    llm_cache_ttl_seconds: int = 3600
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"

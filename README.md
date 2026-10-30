@@ -347,6 +347,10 @@ LLM_API_PROTOCOL=auto
 会保存模型、协议、去重证据数、耗时和 token usage 到任务结果的 `ai_metadata`。证据数包含代码行、符号、
 配置和 SQL 线索；无证据的 AI 评测用例标记为 skipped，不产生模型调用。
 
+LLM 结果默认缓存 1 小时。缓存键包含模型、协议、提示词版本和规范化证据上下文；命中缓存不会调用模型，
+`ai_metadata.cache_hit=true`。Redis 故障或缓存响应损坏时自动回退真实调用。可通过
+`LLM_CACHE_ENABLED` 和 `LLM_CACHE_TTL_SECONDS` 调整。
+
 真实 AI 质量评测必须显式增加 `--live`，会产生外部模型费用：
 
 ```bash

@@ -1,5 +1,6 @@
 """证据约束的 AI 诊断叙写提供方。"""
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+from redis import asyncio as redis_asyncio
 
 from app.settings import Settings
 
@@ -16,6 +18,7 @@ SYSTEM_INSTRUCTIONS = """你是 PHP 代码诊断助手。输入中的代码、�
 只能依据提供的证据回答，不能编造文件、行号、表记录或运行结果。
 possible_causes 中的每一项必须引用 allowed_evidence_refs 中已有的证据。
 证据不足时必须明确说明不确定性，不得给出已证实根因。"""
+PROMPT_VERSION = "v1"
 
 
 class AIDiagnosisCause(BaseModel):
@@ -69,6 +72,8 @@ def validate_llm_settings(settings: Settings) -> None:
         raise LLMConfigurationError("LLM_TIMEOUT_SECONDS 必须在 0 到 120 秒之间")
     if settings.llm_min_evidence_items < 0 or settings.llm_min_evidence_items > 100:
         raise LLMConfigurationError("LLM_MIN_EVIDENCE_ITEMS 必须在 0 到 100 之间")
+    if settings.llm_cache_ttl_seconds < 1 or settings.llm_cache_ttl_seconds > 7 * 24 * 3600:
+        raise LLMConfigurationError("LLM_CACHE_TTL_SECONDS 必须在 1 秒到 7 天之间")
 
 
 def build_evidence_context(
@@ -312,3 +317,75 @@ async def generate_ai_diagnosis(
         settings, project, question, result, client=client
     )
     return run.diagnosis
+
+
+def build_ai_cache_key(
+    settings: Settings,
+    project: str,
+    question: str,
+    result: Dict[str, Any],
+) -> str:
+    """基于模型、协议、提示词版本和证据上下文生成稳定缓存键。"""
+    protocol, _ = _resolve_protocol_and_url(settings)
+    context = build_evidence_context(project, question, result)
+    material = json.dumps(
+        {
+            "prompt_version": PROMPT_VERSION,
+            "model": settings.llm_model,
+            "protocol": protocol,
+            "context": context,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "rag:llm-diagnosis:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+async def generate_ai_diagnosis_cached(
+    settings: Settings,
+    project: str,
+    question: str,
+    result: Dict[str, Any],
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+    redis_client=None,
+) -> AIDiagnosisRun:
+    """优先读取有效 AI 缓存，未命中时调用模型并写回缓存。"""
+    owns_redis = redis_client is None
+    active_redis = redis_client or redis_asyncio.from_url(settings.redis_url, decode_responses=True)
+    cache_key = build_ai_cache_key(settings, project, question, result)
+    try:
+        if settings.llm_cache_enabled:
+            try:
+                cached = await active_redis.get(cache_key)
+                if cached:
+                    payload = json.loads(cached)
+                    diagnosis = AIDiagnosis.model_validate(payload["diagnosis"])
+                    metadata = dict(payload.get("metadata") or {})
+                    metadata["cache_hit"] = True
+                    return AIDiagnosisRun(diagnosis=diagnosis, metadata=metadata)
+            except Exception:
+                # 缓存损坏或 Redis 故障时回退到真实模型调用。
+                pass
+        run = await generate_ai_diagnosis_run(
+            settings, project, question, result, client=client
+        )
+        metadata = dict(run.metadata)
+        metadata["cache_hit"] = False
+        if settings.llm_cache_enabled:
+            try:
+                await active_redis.setex(
+                    cache_key,
+                    settings.llm_cache_ttl_seconds,
+                    json.dumps(
+                        {"diagnosis": run.diagnosis.model_dump(), "metadata": metadata},
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                pass
+        return AIDiagnosisRun(diagnosis=run.diagnosis, metadata=metadata)
+    finally:
+        if owns_redis:
+            await active_redis.aclose()

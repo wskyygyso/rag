@@ -9,8 +9,10 @@ from app.llm_diagnosis import (
     LLMConfigurationError,
     LLMResponseError,
     build_evidence_context,
+    build_ai_cache_key,
     count_available_evidence,
     generate_ai_diagnosis,
+    generate_ai_diagnosis_cached,
     generate_ai_diagnosis_run,
     validate_llm_settings,
 )
@@ -147,6 +149,85 @@ def test_llm_configuration_and_evidence_context_are_bounded() -> None:
     assert len(context["evidence"][0]["content"]) == 1000
     assert context["allowed_evidence_refs"] == ["Guild.php:5", "Guild.php:7", "Guild.php:8"]
     assert count_available_evidence(result) == 3
+
+
+class _Redis:
+    """模拟 AI 结果缓存使用的 Redis 客户端。"""
+
+    def __init__(self, value=None):
+        """初始化缓存值和写入记录。"""
+        self.value = value
+        self.set_calls = []
+
+    async def get(self, key):
+        """返回预设缓存。"""
+        return self.value
+
+    async def setex(self, key, ttl, value):
+        """记录缓存写入。"""
+        self.set_calls.append((key, ttl, value))
+
+
+@pytest.mark.asyncio
+async def test_ai_cache_hit_skips_model_call() -> None:
+    """验证命中缓存时不调用模型且标记 cache_hit。"""
+    settings = _settings()
+    key = build_ai_cache_key(settings, "waky3", "问题", _result())
+    cached_diagnosis = {
+        "conclusion": "缓存结论",
+        "possible_causes": [],
+        "uncertainties": ["未验证"],
+        "recommended_actions": ["核对"],
+    }
+    redis = _Redis(
+        json.dumps({"diagnosis": cached_diagnosis, "metadata": {"model": "test-model"}})
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """缓存命中时不应发起模型请求。"""
+        raise AssertionError("不应调用模型")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        run = await generate_ai_diagnosis_cached(
+            settings,
+            "waky3",
+            "问题",
+            _result(),
+            client=client,
+            redis_client=redis,
+        )
+    assert key.startswith("rag:llm-diagnosis:")
+    assert run.diagnosis.conclusion == "缓存结论"
+    assert run.metadata["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_ai_cache_miss_calls_model_and_writes_cache() -> None:
+    """验证缓存未命中时调用模型并写入 TTL。"""
+    settings = _settings()
+    redis = _Redis()
+    output = {
+        "conclusion": "新结论",
+        "possible_causes": [],
+        "uncertainties": ["未验证"],
+        "recommended_actions": ["核对"],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """返回有效结构化输出。"""
+        return httpx.Response(200, json={"output_text": json.dumps(output)})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        run = await generate_ai_diagnosis_cached(
+            settings,
+            "waky3",
+            "问题",
+            _result(),
+            client=client,
+            redis_client=redis,
+        )
+    assert run.metadata["cache_hit"] is False
+    assert redis.set_calls[0][1] == 3600
 
 
 @pytest.mark.asyncio
