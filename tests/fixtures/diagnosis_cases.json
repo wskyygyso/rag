@@ -7,7 +7,8 @@
       "expected_symbols": ["GuildController::inviteGuild"],
       "expected_files": ["php/action/Guild.php"],
       "expected_queries": ["GuildController::inviteGuild", "BD_OP_FORBIDDEN", "anchor.joinBDGuildDayLimit"],
-      "expected_lines": [{"file": "php/action/Guild.php", "line": 8}]
+      "expected_lines": [{"file": "php/action/Guild.php", "line": 8}],
+      "ai": {"max_causes": 3, "require_uncertainty": true, "require_actions": true}
     },
     {
       "id": "guild_entry_symbol",
@@ -15,7 +16,8 @@
       "question": "定位 GuildController::inviteGuild 的 PHP 入口",
       "expected_symbols": ["GuildController::inviteGuild"],
       "expected_files": ["php/action/Guild.php"],
-      "expected_queries": ["GuildController::inviteGuild"]
+      "expected_queries": ["GuildController::inviteGuild"],
+      "ai": {"max_causes": 3, "require_uncertainty": true, "require_actions": true}
     },
     {
       "id": "unknown_failure_no_false_positive",
@@ -23,7 +25,8 @@
       "question": "NO_SUCH_RAgent_FAILURE_2026",
       "expected_symbols": [],
       "expected_files": [],
-      "expected_queries": ["NO_SUCH_RAgent_FAILURE_2026"]
+      "expected_queries": ["NO_SUCH_RAgent_FAILURE_2026"],
+      "ai": {"max_causes": 1, "require_uncertainty": true, "require_actions": true}
     }
   ]
 }
