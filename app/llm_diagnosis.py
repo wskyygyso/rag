@@ -80,6 +80,9 @@ def build_evidence_context(
     """构造低敏感、限制大小的证据上下文和允许引用集合。"""
     evidence = []
     refs = []
+    symbol_items = []
+    config_items = []
+    sql_items = []
     for item in (result.get("evidence") or [])[:max_evidence]:
         if not item.get("file") or item.get("line") is None:
             continue
@@ -91,15 +94,33 @@ def build_evidence_context(
                 "content": str(item.get("content") or "")[:1000],
             }
         )
-    for item in result.get("symbols") or []:
+    for item in (result.get("symbols") or [])[:30]:
         if item.get("file") and item.get("line") is not None:
-            refs.append(f"{item['file']}:{item['line']}")
-    for item in result.get("configs") or []:
+            ref = f"{item['file']}:{item['line']}"
+            refs.append(ref)
+            symbol_items.append(
+                {
+                    "ref": ref,
+                    "name": item.get("symbol_name"),
+                    "type": item.get("symbol_type"),
+                }
+            )
+    for item in (result.get("configs") or [])[:20]:
         if item.get("file") and item.get("line") is not None:
-            refs.append(f"{item['file']}:{item['line']}")
-    for item in result.get("sql") or []:
+            ref = f"{item['file']}:{item['line']}"
+            refs.append(ref)
+            config_items.append({"ref": ref, "key": item.get("key")})
+    for item in (result.get("sql") or [])[:20]:
         if item.get("file") and item.get("line") is not None:
-            refs.append(f"{item['file']}:{item['line']}")
+            ref = f"{item['file']}:{item['line']}"
+            refs.append(ref)
+            sql_items.append(
+                {
+                    "ref": ref,
+                    "operation": item.get("operation"),
+                    "content": str(item.get("content") or "")[:500],
+                }
+            )
 
     validation = result.get("validation") or {}
     validation_summary = {
@@ -118,10 +139,18 @@ def build_evidence_context(
         "question": question[:10000],
         "allowed_evidence_refs": sorted(set(refs)),
         "evidence": evidence,
+        "symbols": symbol_items,
+        "configs": config_items,
+        "sql": sql_items,
         "call_chains": (result.get("call_chains") or [])[:10],
         "validation_summary": validation_summary,
         "warnings": [str(item)[:500] for item in (result.get("warnings") or [])[:20]],
     }
+
+
+def count_available_evidence(result: Dict[str, Any]) -> int:
+    """统计去重后可提供给 LLM 的证据引用数量。"""
+    return len(build_evidence_context("", "", result)["allowed_evidence_refs"])
 
 
 def _structured_output_schema() -> Dict[str, Any]:
@@ -257,7 +286,7 @@ async def generate_ai_diagnosis_run(
     metadata = {
         "model": settings.llm_model,
         "protocol": protocol,
-        "evidence_count": len(context["evidence"]),
+        "evidence_count": len(context["allowed_evidence_refs"]),
         "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
         "usage": {
             key: int(value)

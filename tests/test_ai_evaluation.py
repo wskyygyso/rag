@@ -54,7 +54,10 @@ def test_ai_evaluation_summarizes_pass_rate_and_recall() -> None:
         [
             {"passed": True, "evidence_ref_recall": 1.0},
             {"passed": False, "evidence_ref_recall": 0.5},
+            {"passed": True, "evidence_ref_recall": 1.0, "skipped": True},
         ]
     )
     assert summary["pass_rate"] == 0.5
     assert summary["average_evidence_ref_recall"] == 0.75
+    assert summary["executed"] == 2
+    assert summary["skipped"] == 1

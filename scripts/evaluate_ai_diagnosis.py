@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.ai_evaluation import evaluate_ai_case, summarize_ai_evaluations
 from app.code_tools import extract_search_queries, search_code
 from app.diagnosis_eval import load_cases
-from app.llm_diagnosis import generate_ai_diagnosis_run
+from app.llm_diagnosis import build_evidence_context, generate_ai_diagnosis_run
 from app.php_index import index_repository, trace_index_call_chain
 from app.settings import get_settings
 
@@ -61,12 +61,36 @@ async def run_cases(root: str, cases: List[Dict[str, Any]]) -> Dict[str, Any]:
         if project not in indexes:
             indexes[project] = index_repository(root, project)
         result = build_case_result(root, case, indexes[project])
-        run = await generate_ai_diagnosis_run(
-            settings,
-            project,
-            case["question"],
-            result,
-        )
+        context = build_evidence_context(project, case["question"], result)
+        if len(context["allowed_evidence_refs"]) < settings.llm_min_evidence_items:
+            results.append(
+                {
+                    "id": case["id"],
+                    "skipped": True,
+                    "passed": True,
+                    "reason": "证据数量未达到 LLM_MIN_EVIDENCE_ITEMS",
+                    "evidence_ref_recall": 1.0,
+                }
+            )
+            continue
+        try:
+            run = await generate_ai_diagnosis_run(
+                settings,
+                project,
+                case["question"],
+                result,
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "id": case["id"],
+                    "passed": False,
+                    "checks": {"call_succeeded": False},
+                    "error_type": type(exc).__name__,
+                    "evidence_ref_recall": 0.0,
+                }
+            )
+            continue
         evaluation = evaluate_ai_case(case, run.diagnosis.model_dump())
         evaluation["metadata"] = run.metadata
         results.append(evaluation)
@@ -81,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", default=str(project_root / "tests" / "fixtures" / "diagnosis_cases.json"))
     parser.add_argument("--min-pass-rate", type=float, default=1.0)
     parser.add_argument("--limit", type=int, default=0, help="只运行前 N 个用例；0 表示全部")
+    parser.add_argument("--offset", type=int, default=0, help="跳过前 N 个用例")
     parser.add_argument("--live", action="store_true", help="确认调用外部 LLM 并可能产生费用")
     return parser.parse_args()
 
@@ -92,9 +117,10 @@ async def main_async() -> int:
         raise SystemExit("必须显式增加 --live 才会调用外部 LLM")
     if args.min_pass_rate < 0 or args.min_pass_rate > 1:
         raise SystemExit("--min-pass-rate 必须在 0 到 1 之间")
-    if args.limit < 0:
-        raise SystemExit("--limit 不能为负数")
+    if args.limit < 0 or args.offset < 0:
+        raise SystemExit("--limit 和 --offset 不能为负数")
     cases = load_cases(args.cases)
+    cases = cases[args.offset :]
     if args.limit:
         cases = cases[: args.limit]
     result = await run_cases(args.root, cases)

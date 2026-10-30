@@ -49,16 +49,19 @@ def evaluate_ai_case(case: Dict[str, Any], diagnosis: Dict[str, Any]) -> Dict[st
 def summarize_ai_evaluations(results: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     """汇总 AI 用例通过率和平均证据引用召回。"""
     items = list(results)
-    passed = sum(1 for item in items if item["passed"])
+    executed = [item for item in items if not item.get("skipped")]
+    passed = sum(1 for item in executed if item["passed"])
     average_recall = (
-        sum(float(item["evidence_ref_recall"]) for item in items) / len(items)
-        if items
+        sum(float(item["evidence_ref_recall"]) for item in executed) / len(executed)
+        if executed
         else 0.0
     )
     return {
         "total": len(items),
+        "executed": len(executed),
+        "skipped": len(items) - len(executed),
         "passed": passed,
-        "pass_rate": passed / len(items) if items else 0.0,
+        "pass_rate": passed / len(executed) if executed else 0.0,
         "average_evidence_ref_recall": average_recall,
         "cases": items,
     }

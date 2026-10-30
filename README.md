@@ -344,13 +344,14 @@ LLM_API_PROTOCOL=auto
 ```
 
 `LLM_MIN_EVIDENCE_ITEMS` 控制最低调用证据数，默认 1。没有足够代码证据时不会调用外部模型。每次成功调用
-会保存模型、协议、证据数、耗时和 token usage 到任务结果的 `ai_metadata`。
+会保存模型、协议、去重证据数、耗时和 token usage 到任务结果的 `ai_metadata`。证据数包含代码行、符号、
+配置和 SQL 线索；无证据的 AI 评测用例标记为 skipped，不产生模型调用。
 
 真实 AI 质量评测必须显式增加 `--live`，会产生外部模型费用：
 
 ```bash
 .venv/bin/python scripts/evaluate_ai_diagnosis.py \
-  --live --limit 1 --min-pass-rate 1.0
+  --live --offset 0 --limit 1 --min-pass-rate 1.0
 ```
 
 评测检查证据引用召回、候选原因数量、不确定性说明和建议动作完整性。CI 不执行该命令，固定离线测试不调用外部模型。

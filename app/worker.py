@@ -10,7 +10,7 @@ from app.task_store import replace_symbol_index
 from app.settings import get_settings
 from app.code_tools import CodeToolError, extract_search_queries, read_file, search_code
 from app.php_index import index_repository, trace_index_call_chain
-from app.llm_diagnosis import generate_ai_diagnosis_run
+from app.llm_diagnosis import count_available_evidence, generate_ai_diagnosis_run
 from app.reporting import build_assessment
 from app.symbol_tools import summarize_symbol_index
 from app.validation_runner import execute_validation_plan
@@ -198,7 +198,7 @@ async def _execute_diagnosis(task_id: str) -> None:
             "validation": validation,
             "warnings": warnings,
         }
-        if settings.llm_enabled and len(deduped) >= settings.llm_min_evidence_items:
+        if settings.llm_enabled and count_available_evidence(report_result) >= settings.llm_min_evidence_items:
             try:
                 ai_run = await generate_ai_diagnosis_run(
                     settings,

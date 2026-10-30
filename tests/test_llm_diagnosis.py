@@ -9,6 +9,7 @@ from app.llm_diagnosis import (
     LLMConfigurationError,
     LLMResponseError,
     build_evidence_context,
+    count_available_evidence,
     generate_ai_diagnosis,
     generate_ai_diagnosis_run,
     validate_llm_settings,
@@ -145,6 +146,7 @@ def test_llm_configuration_and_evidence_context_are_bounded() -> None:
     context = build_evidence_context("waky3", "问题", result)
     assert len(context["evidence"][0]["content"]) == 1000
     assert context["allowed_evidence_refs"] == ["Guild.php:5", "Guild.php:7", "Guild.php:8"]
+    assert count_available_evidence(result) == 3
 
 
 @pytest.mark.asyncio
