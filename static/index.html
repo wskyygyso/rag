@@ -37,7 +37,7 @@
       <section class="card">
         <form id="diagnosis-form">
           <div class="grid">
-            <label>项目<input id="project" name="project" value="waky3" required maxlength="100" /></label>
+            <label>项目<input id="project" name="project" value="waky3" list="project-options" required maxlength="100" /><datalist id="project-options"></datalist></label>
             <label>环境<input id="environment" name="environment" value="development" maxlength="100" /></label>
             <label class="wide">API Key<input id="api-key" type="password" autocomplete="off" placeholder="启用访问控制时填写，仅保存在当前页面内存" /></label>
             <label class="wide"><span><input id="use-ai" type="checkbox" checked /> 使用 AI 诊断叙写（可能产生模型费用）</span></label>
@@ -49,6 +49,8 @@
           </div>
         </form>
       </section>
+
+      <p id="project-overview" class="muted">项目概览：正在加载…</p>
 
       <section class="card" aria-live="polite">
         <h2>任务进度</h2>
@@ -130,6 +132,34 @@
       const state = { taskId: null, eventController: null, historyOffset: 0 };
       const $ = (id) => document.getElementById(id);
       const nativeFetch = window.fetch.bind(window);
+
+      /** 加载调用方有权访问的项目目录并填充项目候选项。 */
+      async function loadProjects() {
+        const response = await apiFetch("/api/projects");
+        if (!response.ok) throw new Error(`项目列表获取失败（${response.status}）`);
+        const data = await response.json();
+        const options = $("project-options");
+        options.replaceChildren();
+        data.projects.forEach((project) => {
+          const option = document.createElement("option");
+          option.value = project.name;
+          option.label = project.repository_revision ? project.repository_revision.slice(0, 8) : "未索引版本";
+          options.appendChild(option);
+        });
+      }
+
+      /** 加载当前项目的任务、反馈和索引概览。 */
+      async function loadProjectOverview() {
+        const project = encodeURIComponent($("project").value.trim());
+        const response = await apiFetch(`/api/projects/${project}/overview`);
+        if (!response.ok) throw new Error(`项目概览获取失败（${response.status}）`);
+        const data = await response.json();
+        const index = data.latest_index_run;
+        const indexText = index
+          ? `${index.status}，${index.chunk_count} 个分块，版本 ${index.repository_revision || "未知"}`
+          : "暂无索引运行";
+        $("project-overview").textContent = `项目概览：${data.tasks_total} 个任务；最近索引 ${indexText}`;
+      }
 
       /**
        * 为 API 请求附加当前页面内存中的 API Key。
@@ -485,6 +515,17 @@
         } catch (error) {
           $("message").textContent = error.message;
         }
+      });
+
+      // 页面初始化项目列表，并在项目名称变化时刷新概览。
+      loadProjects().catch((error) => { $("project-overview").textContent = error.message; });
+      loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
+      $("project").addEventListener("change", () => {
+        loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
+      });
+      $("api-key").addEventListener("change", () => {
+        loadProjects().catch(() => null);
+        loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
       });
     </script>
   </body>

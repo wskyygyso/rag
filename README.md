@@ -391,6 +391,16 @@ GET /api/ai/{project}/evaluations?limit=20
 
 运行记录保存通过率、执行/skipped 数、平均证据召回和每个用例的质量检查明细。
 
+项目工作台接口：
+
+```text
+GET /api/projects
+GET /api/projects/{project}/overview
+```
+
+项目列表只返回仓库白名单内且当前 API Key 有权访问的目录，并附带 Git HEAD；项目概览聚合任务状态、
+人工反馈分布和最近一次文档索引运行。前端项目输入框会加载项目候选，并展示当前项目概览。
+
 检查最近两次评测是否发生质量回归：
 
 ```bash

@@ -16,6 +16,7 @@ from app.metrics import begin_http_request, finish_http_request, router as metri
 from app.llm_diagnosis import validate_llm_settings
 from app.preflight import enforce_production_settings
 from app.rate_limit import RedisRateLimiter
+from app.projects_api import router as projects_router
 from app.request_limits import RequestBodyTooLarge, read_limited_body
 from app.request_context import resolve_request_id
 from app.security_headers import add_cors_middleware, apply_security_headers
@@ -119,6 +120,7 @@ app.include_router(hybrid_router)
 app.include_router(index_router)
 app.include_router(metrics_router)
 app.include_router(ai_quality_router)
+app.include_router(projects_router)
 
 
 @app.get("/health")

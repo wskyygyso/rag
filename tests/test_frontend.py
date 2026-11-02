@@ -32,5 +32,8 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "X-API-Key" in response.text
     assert "api-key" in response.text
     assert "use-ai" in response.text
+    assert "project-options" in response.text
+    assert "loadProjects" in response.text
+    assert "/overview" in response.text
     assert "response.body.getReader" in response.text
     assert "提交反馈" in response.text
