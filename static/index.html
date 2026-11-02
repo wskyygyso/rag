@@ -70,6 +70,7 @@
           <button id="copy-report" class="secondary" type="button" disabled>复制报告</button>
           <button id="cancel-task" class="secondary" type="button" hidden>取消任务</button>
           <button id="retry-task" class="secondary" type="button" hidden>重新执行失败任务</button>
+          <button id="rerun-task" class="secondary" type="button" hidden>复制配置重新诊断</button>
         </div>
       </section>
 
@@ -246,6 +247,7 @@
         $("feedback-message").textContent = task.task_id ? "可以提交审阅意见" : "创建任务后可提交反馈";
         $("cancel-task").hidden = !["QUEUED", "RUNNING", "SEARCHING", "VERIFYING", "REPORTING"].includes(task.status);
         $("retry-task").hidden = task.status !== "FAILED";
+        $("rerun-task").hidden = !["COMPLETED", "FAILED", "CANCELLED"].includes(task.status);
       }
 
       /**
@@ -513,6 +515,28 @@
           $("message").textContent = error.message;
         } finally {
           $("retry-task").disabled = false;
+        }
+      });
+
+      /** 复制当前历史任务的配置并发起一次新诊断。 */
+      $("rerun-task").addEventListener("click", async () => {
+        if (!state.taskId) return;
+        $("rerun-task").disabled = true;
+        try {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/rerun`, { method: "POST" });
+          const task = await response.json();
+          if (!response.ok) throw new Error(task.detail || `重新诊断失败（${response.status}）`);
+          state.taskId = task.task_id;
+          $("report-link").href = `/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`;
+          $("report-link").hidden = false;
+          renderTask(task);
+          $("message").textContent = "已创建新的诊断任务";
+          watchTask(state.taskId);
+          await loadOperations(state.taskId);
+        } catch (error) {
+          $("message").textContent = error.message;
+        } finally {
+          $("rerun-task").disabled = false;
         }
       });
 

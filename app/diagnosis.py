@@ -315,6 +315,53 @@ async def retry_diagnosis(task_id: str, request: Request) -> Dict:
     return _task_response(task)
 
 
+@router.post("/{task_id}/rerun", status_code=status.HTTP_202_ACCEPTED)
+async def rerun_diagnosis(task_id: str, request: Request) -> Dict:
+    """复制历史任务配置并创建一个新的诊断任务。
+
+    参数:
+        - `task_id`：需要复制问题、环境、验证计划和 AI 开关的历史任务 ID。
+        - `request`：携带认证身份和数据库连接池的 FastAPI 请求。
+    """
+    pool = _pool(request)
+    source = await _authorized_task(pool, request, task_id)
+    new_task_id = f"diag_{uuid.uuid4().hex}"
+    task = await insert_task(
+        pool,
+        new_task_id,
+        source["project"],
+        source["question"],
+        source["environment"],
+        source.get("created_by"),
+        source.get("validation_plan"),
+        use_ai=source.get("use_ai"),
+        request_id=getattr(request.state, "request_id", None),
+    )
+    from app.worker import run_diagnosis_task
+
+    try:
+        run_diagnosis_task.delay(new_task_id)
+    except Exception as exc:
+        await update_task(
+            pool,
+            new_task_id,
+            status="FAILED",
+            progress=100,
+            current_step="重新诊断任务投递失败",
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="重新诊断任务投递失败") from exc
+    await _record_operation(
+        pool,
+        new_task_id,
+        "RERUN_CREATE",
+        to_status=task.get("status"),
+        actor=operation_actor(request),
+        request_id=getattr(request.state, "request_id", None),
+    )
+    return _task_response(task)
+
+
 @router.get("/{task_id}/report")
 async def get_report(
     task_id: str,
