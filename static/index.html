@@ -55,6 +55,7 @@
         <button id="rebuild-index" class="secondary" type="button">重建文档索引</button>
         <span id="index-message" class="muted" role="status">索引任务进入独立队列</span>
       </div>
+      <div id="index-history" class="muted">暂无索引运行记录。</div>
 
       <section class="card" aria-live="polite">
         <h2>任务进度</h2>
@@ -163,6 +164,54 @@
           ? `${index.status}，${index.chunk_count} 个分块，版本 ${index.repository_revision || "未知"}`
           : "暂无索引运行";
         $("project-overview").textContent = `项目概览：${data.tasks_total} 个任务；最近索引 ${indexText}`;
+      }
+
+      /** 加载当前项目最近 10 次文档索引运行。 */
+      async function loadIndexHistory() {
+        const project = encodeURIComponent($("project").value.trim());
+        const response = await apiFetch(`/api/index/${project}/runs?limit=10`);
+        if (!response.ok) throw new Error(`索引历史获取失败（${response.status}）`);
+        const data = await response.json();
+        const container = $("index-history");
+        container.replaceChildren();
+        if (!data.runs.length) {
+          container.textContent = "暂无索引运行记录。";
+          return;
+        }
+        data.runs.forEach((run) => {
+          const row = document.createElement("div");
+          row.className = "history-item";
+          const summary = document.createElement("span");
+          summary.textContent = `#${run.id} | ${run.status} | ${run.chunk_count} 分块 | ${run.repository_revision ? run.repository_revision.slice(0, 8) : "无版本"}${run.error ? ` | ${run.error}` : ""}`;
+          row.appendChild(summary);
+          if (run.status === "FAILED") {
+            const retry = document.createElement("button");
+            retry.type = "button";
+            retry.className = "secondary";
+            retry.textContent = "重试";
+            retry.addEventListener("click", () => retryIndexRun(run.id));
+            row.appendChild(retry);
+          }
+          container.appendChild(row);
+        });
+      }
+
+      /**
+       * 重新投递失败的索引运行。
+       * @param {number} runId 失败索引运行 ID。
+       */
+      async function retryIndexRun(runId) {
+        const project = encodeURIComponent($("project").value.trim());
+        $("index-message").textContent = `正在重试索引运行 #${runId}…`;
+        try {
+          const response = await apiFetch(`/api/index/${project}/runs/${runId}/retry`, { method: "POST" });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `索引重试失败（${response.status}）`);
+          $("index-message").textContent = `索引已重试排队：${body.task_id}`;
+          setTimeout(() => Promise.all([loadIndexHistory(), loadProjectOverview()]).catch(() => null), 1500);
+        } catch (error) {
+          $("index-message").textContent = error.message;
+        }
       }
 
       /**
@@ -524,12 +573,15 @@
       // 页面初始化项目列表，并在项目名称变化时刷新概览。
       loadProjects().catch((error) => { $("project-overview").textContent = error.message; });
       loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
+      loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
       $("project").addEventListener("change", () => {
         loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
+        loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
       });
       $("api-key").addEventListener("change", () => {
         loadProjects().catch(() => null);
         loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
+        loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
       });
 
       // 将当前项目文档索引重建任务投递到 Worker。
@@ -542,7 +594,7 @@
           const body = await response.json();
           if (!response.ok) throw new Error(body.detail || `索引投递失败（${response.status}）`);
           $("index-message").textContent = `索引已排队：${body.task_id}`;
-          setTimeout(() => loadProjectOverview().catch(() => null), 1500);
+          setTimeout(() => Promise.all([loadProjectOverview(), loadIndexHistory()]).catch(() => null), 1500);
         } catch (error) {
           $("index-message").textContent = error.message;
         } finally {
