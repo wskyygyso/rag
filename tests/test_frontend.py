@@ -26,7 +26,7 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "ai-quality" in response.text
     assert "/api/ai/" in response.text
     assert "/evaluations" in response.text
-    assert "最近评测" in response.text
+    assert "评测趋势" in response.text
     assert "operation-list" in response.text
     assert "loadOperations" in response.text
     assert "X-API-Key" in response.text

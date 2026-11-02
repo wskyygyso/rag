@@ -391,6 +391,16 @@ GET /api/ai/{project}/evaluations?limit=20
 
 运行记录保存通过率、执行/skipped 数、平均证据召回和每个用例的质量检查明细。
 
+检查最近两次评测是否发生质量回归：
+
+```bash
+docker compose run --rm api python scripts/check_ai_regression.py \
+  --project waky3 --min-pass-rate 1.0 --min-evidence-recall 1.0 \
+  --max-pass-rate-drop 0.1
+```
+
+没有历史记录、最新指标低于阈值或通过率下降超过允许值均返回非零退出码。
+
 提交和查询诊断报告人工反馈：
 
 ```text
