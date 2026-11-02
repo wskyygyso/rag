@@ -35,5 +35,6 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "project-options" in response.text
     assert "loadProjects" in response.text
     assert "/overview" in response.text
+    assert "rebuild-index" in response.text
     assert "response.body.getReader" in response.text
     assert "提交反馈" in response.text

@@ -401,6 +401,15 @@ GET /api/projects/{project}/overview
 项目列表只返回仓库白名单内且当前 API Key 有权访问的目录，并附带 Git HEAD；项目概览聚合任务状态、
 人工反馈分布和最近一次文档索引运行。前端项目输入框会加载项目候选，并展示当前项目概览。
 
+项目页可直接重建文档索引：
+
+```text
+POST /api/projects/{project}/index
+```
+
+接口要求 `write` 权限；最近索引处于 `RUNNING` 时返回 409，否则投递到独立 `index` 队列。前端按钮显示
+排队任务 ID，并自动刷新项目概览。
+
 检查最近两次评测是否发生质量回归：
 
 ```bash

@@ -2,7 +2,7 @@
 
 from typing import Dict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status
 
 from app.auth import api_identity, require_project_access
 from app.projects import discover_projects, get_project_overview, read_repository_revision
@@ -40,3 +40,37 @@ async def project_overview(project: str, request: Request) -> Dict:
         settings.code_repositories_root, project
     )
     return overview
+
+
+@router.post("/{project}/index", status_code=status.HTTP_202_ACCEPTED)
+async def rebuild_project_index(project: str, request: Request) -> Dict:
+    """将项目文档索引重建任务投递到独立 index 队列。
+
+    参数:
+        - `project`：需要重建索引的诊断项目标识。
+        - `request`：携带认证身份、数据库池和队列入口的 FastAPI 请求。
+    """
+    require_project_access(request, project)
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="数据库暂不可用")
+    running = await pool.fetchrow(
+        """
+        SELECT id FROM document_index_runs
+        WHERE project = $1 AND status = 'RUNNING'
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        project,
+    )
+    if running is not None:
+        raise HTTPException(status_code=409, detail="项目索引正在运行")
+    task_entry = globals().get("run_document_index_task")
+    if task_entry is None:
+        from app.worker import run_document_index_task as task_entry
+    queued = task_entry.delay(project)
+    return {
+        "project": project,
+        "status": "QUEUED",
+        "task_id": queued.id,
+    }

@@ -51,6 +51,10 @@
       </section>
 
       <p id="project-overview" class="muted">项目概览：正在加载…</p>
+      <div class="actions">
+        <button id="rebuild-index" class="secondary" type="button">重建文档索引</button>
+        <span id="index-message" class="muted" role="status">索引任务进入独立队列</span>
+      </div>
 
       <section class="card" aria-live="polite">
         <h2>任务进度</h2>
@@ -526,6 +530,24 @@
       $("api-key").addEventListener("change", () => {
         loadProjects().catch(() => null);
         loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
+      });
+
+      // 将当前项目文档索引重建任务投递到 Worker。
+      $("rebuild-index").addEventListener("click", async () => {
+        const project = encodeURIComponent($("project").value.trim());
+        $("rebuild-index").disabled = true;
+        $("index-message").textContent = "正在投递索引任务…";
+        try {
+          const response = await apiFetch(`/api/projects/${project}/index`, { method: "POST" });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `索引投递失败（${response.status}）`);
+          $("index-message").textContent = `索引已排队：${body.task_id}`;
+          setTimeout(() => loadProjectOverview().catch(() => null), 1500);
+        } catch (error) {
+          $("index-message").textContent = error.message;
+        } finally {
+          $("rebuild-index").disabled = false;
+        }
       });
     </script>
   </body>
