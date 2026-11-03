@@ -56,6 +56,7 @@
         <span id="index-message" class="muted" role="status">索引任务进入独立队列</span>
       </div>
       <div id="index-history" class="muted">暂无索引运行记录。</div>
+      <div id="task-board" class="muted">暂无项目任务。</div>
 
       <section class="card" aria-live="polite">
         <h2>任务进度</h2>
@@ -213,6 +214,73 @@
         } catch (error) {
           $("index-message").textContent = error.message;
         }
+      }
+
+      /**
+       * 在页面中打开任务看板选中的诊断任务。
+       * @param {Object} task 任务看板返回的任务摘要。
+       */
+      async function openBoardTask(task) {
+        state.taskId = task.id;
+        $("report-link").href = `/api/diagnoses/${encodeURIComponent(task.id)}/report?format=markdown`;
+        $("report-link").hidden = false;
+        renderTask({ task_id: task.id, status: task.status, progress: task.progress, current_step: task.current_step });
+        try {
+          await Promise.all([loadReport(task.id), loadFeedback(task.id), loadOperations(task.id)]);
+          $("message").textContent = "已加载看板任务";
+        } catch (error) {
+          $("message").textContent = error.message;
+        }
+      }
+
+      /**
+       * 从项目看板取消运行中的诊断任务。
+       * @param {string} taskId 需要取消的诊断任务 ID。
+       */
+      async function cancelBoardTask(taskId) {
+        try {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `任务取消失败（${response.status}）`);
+          $("message").textContent = "任务已取消";
+          await Promise.all([loadTaskBoard(), loadProjectOverview()]);
+        } catch (error) {
+          $("message").textContent = error.message;
+        }
+      }
+
+      /** 加载项目任务状态统计、运行中任务和最近终态任务。 */
+      async function loadTaskBoard() {
+        const project = encodeURIComponent($("project").value.trim());
+        const response = await apiFetch(`/api/projects/${project}/task-board`);
+        if (!response.ok) throw new Error(`任务看板获取失败（${response.status}）`);
+        const data = await response.json();
+        const container = $("task-board");
+        container.replaceChildren();
+        const summary = document.createElement("p");
+        summary.textContent = `任务状态：${Object.entries(data.status_counts).map(([status, count]) => `${status} ${count}`).join("，") || "暂无"}`;
+        container.appendChild(summary);
+        [...data.active_tasks, ...data.recent_tasks].forEach((task) => {
+          const row = document.createElement("div");
+          row.className = "history-item";
+          const label = document.createElement("span");
+          label.textContent = `${task.id} | ${task.status} | ${task.progress}% | ${task.question}`;
+          const open = document.createElement("button");
+          open.type = "button";
+          open.className = "secondary";
+          open.textContent = "打开";
+          open.addEventListener("click", () => openBoardTask(task));
+          row.append(label, open);
+          if (data.active_tasks.some((item) => item.id === task.id)) {
+            const cancel = document.createElement("button");
+            cancel.type = "button";
+            cancel.className = "secondary";
+            cancel.textContent = "取消";
+            cancel.addEventListener("click", () => cancelBoardTask(task.id));
+            row.appendChild(cancel);
+          }
+          container.appendChild(row);
+        });
       }
 
       /**
@@ -598,14 +666,17 @@
       loadProjects().catch((error) => { $("project-overview").textContent = error.message; });
       loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
       loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
+      loadTaskBoard().catch((error) => { $("task-board").textContent = error.message; });
       $("project").addEventListener("change", () => {
         loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
         loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
+        loadTaskBoard().catch((error) => { $("task-board").textContent = error.message; });
       });
       $("api-key").addEventListener("change", () => {
         loadProjects().catch(() => null);
         loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
         loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
+        loadTaskBoard().catch((error) => { $("task-board").textContent = error.message; });
       });
 
       // 将当前项目文档索引重建任务投递到 Worker。

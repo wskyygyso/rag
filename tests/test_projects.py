@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app import projects, projects_api
 from app.auth import ApiIdentity
 from app.main import app
-from app.projects import discover_projects, get_project_overview
+from app.projects import discover_projects, get_project_overview, get_project_task_board
 
 
 def test_discover_projects_respects_directory_and_identity(tmp_path) -> None:
@@ -101,3 +101,69 @@ def test_project_list_endpoint_returns_discovered_projects(monkeypatch, tmp_path
     response = TestClient(app).get("/api/projects")
     assert response.status_code == 200
     assert response.json()["projects"][0]["name"] == "waky3"
+
+
+class _BoardPool:
+    """返回项目任务看板聚合数据的连接池替身。"""
+
+    async def fetch(self, query, project, *args):
+        """按任务状态查询返回不同集合。
+
+        参数:
+            - `query`：任务看板查询 SQL。
+            - `project`：项目筛选值。
+            - `*args`：最近任务数量等附加参数。
+        """
+        if "GROUP BY status" in query:
+            return [{"status": "RUNNING", "count": 1}, {"status": "COMPLETED", "count": 2}]
+        if "status IN ('QUEUED'" in query:
+            return [
+                {
+                    "id": "diag_active",
+                    "question": "运行中问题",
+                    "status": "RUNNING",
+                    "progress": 50,
+                    "current_step": "检索",
+                    "created_at": "2026-11-02T00:00:00+08:00",
+                    "updated_at": "2026-11-02T00:01:00+08:00",
+                }
+            ]
+        return [
+            {
+                "id": "diag_done",
+                "question": "已完问题",
+                "status": "COMPLETED",
+                "progress": 100,
+                "current_step": "完成",
+                "created_at": "2026-11-02T00:00:00+08:00",
+                "updated_at": "2026-11-02T00:02:00+08:00",
+            }
+        ]
+
+
+@pytest.mark.asyncio
+async def test_project_task_board_aggregates_active_and_recent_tasks() -> None:
+    """验证任务看板聚合状态、运行中任务和最近任务。
+
+    参数:
+        - 无：测试使用固定连接池替身。
+    """
+    board = await get_project_task_board(_BoardPool(), "waky3", 5)
+    assert board["status_counts"]["RUNNING"] == 1
+    assert board["active_tasks"][0]["id"] == "diag_active"
+    assert board["recent_tasks"][0]["id"] == "diag_done"
+
+
+def test_project_task_board_endpoint_returns_board() -> None:
+    """验证项目任务看板 API 返回运行中和最近任务。
+
+    参数:
+        - 无：测试使用固定连接池替身。
+    """
+    app.state.db_pool = _BoardPool()
+    try:
+        response = TestClient(app).get("/api/projects/waky3/task-board")
+    finally:
+        app.state.db_pool = None
+    assert response.status_code == 200
+    assert response.json()["project"] == "waky3"

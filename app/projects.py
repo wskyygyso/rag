@@ -115,3 +115,64 @@ async def get_project_overview(pool, project: str) -> Dict[str, Any]:
         "feedback": feedback,
         "latest_index_run": index_run,
     }
+
+
+async def get_project_task_board(pool, project: str, recent_limit: int = 5) -> Dict[str, Any]:
+    """聚合项目任务状态、运行中任务和最近终态任务。
+
+    参数:
+        - `pool`：RAgent 元数据库连接池。
+        - `project`：需要查询任务看板的诊断项目标识。
+        - `recent_limit`：最近终态任务返回数量。
+    """
+    if recent_limit < 1 or recent_limit > 20:
+        raise ValueError("最近任务数量必须在 1 到 20 之间")
+    status_rows, active_rows, recent_rows = await asyncio.gather(
+        pool.fetch(
+            "SELECT status, COUNT(*) AS count FROM diagnostic_tasks WHERE project = $1 GROUP BY status",
+            project,
+        ),
+        pool.fetch(
+            """
+            SELECT id, question, status, progress, current_step, created_at, updated_at
+            FROM diagnostic_tasks
+            WHERE project = $1
+              AND status IN ('QUEUED', 'RUNNING', 'SEARCHING', 'VERIFYING', 'REPORTING')
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 20
+            """,
+            project,
+        ),
+        pool.fetch(
+            """
+            SELECT id, question, status, progress, current_step, created_at, updated_at
+            FROM diagnostic_tasks
+            WHERE project = $1
+              AND status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+            ORDER BY updated_at DESC, id DESC
+            LIMIT $2
+            """,
+            project,
+            recent_limit,
+        ),
+    )
+
+    def serialize(row):
+        """将任务行的日期字段转换为 ISO 字符串。
+
+        参数:
+            - `row`：数据库返回的单条任务记录。
+        """
+        item = dict(row)
+        for key in ("created_at", "updated_at"):
+            value = item.get(key)
+            if hasattr(value, "isoformat"):
+                item[key] = value.isoformat()
+        return item
+
+    return {
+        "project": project,
+        "status_counts": {str(row["status"]): int(row["count"]) for row in status_rows},
+        "active_tasks": [serialize(row) for row in active_rows],
+        "recent_tasks": [serialize(row) for row in recent_rows],
+    }

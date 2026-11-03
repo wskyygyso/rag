@@ -5,7 +5,12 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.auth import api_identity, require_project_access
-from app.projects import discover_projects, get_project_overview, read_repository_revision
+from app.projects import (
+    discover_projects,
+    get_project_overview,
+    get_project_task_board,
+    read_repository_revision,
+)
 from app.settings import get_settings
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -74,3 +79,18 @@ async def rebuild_project_index(project: str, request: Request) -> Dict:
         "status": "QUEUED",
         "task_id": queued.id,
     }
+
+
+@router.get("/{project}/task-board")
+async def project_task_board(project: str, request: Request) -> Dict:
+    """返回项目状态统计、运行中任务和最近终态任务。
+
+    参数:
+        - `project`：需要查看任务看板的诊断项目标识。
+        - `request`：携带认证身份和数据库连接池的 FastAPI 请求。
+    """
+    require_project_access(request, project)
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="数据库暂不可用")
+    return await get_project_task_board(pool, project)

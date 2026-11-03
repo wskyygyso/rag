@@ -40,5 +40,8 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "index-history" in response.text
     assert "loadIndexHistory" in response.text
     assert "retryIndexRun" in response.text
+    assert "task-board" in response.text
+    assert "loadTaskBoard" in response.text
+    assert "openBoardTask" in response.text
     assert "response.body.getReader" in response.text
     assert "提交反馈" in response.text
