@@ -11,6 +11,7 @@
 - [x] 生产启动门禁强制 `APP_ENV=production`，非生产配置严格预检会失败。
 - [ ] `AUTH_ENABLED=true`，API Key 来自 Secret Manager 且满足长度要求。
 - [ ] API Key 的项目白名单和 `read`/`write` scope 最小化。
+- [ ] 任何曾出现在终端、CI 日志、会话记录或诊断输出中的凭据均已轮换。
 - [x] 生产 Compose 仅绑定受控地址；安全响应头、HSTS、CORS 白名单和请求体限制已实现。
 - [x] 生产等价容器已验证只读根文件系统、`cap_drop: ALL`、非 root UID `10001` 和只读仓库卷可启动。
 - [ ] `VALIDATION_DATABASE_URL` 使用独立目标业务库只读账号。

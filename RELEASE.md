@@ -23,6 +23,7 @@ SBOM/Trivy 结果、隔离恢复演练和上线签字。上述外部项完成前
 - `main` 分支 CI 全部通过，镜像由 GitHub Actions 生成并在 `Release gate` 中通过高危漏洞门禁。
 - 发布镜像使用 Git commit SHA、语义版本或 `registry/image@sha256:<digest>`，禁止使用 `latest`。
 - 生产 Secret 已注入 `API_KEYS_JSON`、`DATABASE_URL`、`VALIDATION_DATABASE_URL`、Redis 地址和可选 LLM 凭据。
+- 任何曾出现在本地终端、CI 日志、会话记录或诊断输出中的凭据已经轮换，不能直接用于生产。
 - `VALIDATION_DATABASE_URL` 使用独立只读账号，并已确认 `SHOW transaction_read_only` 为 `on`。
 - `RAGENT_REPOSITORIES_ROOT` 只读挂载，运行用户没有业务仓库写权限。
 - 已完成最近一次 PostgreSQL 备份恢复演练，并记录恢复耗时和核心表行数。
