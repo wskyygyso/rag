@@ -145,7 +145,7 @@ async def get_project_task_board(pool, project: str, recent_limit: int = 5) -> D
         ),
         pool.fetch(
             """
-            SELECT id, question, status, progress, current_step, created_at, updated_at
+            SELECT id, question, status, progress, current_step, retry_count, error, created_at, updated_at
             FROM diagnostic_tasks
             WHERE project = $1
               AND status IN ('COMPLETED', 'FAILED', 'CANCELLED')

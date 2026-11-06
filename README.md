@@ -430,6 +430,18 @@ POST /api/projects/{project}/tasks/cancel
 
 只取消当前项目内尚未结束的任务，单次最多 20 个；不存在或已结束任务在 `skipped` 中返回原因。页面可见时看板每 5 秒自动刷新。
 
+批量重试看板中选中的失败任务：
+
+```text
+POST /api/projects/{project}/tasks/retry
+{"task_ids":["diag_xxx","diag_yyy"]}
+```
+
+接口只重试当前项目内状态为 `FAILED` 且人工重试次数小于 3 的任务，单次最多 20 个。成功任务进入
+`QUEUED` 并返回在 `retried`，其他任务在 `skipped` 中返回具体原因；`details` 提供逐任务结果，
+`request_id` 可与访问日志和任务操作审计关联。队列投递失败会把对应任务恢复为失败状态，不向客户端泄露
+Broker 内部错误。
+
 检查最近两次评测是否发生质量回归：
 
 ```bash

@@ -59,8 +59,10 @@
       <div id="task-board" class="muted">暂无项目任务。</div>
       <div class="actions">
         <button id="cancel-selected" class="secondary" type="button" hidden>取消选中任务</button>
+        <button id="retry-selected" class="secondary" type="button" hidden>重试选中任务</button>
         <span id="board-message" class="muted" role="status">看板每 5 秒自动刷新</span>
       </div>
+      <ul id="board-operation-result" class="muted" aria-live="polite" hidden></ul>
 
       <section class="card" aria-live="polite">
         <h2>任务进度</h2>
@@ -140,7 +142,13 @@
 
     <script>
       // 用于展示任务状态、报告和反馈的最小前端示例，不依赖外部 JavaScript 包。
-      const state = { taskId: null, eventController: null, historyOffset: 0 };
+      const state = {
+        taskId: null,
+        eventController: null,
+        historyOffset: 0,
+        boardCancelIds: new Set(),
+        boardRetryIds: new Set(),
+      };
       const $ = (id) => document.getElementById(id);
       const nativeFetch = window.fetch.bind(window);
 
@@ -259,6 +267,14 @@
         const response = await apiFetch(`/api/projects/${project}/task-board`);
         if (!response.ok) throw new Error(`任务看板获取失败（${response.status}）`);
         const data = await response.json();
+        const activeIds = new Set(data.active_tasks.map((task) => task.id));
+        const retryableIds = new Set(
+          data.recent_tasks
+            .filter((task) => task.status === "FAILED" && (task.retry_count || 0) < 3)
+            .map((task) => task.id),
+        );
+        state.boardCancelIds = new Set([...state.boardCancelIds].filter((id) => activeIds.has(id)));
+        state.boardRetryIds = new Set([...state.boardRetryIds].filter((id) => retryableIds.has(id)));
         const container = $("task-board");
         container.replaceChildren();
         const summary = document.createElement("p");
@@ -274,11 +290,30 @@
           open.className = "secondary";
           open.textContent = "打开";
           open.addEventListener("click", () => openBoardTask(task));
-          const isActive = data.active_tasks.some((item) => item.id === task.id);
+          const isActive = activeIds.has(task.id);
+          const isRetryable = retryableIds.has(task.id);
           if (isActive) {
             const checkbox = document.createElement("input");
             checkbox.type = "checkbox";
             checkbox.value = task.id;
+            checkbox.checked = state.boardCancelIds.has(task.id);
+            checkbox.setAttribute("aria-label", `选择取消任务 ${task.id}`);
+            checkbox.addEventListener("change", () => {
+              if (checkbox.checked) state.boardCancelIds.add(task.id);
+              else state.boardCancelIds.delete(task.id);
+            });
+            row.appendChild(checkbox);
+          }
+          if (isRetryable) {
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.value = task.id;
+            checkbox.checked = state.boardRetryIds.has(task.id);
+            checkbox.setAttribute("aria-label", `选择重试任务 ${task.id}`);
+            checkbox.addEventListener("change", () => {
+              if (checkbox.checked) state.boardRetryIds.add(task.id);
+              else state.boardRetryIds.delete(task.id);
+            });
             row.appendChild(checkbox);
           }
           row.append(label, open);
@@ -292,7 +327,29 @@
           }
           container.appendChild(row);
         });
-        $("cancel-selected").hidden = data.active_tasks.length === 0;
+        $("cancel-selected").hidden = activeIds.size === 0;
+        $("retry-selected").hidden = retryableIds.size === 0;
+      }
+
+      /**
+       * 展示项目看板批量操作的逐任务结果。
+       * @param {string} title 操作结果摘要。
+       * @param {Object} body 批量接口响应，包含 details 逐任务结果。
+       * @returns {void}
+       */
+      function renderBoardOperationResult(title, body) {
+        const container = $("board-operation-result");
+        container.replaceChildren();
+        const heading = document.createElement("li");
+        heading.textContent = title;
+        container.appendChild(heading);
+        (body.details || []).forEach((item) => {
+          const row = document.createElement("li");
+          const outcome = item.outcome === "skipped" ? "跳过" : "成功";
+          row.textContent = `${item.task_id}：${outcome}${item.reason ? `（${item.reason}）` : ""}`;
+          container.appendChild(row);
+        });
+        container.hidden = false;
       }
 
       /**
@@ -711,12 +768,13 @@
 
       // 批量取消看板中选中的运行任务。
       $("cancel-selected").addEventListener("click", async () => {
-        const taskIds = [...$("task-board").querySelectorAll('input[type="checkbox"]:checked')].map((item) => item.value);
+        const taskIds = [...state.boardCancelIds];
         if (!taskIds.length) {
           $("board-message").textContent = "请先选择运行中的任务";
           return;
         }
         const project = encodeURIComponent($("project").value.trim());
+        $("cancel-selected").disabled = true;
         try {
           const response = await apiFetch(`/api/projects/${project}/tasks/cancel`, {
             method: "POST",
@@ -726,9 +784,41 @@
           const body = await response.json();
           if (!response.ok) throw new Error(body.detail || `批量取消失败（${response.status}）`);
           $("board-message").textContent = `已取消 ${body.cancelled.length} 个任务，跳过 ${body.skipped.length} 个`;
+          renderBoardOperationResult("批量取消结果", body);
+          state.boardCancelIds.clear();
           await Promise.all([loadTaskBoard(), loadProjectOverview()]);
         } catch (error) {
           $("board-message").textContent = error.message;
+        } finally {
+          $("cancel-selected").disabled = false;
+        }
+      });
+
+      // 批量重试看板中选中的失败任务。
+      $("retry-selected").addEventListener("click", async () => {
+        const taskIds = [...state.boardRetryIds];
+        if (!taskIds.length) {
+          $("board-message").textContent = "请先选择可重试的失败任务";
+          return;
+        }
+        const project = encodeURIComponent($("project").value.trim());
+        $("retry-selected").disabled = true;
+        try {
+          const response = await apiFetch(`/api/projects/${project}/tasks/retry`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_ids: taskIds }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `批量重试失败（${response.status}）`);
+          $("board-message").textContent = `已重试 ${body.retried.length} 个任务，跳过 ${body.skipped.length} 个`;
+          renderBoardOperationResult("批量重试结果", body);
+          state.boardRetryIds.clear();
+          await Promise.all([loadTaskBoard(), loadProjectOverview()]);
+        } catch (error) {
+          $("board-message").textContent = error.message;
+        } finally {
+          $("retry-selected").disabled = false;
         }
       });
 
