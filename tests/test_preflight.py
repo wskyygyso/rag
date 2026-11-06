@@ -19,7 +19,7 @@ def test_strict_preflight_rejects_missing_production_controls(tmp_path) -> None:
     settings = Settings(
         app_env="production",
         auth_enabled=False,
-        database_url="postgresql://metadata",
+        database_url="postgresql://metadata/ragent",
         validation_database_url="",
         code_repositories_root=str(repository_root),
     )
@@ -38,12 +38,37 @@ def test_preflight_rejects_reusing_metadata_database(tmp_path) -> None:
     repository_root = tmp_path / "repositories"
     repository_root.mkdir()
     settings = Settings(
-        database_url="postgresql://same",
-        validation_database_url="postgresql://same",
+        database_url="postgresql://same/ragent",
+        validation_database_url="postgresql://different-user:secret@SAME:5432/ragent?application_name=validation",
         code_repositories_root=str(repository_root),
     )
     results = {result.name: result for result in static_preflight(settings, strict=False)}
     assert results["validation_database_url"].status == "FAIL"
+
+
+def test_strict_preflight_rejects_placeholder_secrets_and_wildcard_cors(tmp_path) -> None:
+    """验证严格门禁拒绝模板占位凭据和通配 CORS。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
+    repository_root = tmp_path / "repositories"
+    repository_root.mkdir()
+    api_key = "preflight-placeholder-test-key"
+    settings = Settings(
+        app_env="production",
+        auth_enabled=True,
+        api_keys_json=json.dumps(
+            {api_key: {"subject": "ops", "projects": ["waky3"], "scopes": ["read", "write"]}}
+        ),
+        database_url="postgresql://ragent:<DATABASE_PASSWORD>@postgres/ragent",
+        validation_database_url="postgresql://readonly:<READONLY_PASSWORD>@target/business",
+        code_repositories_root=str(repository_root),
+        cors_allowed_origins="*",
+    )
+    results = {result.name: result for result in static_preflight(settings, strict=True)}
+    assert results["secret_placeholders"].status == "FAIL"
+    assert results["cors"].status == "FAIL"
 
 
 def test_preflight_accepts_valid_static_configuration(tmp_path) -> None:
@@ -61,8 +86,8 @@ def test_preflight_accepts_valid_static_configuration(tmp_path) -> None:
         api_keys_json=json.dumps(
             {api_key: {"subject": "ops", "projects": ["waky3"], "scopes": ["read", "write"]}}
         ),
-        database_url="postgresql://metadata",
-        validation_database_url="postgresql://readonly",
+        database_url="postgresql://metadata/ragent",
+        validation_database_url="postgresql://readonly/business",
         code_repositories_root=str(repository_root),
     )
     results = static_preflight(settings, strict=True)
@@ -80,7 +105,7 @@ def test_production_startup_gate_rejects_incomplete_configuration(tmp_path) -> N
     settings = Settings(
         app_env="production",
         auth_enabled=False,
-        database_url="postgresql://metadata",
+        database_url="postgresql://metadata/ragent",
         validation_database_url="",
         code_repositories_root=str(repository_root),
     )
@@ -103,8 +128,8 @@ def test_production_startup_gate_accepts_complete_configuration(tmp_path) -> Non
         api_keys_json=json.dumps(
             {api_key: {"subject": "ops", "projects": ["waky3"], "scopes": ["read", "write"]}}
         ),
-        database_url="postgresql://metadata",
-        validation_database_url="postgresql://readonly",
+        database_url="postgresql://metadata/ragent",
+        validation_database_url="postgresql://readonly/business",
         code_repositories_root=str(repository_root),
     )
     enforce_production_settings(settings)

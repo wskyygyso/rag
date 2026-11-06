@@ -44,6 +44,15 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # 通过 Celery control 通道确认诊断 Worker 进程能响应控制消息。
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery -A app.worker.celery_app inspect ping -d "celery@$$HOSTNAME" --timeout=5 | grep -q pong
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
   # 文档索引 Worker：只消费 index 队列，可与诊断 Worker 独立扩缩容。
   index-worker:
@@ -58,6 +67,15 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # 独立探测索引 Worker，避免诊断 Worker 在线时掩盖索引队列故障。
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery -A app.worker.celery_app inspect ping -d "celery@$$HOSTNAME" --timeout=5 | grep -q pong
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
 
   # Redis：验证限流、LLM 缓存、Celery broker 和结果后端。
   redis:

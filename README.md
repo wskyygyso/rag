@@ -1,8 +1,13 @@
 # PHP 代码诊断 RAgent
 
-当前项目已完成阶段 0 至阶段 7，正在推进阶段 8：智能诊断增强。
+阶段 0 至阶段 10 的代码、生产编排、迁移门禁、发布流水线和验收资产已完成，并已在本机生产等价
+环境中通过演练。正式生产 URL 上线仍需按 `RELEASE.md` 接入目标环境的 Secret Manager、托管
+PostgreSQL/Redis、只读业务库、监控告警、镜像仓库和上线责任人后完成现场验收。
 
 ## 本地启动
+
+本地开发最低使用 Python 3.11；生产镜像固定使用 Python 3.11-slim，并通过 `requirements.lock`
+安装完全一致的依赖版本。Python 3.10 及以下不满足当前 Celery Redis transport 的依赖要求。
 
 1. 复制 `.env.example` 为 `.env`。
 2. 创建 Python 虚拟环境：`python3 -m venv .venv`。
@@ -15,6 +20,9 @@
 复制 `.env.example` 为 `.env`，然后执行 `docker compose up --build`。
 
 API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
+
+生产环境使用 `docker-compose.production.yml` 和 `RELEASE.md`，不要直接复用本地 Compose 的开发数据库密码。
+生产镜像使用 `requirements.lock` 固定 Python 依赖、以 UID/GID `10001` 非 root 运行，并要求不可变镜像地址。
 
 健康检查分为：
 
@@ -56,6 +64,21 @@ docker compose run --rm api python scripts/preflight_check.py
 
 ```bash
 docker compose run --rm api python scripts/preflight_check.py --strict
+```
+
+生产数据库迁移必须在 API 启动前由独立命令执行。迁移器使用事务、咨询锁和 SHA-256 校验和阻断漏跑或脚本漂移：
+
+```bash
+docker compose run --rm --no-deps api python scripts/migrate_database.py --check
+docker compose run --rm --no-deps api python scripts/migrate_database.py
+```
+
+部署后使用只读烟雾测试检查 readiness、认证项目、数据库指标和项目看板：
+
+```bash
+RAGENT_API_KEY=replace-with-production-key \
+RAGENT_SMOKE_PROJECT=waky3 \
+python scripts/smoke_test.py --base-url https://ragent.example.com --require-api --json
 ```
 
 预检会检查生产环境、API Key 认证、任务超时、数据保留策略、独立只读数据库、代码仓库目录、
@@ -165,7 +188,7 @@ API Key 仅从 `RAGENT_API_KEY` 环境变量读取，避免出现在命令行参
 
 执行 `.venv/bin/pytest -q`。
 
-GitHub Actions 的 `CI` 工作流在 Python 3.9 和 3.11 下执行单元测试、Python 编译、前端脚本语法、
+GitHub Actions 的 `CI` 工作流在 Python 3.11（最低支持版本）下执行单元测试、Python 编译、前端脚本语法、
 备份脚本语法、Compose 普通/维护配置和空白错误检查。推送 `main` 或创建 Pull Request 时自动运行。
 
 运行离线诊断准确性基线：

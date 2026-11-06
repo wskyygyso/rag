@@ -1,0 +1,57 @@
+# 发布标签或人工触发时构建生产镜像，生成 SBOM 并执行高危漏洞门禁。
+name: Release gate
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# 读取源码、构建镜像和上传安全产物，不授予代码内容写权限。
+permissions:
+  contents: read
+
+jobs:
+  # 在完全相同的锁文件和镜像上生成可审计供应链产物。
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ragent:${{ github.sha }}
+          build-args: |
+            RAGENT_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ragent:${{ github.sha }}
+          format: spdx-json
+          output-file: ragent-${{ github.sha }}.spdx.json
+          upload-artifact: false
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragent-sbom-${{ github.sha }}
+          path: ragent-${{ github.sha }}.spdx.json
+
+      - name: Block critical and high vulnerabilities
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ragent:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH

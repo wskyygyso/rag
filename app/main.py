@@ -52,7 +52,9 @@ async def lifespan(application: FastAPI):
     try:
         application.state.db_pool = await create_pool(settings)
     except Exception:
-        # 允许不带依赖服务运行 API 单元测试；实际任务接口会返回 503。
+        # 生产环境不能带病接收流量；开发环境保留无数据库时的单元测试兼容。
+        if settings.app_env == "production":
+            raise
         application.state.db_pool = None
     try:
         yield

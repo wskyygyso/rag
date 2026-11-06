@@ -4,5 +4,11 @@ __pycache__
 .pytest_cache
 .ruff_cache
 *.py[cod]
-.env
+.env*
+backups
+repositories
+PRODUCTION_CHECKLIST.md
+README.md
+implementation-*.md
+progress.md
 

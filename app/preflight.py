@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import asyncpg
 from redis import asyncio as redis_asyncio
@@ -14,18 +15,28 @@ from app.settings import Settings
 REQUIRED_TABLES = {
     "diagnostic_tasks",
     "diagnostic_evidence",
+    "code_symbols",
     "validation_audit",
     "diagnostic_feedback",
     "diagnostic_task_operations",
     "security_audit",
     "document_chunks",
     "document_index_runs",
+    "ai_evaluation_runs",
+    "schema_migrations",
 }
 
 
 @dataclass
 class CheckResult:
-    """表示一项预检结果及其可机器读取的附加信息。"""
+    """表示一项上线门禁结果，供命令行退出码和发布记录共同使用。
+
+    字段:
+        - `name`：稳定检查标识，发布平台和测试以此区分不同门禁。
+        - `status`：`PASS`、`WARN` 或 `FAIL`，严格模式会把警告也视为阻断。
+        - `message`：面向发布人员的中文结论，不包含密码等敏感值。
+        - `detail`：可机器读取的补充信息，例如缺失表名或异常类型。
+    """
 
     name: str
     status: str
@@ -34,15 +45,60 @@ class CheckResult:
 
 
 def _result(name: str, status: str, message: str, **detail: Any) -> CheckResult:
-    """创建预检结果，统一状态值。
+    """创建一条结构一致的上线检查结论。
 
     参数:
-        - `name`：名称或标识，类型为 `str`。
-        - `status`：状态值，类型为 `str`。
-        - `message`：检查结果说明，类型为 `str`。
-        - `**detail`：结构化补充信息。
+        - `name`：检查项稳定标识，例如 `metadata_database`，供门禁和发布记录引用。
+        - `status`：检查结论，只允许使用 `PASS`、`WARN` 或 `FAIL`。
+        - `message`：面向发布人员的中文结论，不能包含连接密码或 API Key。
+        - `**detail`：失败上下文或诊断信息，必须可 JSON 序列化。
     """
     return CheckResult(name=name, status=status, message=message, detail=detail)
+
+
+def _database_endpoint(database_url: str) -> Optional[tuple[str, int, str]]:
+    """提取 PostgreSQL 连接地址中的主机、端口和数据库名。
+
+    参数:
+        - `database_url`：生产配置中的 PostgreSQL URL；查询参数和账号密码不参与比较。
+
+    返回:
+        规范化后的 `(host, port, database)`；地址为空或无法解析时返回 None，由调用方
+        输出明确的配置失败，而不是误判为两个独立数据库。
+    """
+    parsed = urlsplit(database_url)
+    try:
+        hostname = parsed.hostname
+        port = parsed.port or 5432
+    except ValueError:
+        return None
+    if parsed.scheme not in {"postgres", "postgresql"} or not hostname:
+        return None
+    database = parsed.path.lstrip("/")
+    if not database:
+        return None
+    return hostname.lower(), port, database
+
+
+async def _postgres_server_identity(connection) -> tuple[str, str, int]:
+    """读取 PostgreSQL 当前数据库和服务端监听地址，用于识别地址别名复用。
+
+    参数:
+        - `connection`：已认证的 asyncpg 连接；查询只读取当前会话元数据，不修改业务数据。
+
+    返回:
+        `(数据库名, 服务端地址, 服务端端口)`；使用 Unix Socket 时地址为空字符串，
+        调用方还应结合静态 URL 规范化结果判断是否复用同一数据库。
+    """
+    row = await connection.fetchrow(
+        """
+        SELECT
+            current_database() AS database_name,
+            COALESCE(host(inet_server_addr()), '') AS server_address,
+            COALESCE(inet_server_port(), 0) AS server_port
+        """
+    )
+    return str(row["database_name"]), str(row["server_address"]), int(row["server_port"])
 
 
 def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
@@ -123,17 +179,28 @@ def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
 
     metadata_url = (settings.database_url or "").strip()
     validation_url = (settings.validation_database_url or "").strip()
+    metadata_endpoint = _database_endpoint(metadata_url)
+    validation_endpoint = _database_endpoint(validation_url)
     results.append(
         _result(
             "metadata_database_url",
-            "PASS" if metadata_url else "FAIL",
-            "RAgent 元数据库已配置" if metadata_url else "未配置 DATABASE_URL",
+            "PASS" if metadata_endpoint else "FAIL",
+            "RAgent 元数据库连接地址有效" if metadata_endpoint else "DATABASE_URL 缺失或不是包含数据库名的 PostgreSQL URL",
         )
     )
     if not validation_url:
         status = "FAIL" if strict else "WARN"
         results.append(_result("validation_database_url", status, "未配置目标只读数据库"))
-    elif validation_url == metadata_url:
+    elif validation_endpoint is None:
+        status = "FAIL" if strict else "WARN"
+        results.append(
+            _result(
+                "validation_database_url",
+                status,
+                "VALIDATION_DATABASE_URL 不是包含数据库名的 PostgreSQL URL",
+            )
+        )
+    elif validation_endpoint == metadata_endpoint:
         results.append(
             _result(
                 "validation_database_url",
@@ -143,6 +210,29 @@ def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
         )
     else:
         results.append(_result("validation_database_url", "PASS", "目标只读数据库已独立配置"))
+
+    placeholder_values = (
+        "<DATABASE_PASSWORD>" in metadata_url,
+        "<READONLY_PASSWORD>" in validation_url,
+        "<GENERATE_RANDOM_API_KEY>" in (settings.api_keys_json or ""),
+    )
+    results.append(
+        _result(
+            "secret_placeholders",
+            "FAIL" if any(placeholder_values) else "PASS",
+            "生产凭据未包含模板占位值" if not any(placeholder_values) else "生产配置仍包含模板占位值",
+        )
+    )
+
+    cors_origins = [item.strip() for item in (settings.cors_allowed_origins or "").split(",") if item.strip()]
+    cors_valid = "*" not in cors_origins
+    results.append(
+        _result(
+            "cors",
+            "PASS" if cors_valid else "FAIL",
+            "CORS 白名单未使用通配来源" if cors_valid else "生产环境禁止开放 CORS 通配来源",
+        )
+    )
 
     repository_root = Path(settings.code_repositories_root)
     repository_ok = repository_root.is_dir()
@@ -227,12 +317,20 @@ async def check_validation_database(settings: Settings) -> Optional[CheckResult]
     if not validation_url or validation_url == (settings.database_url or "").strip():
         return None
     connection = None
+    metadata_connection = None
     try:
         connection = await asyncpg.connect(validation_url, timeout=3)
         async with connection.transaction(readonly=True):
             transaction_read_only = await connection.fetchval("SHOW transaction_read_only")
         if str(transaction_read_only).lower() != "on":
             return _result("validation_database", "FAIL", "目标数据库 READ ONLY 事务未生效")
+        metadata_connection = await asyncpg.connect(settings.database_url, timeout=3)
+        if await _postgres_server_identity(connection) == await _postgres_server_identity(metadata_connection):
+            return _result(
+                "validation_database",
+                "FAIL",
+                "目标验证数据库实际指向 RAgent 元数据库，禁止复用",
+            )
         return _result("validation_database", "PASS", "目标数据库连接和 READ ONLY 事务检查通过")
     except Exception as exc:
         return _result(
@@ -244,6 +342,8 @@ async def check_validation_database(settings: Settings) -> Optional[CheckResult]
     finally:
         if connection is not None:
             await connection.close()
+        if metadata_connection is not None:
+            await metadata_connection.close()
 
 
 async def run_preflight(settings: Settings, strict: bool) -> List[CheckResult]:

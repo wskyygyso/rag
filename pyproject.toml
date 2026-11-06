@@ -8,16 +8,17 @@ build-backend = "setuptools.build_meta"
 name = "php-diagnostic-ragent"
 version = "0.1.0"
 description = "Async PHP code diagnostic RAgent foundation"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     # HTTP API、Web 服务和配置模型。
     "fastapi>=0.110,<1.0",
     "uvicorn[standard]>=0.27,<1.0",
     "pydantic-settings>=2.0,<3.0",
     # Redis、PostgreSQL 和 Celery 异步任务依赖。
-    "redis>=5.0,<6.0",
+    # Kombu 5.7 的 Redis transport 要求 redis-py 6.4+，版本范围必须与其同步。
+    "redis>=6.4,<9.0",
     "asyncpg>=0.29,<1.0",
-    "celery[redis]>=5.3,<6.0",
+    "celery[redis]>=5.7,<6.0",
     # LLM HTTP 调用和性能基线脚本。
     "httpx>=0.26,<1.0"
 ]

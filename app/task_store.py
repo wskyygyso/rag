@@ -100,6 +100,11 @@ CREATE INDEX IF NOT EXISTS idx_diagnostic_tasks_project_updated
     ON diagnostic_tasks (project, updated_at DESC)
 """
 
+CREATE_DIAGNOSIS_HISTORY_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_diagnostic_tasks_project_created
+    ON diagnostic_tasks (project, created_at DESC)
+"""
+
 CREATE_AI_EVALUATION_RUNS_SQL = """
 CREATE TABLE IF NOT EXISTS ai_evaluation_runs (
     id BIGSERIAL PRIMARY KEY,
@@ -225,6 +230,7 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
     async with pool.acquire() as connection:
         await connection.execute(CREATE_TASKS_SQL)
         await connection.execute(CREATE_TASKS_QUALITY_INDEX_SQL)
+        await connection.execute(CREATE_DIAGNOSIS_HISTORY_INDEX_SQL)
         await connection.execute(CREATE_AI_EVALUATION_RUNS_SQL)
         await connection.execute(CREATE_AI_EVALUATION_RUNS_INDEX_SQL)
         await connection.execute(
