@@ -421,6 +421,15 @@ GET /api/projects/{project}/task-board
 
 看板返回任务状态统计、最多 20 个运行中任务和最近 5 个终态任务。前端支持快速打开报告，并对运行中任务提供取消操作。
 
+批量取消看板中选中的运行任务：
+
+```text
+POST /api/projects/{project}/tasks/cancel
+{"task_ids":["diag_xxx","diag_yyy"]}
+```
+
+只取消当前项目内尚未结束的任务，单次最多 20 个；不存在或已结束任务在 `skipped` 中返回原因。页面可见时看板每 5 秒自动刷新。
+
 检查最近两次评测是否发生质量回归：
 
 ```bash

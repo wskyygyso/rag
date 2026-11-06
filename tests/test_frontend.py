@@ -43,5 +43,7 @@ def test_ui_page_exposes_diagnosis_workflow() -> None:
     assert "task-board" in response.text
     assert "loadTaskBoard" in response.text
     assert "openBoardTask" in response.text
+    assert "cancel-selected" in response.text
+    assert "setInterval" in response.text
     assert "response.body.getReader" in response.text
     assert "提交反馈" in response.text

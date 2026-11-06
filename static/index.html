@@ -57,6 +57,10 @@
       </div>
       <div id="index-history" class="muted">暂无索引运行记录。</div>
       <div id="task-board" class="muted">暂无项目任务。</div>
+      <div class="actions">
+        <button id="cancel-selected" class="secondary" type="button" hidden>取消选中任务</button>
+        <span id="board-message" class="muted" role="status">看板每 5 秒自动刷新</span>
+      </div>
 
       <section class="card" aria-live="polite">
         <h2>任务进度</h2>
@@ -270,8 +274,15 @@
           open.className = "secondary";
           open.textContent = "打开";
           open.addEventListener("click", () => openBoardTask(task));
+          const isActive = data.active_tasks.some((item) => item.id === task.id);
+          if (isActive) {
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.value = task.id;
+            row.appendChild(checkbox);
+          }
           row.append(label, open);
-          if (data.active_tasks.some((item) => item.id === task.id)) {
+          if (isActive) {
             const cancel = document.createElement("button");
             cancel.type = "button";
             cancel.className = "secondary";
@@ -281,6 +292,7 @@
           }
           container.appendChild(row);
         });
+        $("cancel-selected").hidden = data.active_tasks.length === 0;
       }
 
       /**
@@ -696,6 +708,36 @@
           $("rebuild-index").disabled = false;
         }
       });
+
+      // 批量取消看板中选中的运行任务。
+      $("cancel-selected").addEventListener("click", async () => {
+        const taskIds = [...$("task-board").querySelectorAll('input[type="checkbox"]:checked')].map((item) => item.value);
+        if (!taskIds.length) {
+          $("board-message").textContent = "请先选择运行中的任务";
+          return;
+        }
+        const project = encodeURIComponent($("project").value.trim());
+        try {
+          const response = await apiFetch(`/api/projects/${project}/tasks/cancel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_ids: taskIds }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `批量取消失败（${response.status}）`);
+          $("board-message").textContent = `已取消 ${body.cancelled.length} 个任务，跳过 ${body.skipped.length} 个`;
+          await Promise.all([loadTaskBoard(), loadProjectOverview()]);
+        } catch (error) {
+          $("board-message").textContent = error.message;
+        }
+      });
+
+      // 页面可见时每 5 秒自动刷新项目任务看板。
+      setInterval(() => {
+        if (document.visibilityState === "visible") {
+          loadTaskBoard().catch(() => null);
+        }
+      }, 5000);
     </script>
   </body>
 </html>

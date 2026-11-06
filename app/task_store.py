@@ -494,6 +494,32 @@ async def mark_cancelled(pool: asyncpg.Pool, task_id: str) -> Optional[Dict[str,
     return _decode_task(row)
 
 
+async def mark_cancelled_many(pool: asyncpg.Pool, project: str, task_ids: list[str]) -> list[Dict[str, Any]]:
+    """批量取消项目内尚未结束的诊断任务。
+
+    参数:
+        - `pool`：RAgent 元数据库连接池。
+        - `project`：任务必须属于的诊断项目。
+        - `task_ids`：最多 20 个需要尝试取消的任务 ID。
+    """
+    rows = await pool.fetch(
+        """
+        UPDATE diagnostic_tasks
+        SET status = 'CANCELLED',
+            progress = 100,
+            current_step = '任务已批量取消',
+            updated_at = NOW()
+        WHERE project = $1
+          AND id = ANY($2::varchar[])
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+        RETURNING id, status
+        """,
+        project,
+        task_ids,
+    )
+    return [dict(row) for row in rows]
+
+
 async def prepare_task_retry(
     pool: asyncpg.Pool, task_id: str, max_retries: int = 3
 ) -> Optional[Dict[str, Any]]:
