@@ -2370,7 +2370,7 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 - 全量测试通过，结果为 `166 passed`；
 - 注释覆盖、Python 编译、依赖一致性、前端语法、诊断准确性基线和 Shell 语法检查通过；
 - 本地与生产 Compose 配置解析通过；
-- 生产镜像 `sha256:161f3c11d42adf054ae2f61a77c448c7cd12ed99dcad4e77c6c6244b43d0cd38` 构建成功，运行时 UID 为 `10001`；
+- 生产镜像从 runtime commit `5004095061c154875a5df76159f8779e6124a06b` 构建，digest 为 `sha256:bf928ebe63ade155780bca95ea66e59edd16440cf445477e836072f6569f7578`，运行时 UID 为 `10001`；
 - 加固容器内 `pip check` 无冲突，Celery `5.7.0`、redis-py `8.1.0` 启动正常；
 - 21 个迁移已对真实 PostgreSQL 执行，备份 SHA-256 为 `70b9e4d19d0648497422920d3e6ac6ec3cc0217d1eb510f9fc740bf9521193f6`，复查为 `pending=0 drifted=0`；
 - 独立全新 PostgreSQL 空库从 001 一次应用到 021，21 个版本全部登记，11 张核心表齐全；

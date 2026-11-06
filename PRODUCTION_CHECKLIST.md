@@ -79,7 +79,7 @@
 发布时必须在本节记录实际结果，而不是只勾选：
 
 ```text
-Commit / 镜像 digest：
+Commit / 镜像 digest：5004095061c154875a5df76159f8779e6124a06b / sha256:bf928ebe63ade155780bca95ea66e59edd16440cf445477e836072f6569f7578
 迁移 --check 输出：
 CI / SBOM / 漏洞扫描：
 严格预检输出：
@@ -92,7 +92,8 @@ Prometheus / Alertmanager 截图或链接：
 本机生产交付演练记录（2026-11-06）：
 
 ```text
-镜像 digest：sha256:161f3c11d42adf054ae2f61a77c448c7cd12ed99dcad4e77c6c6244b43d0cd38
+Commit：5004095061c154875a5df76159f8779e6124a06b
+镜像 digest：sha256:bf928ebe63ade155780bca95ea66e59edd16440cf445477e836072f6569f7578
 迁移：pending=0 drifted=0，已应用 21 个连续版本
 全新空库迁移：21 个版本一次成功，11 张核心表齐全
 严格预检：14 项 PASS（独立只读库、Redis、元数据库、核心表和仓库目录）

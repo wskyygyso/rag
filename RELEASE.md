@@ -14,6 +14,10 @@ Secret Manager、Prometheus/Alertmanager 和对象存储备份属于部署环境
 托管 PostgreSQL/Redis、独立只读业务库、只读代码仓库、Prometheus/Alertmanager、镜像仓库写权限、远端
 SBOM/Trivy 结果、隔离恢复演练和上线签字。上述外部项完成前，只能把当前版本定义为“可部署候选版本”。
 
+当前本机候选镜像：runtime commit `5004095061c154875a5df76159f8779e6124a06b`，镜像 digest
+`sha256:bf928ebe63ade155780bca95ea66e59edd16440cf445477e836072f6569f7578`。远端发布时仍以镜像仓库
+重新推送后的 digest 和 Release gate 结果为准。
+
 ## 1. 发布前置条件
 
 - `main` 分支 CI 全部通过，镜像由 GitHub Actions 生成并在 `Release gate` 中通过高危漏洞门禁。
