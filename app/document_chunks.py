@@ -10,7 +10,74 @@ from app.code_tools import CodeRepository, CodeToolError
 from app.embeddings import EMBEDDING_DIMENSION, EMBEDDING_MODEL, embed_text, cosine_similarity
 
 TEXT_EXTENSIONS = {".php", ".inc", ".phtml", ".conf", ".ini", ".yaml", ".yml", ".json", ".md", ".txt"}
-IGNORED_DIRECTORIES = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
+IGNORED_DIRECTORIES = {
+    ".git",
+    ".gitnexus",
+    "vendor",
+    "node_modules",
+    "runtime",
+    "storage",
+    "cache",
+}
+
+
+def _append_long_line_chunks(
+    project: str,
+    source_type: str,
+    source_id: str,
+    file_path: Optional[str],
+    line_number: int,
+    line: str,
+    max_chars: int,
+    chunks: List[Dict[str, Any]],
+) -> None:
+    """将超长单行拆成可写入 PostgreSQL 全文索引的字符分块。
+
+    参数:
+        - `project`：项目目录名，决定分块的检索隔离边界。
+        - `source_type`：来源类型，取值为 `code` 或 `document`。
+        - `source_id`：文件相对路径，作为分块稳定来源标识。
+        - `file_path`：文件在项目内的相对路径，用于报告回链。
+        - `line_number`：超长内容所在的一基物理行号。
+        - `line`：需要拆分的原始单行内容，不会修改目标文件。
+        - `max_chars`：每个字符分块允许的最大字符数。
+        - `chunks`：当前文件的累计分块列表，函数直接追加拆分结果。
+
+    返回:
+        无返回值；长行会生成带 `part-N` 后缀的稳定来源 ID，避免同一行多个
+        分块在数据库唯一约束中互相覆盖。相邻分块保留有限字符重叠，便于命中
+        跨越分块边界的符号或长字符串。
+    """
+    overlap_chars = min(200, max_chars // 10)
+    offset = 0
+    part_number = 1
+    while offset < len(line):
+        end = min(len(line), offset + max_chars)
+        text = line[offset:end]
+        chunks.append(
+            {
+                "project": project,
+                "source_type": source_type,
+                "source_id": f"{source_id}:{line_number}-{line_number}:part-{part_number}",
+                "file_path": file_path,
+                "line_start": line_number,
+                "line_end": line_number,
+                "content": text,
+                "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "embedding": embed_text(text),
+                "embedding_model": EMBEDDING_MODEL,
+                "embedding_dimension": EMBEDDING_DIMENSION,
+                "metadata": {
+                    "parent_source_id": source_id,
+                    "character_start": offset + 1,
+                    "character_end": end,
+                },
+            }
+        )
+        if end >= len(line):
+            break
+        offset = max(offset + 1, end - overlap_chars)
+        part_number += 1
 
 
 def chunk_text(
@@ -44,9 +111,24 @@ def chunk_text(
     chunks: List[Dict[str, Any]] = []
     start = 0
     while start < len(lines):
+        if len(lines[start]) > max_chars:
+            _append_long_line_chunks(
+                project,
+                source_type,
+                source_id,
+                file_path,
+                start + 1,
+                lines[start],
+                max_chars,
+                chunks,
+            )
+            start += 1
+            continue
         end = start
         size = 0
         while end < len(lines):
+            if len(lines[end]) > max_chars:
+                break
             next_size = size + len(lines[end]) + (1 if end > start else 0)
             if end > start and next_size > max_chars:
                 break

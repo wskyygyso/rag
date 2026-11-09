@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from app.code_tools import CodeRepository
+from app.code_tools import CodeRepository, IGNORED_REPOSITORY_PARTS
 
 CLASS_PATTERN = re.compile(r"\b(class|interface|trait)\s+([A-Za-z_][A-Za-z0-9_]*)")
 METHOD_PATTERN = re.compile(
@@ -147,9 +147,10 @@ def iter_php_files(repository: CodeRepository) -> Iterable[Path]:
     参数:
         - `repository`：已验证的仓库对象，类型为 `CodeRepository`。
     """
-    ignored = {".git", "vendor", "node_modules", "runtime", "storage", "cache"}
     for path in repository.path.rglob("*.php"):
-        if path.is_file() and not any(part in ignored for part in path.parts):
+        if path.is_file() and not any(
+            part in IGNORED_REPOSITORY_PARTS for part in path.parts
+        ):
             yield path
 
 

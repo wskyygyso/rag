@@ -3,7 +3,13 @@
 from pathlib import Path
 
 from app.php_index import index_repository, parse_php_source, trace_call_chain
-from app.symbol_tools import find_references, find_symbol, get_project_symbol_summary
+from app.symbol_tools import (
+    find_references,
+    find_symbol,
+    get_project_symbol_summary,
+    select_call_chain_entries,
+    summarize_symbol_index,
+)
 
 
 SOURCE = """<?php
@@ -58,3 +64,111 @@ def test_symbol_tools_find_definitions_references_and_summary(tmp_path: Path) ->
     assert symbol["total"] == 1
     assert references["total"] == 1
     assert len(summary["symbols"]) == 3
+
+
+def test_symbol_summary_drops_unrelated_project_content() -> None:
+    """验证带问题词的符号摘要不会把全项目无关内容送入报告或 LLM。"""
+    index = {
+        "symbols": [
+            {
+                "symbol_type": "class",
+                "symbol_name": "UsdFuseService",
+                "file": "php/services/Monitor/Fuse/UsdFuseService.php",
+                "line": 10,
+                "signature": "class UsdFuseService",
+            },
+            {
+                "symbol_type": "method",
+                "symbol_name": "UsdFuseService::isOfficialPaymentTriggered",
+                "file": "php/services/Monitor/Fuse/UsdFuseService.php",
+                "line": 126,
+                "signature": "function isOfficialPaymentTriggered",
+            },
+            {
+                "symbol_type": "class",
+                "symbol_name": "GuildController",
+                "file": "php/action/Guild.php",
+                "line": 4,
+                "signature": "class GuildController",
+            },
+        ],
+        "references": [
+            {
+                "source": "WithdrawalOrderCreateService::create",
+                "target": "UsdFuseService::isOfficialPaymentTriggered",
+                "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
+                "line": 87,
+            }
+        ],
+        "configs": [
+            {"key": "anchor.guild", "file": "php/action/Guild.php", "line": 8}
+        ],
+        "sql": [
+            {
+                "operation": "SELECT",
+                "content": "SELECT * FROM guild",
+                "file": "php/action/Guild.php",
+                "line": 9,
+            }
+        ],
+    }
+    evidence = [
+        {
+            "file": "php/services/Monitor/Fuse/UsdFuseService.php",
+            "line": 126,
+            "context": "126: return self::isTriggered($uid, self::OFFICIAL_PAYMENT);",
+        }
+    ]
+    summary = summarize_symbol_index(
+        index,
+        "waky6",
+        queries=["UsdFuseService", "isOfficialPaymentTriggered"],
+        evidence=evidence,
+    )
+    names = {item["symbol_name"] for item in summary["symbols"]}
+    assert names == {
+        "UsdFuseService",
+        "UsdFuseService::isOfficialPaymentTriggered",
+    }
+    assert not summary["configs"]
+    assert not summary["sql"]
+    assert summary["references"][0]["target"] == "UsdFuseService::isOfficialPaymentTriggered"
+
+    entries = select_call_chain_entries(
+        index,
+        ["isOfficialPaymentTriggered"],
+        evidence,
+    )
+    assert "UsdFuseService::isOfficialPaymentTriggered" in entries
+
+
+def test_call_chain_entries_prioritize_exact_discovered_symbol() -> None:
+    """验证完整入口符号优先于源码顺序更早的模糊方法命中。"""
+    index = {
+        "symbols": [
+            {
+                "symbol_type": "method",
+                "symbol_name": "OtherService::withdrawPreview",
+                "file": "php/OtherService.php",
+                "line": 10,
+            },
+            {
+                "symbol_type": "method",
+                "symbol_name": "AdvanceServices::anchorWithdraw",
+                "file": "php/services/Anchor/AdvanceServices.php",
+                "line": 577,
+            },
+        ],
+        "references": [],
+        "configs": [],
+        "sql": [],
+    }
+
+    entries = select_call_chain_entries(
+        index,
+        ["withdraw", "AdvanceServices::anchorWithdraw"],
+        [],
+        limit=1,
+    )
+
+    assert entries == ["AdvanceServices::anchorWithdraw"]

@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 from app import projects, projects_api
 from app.auth import ApiIdentity
 from app.main import app
-from app.projects import discover_projects, get_project_overview, get_project_task_board
+from app.projects import (
+    discover_projects,
+    get_latest_project_index_runs,
+    get_project_overview,
+    get_project_task_board,
+)
 
 
 def test_discover_projects_respects_directory_and_identity(tmp_path) -> None:
@@ -58,6 +63,31 @@ class _Pool:
         }
 
 
+class _ProjectListPool:
+    """返回项目列表批量索引状态的内存连接池替身。"""
+
+    async def fetch(self, query, project_names):
+        """返回一个项目的最新索引运行。
+
+        参数:
+            - `query`：按项目批量读取最新索引运行的 SQL。
+            - `project_names`：调用方有权访问的项目名列表。
+        """
+        assert project_names == ["waky3", "waky4"]
+        return [
+            {
+                "project": "waky3",
+                "status": "COMPLETED",
+                "chunk_count": 321,
+                "repository_revision": "abc123",
+                "index_version": "v1",
+                "error": None,
+                "started_at": datetime(2026, 11, 6, tzinfo=timezone.utc),
+                "finished_at": datetime(2026, 11, 6, 0, 1, tzinfo=timezone.utc),
+            }
+        ]
+
+
 @pytest.mark.asyncio
 async def test_project_overview_aggregates_status_feedback_and_index() -> None:
     """验证项目概览聚合任务、反馈和索引状态。
@@ -69,6 +99,15 @@ async def test_project_overview_aggregates_status_feedback_and_index() -> None:
     assert overview["tasks_total"] == 4
     assert overview["feedback"]["correct"] == 2
     assert overview["latest_index_run"]["chunk_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_latest_project_indexes_are_returned_by_project_name() -> None:
+    """验证项目列表可一次读取多个项目的最新索引状态。"""
+    latest = await get_latest_project_index_runs(_ProjectListPool(), ["waky3", "waky4"])
+    assert latest["waky3"]["chunk_count"] == 321
+    assert latest["waky3"]["finished_at"] == "2026-11-06T00:01:00+00:00"
+    assert "waky4" not in latest
 
 
 def test_project_overview_endpoint_returns_accessible_project(monkeypatch, tmp_path) -> None:
@@ -97,10 +136,20 @@ def test_project_list_endpoint_returns_discovered_projects(monkeypatch, tmp_path
         - `tmp_path`：pytest 临时仓库根目录。
     """
     (tmp_path / "waky3").mkdir()
+    (tmp_path / "waky4").mkdir()
     monkeypatch.setattr(projects_api, "settings", type("Settings", (), {"code_repositories_root": str(tmp_path)})())
-    response = TestClient(app).get("/api/projects")
+    app.state.db_pool = _ProjectListPool()
+    try:
+        response = TestClient(app).get("/api/projects")
+    finally:
+        app.state.db_pool = None
     assert response.status_code == 200
-    assert response.json()["projects"][0]["name"] == "waky3"
+    projects = {item["name"]: item for item in response.json()["projects"]}
+    assert set(projects) == {"waky3", "waky4"}
+    assert projects["waky3"]["index_status"] == "COMPLETED"
+    assert projects["waky3"]["indexed_chunk_count"] == 321
+    assert projects["waky4"]["index_status"] == "NOT_INDEXED"
+    assert projects["waky4"]["indexed_chunk_count"] == 0
 
 
 class _BoardPool:

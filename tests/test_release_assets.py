@@ -53,6 +53,23 @@ def test_local_workers_have_queue_specific_healthchecks() -> None:
         assert "celery@$$HOSTNAME" in command
 
 
+def test_local_compose_mounts_supported_projects_read_only() -> None:
+    """验证本地 API 和两个 Worker 挂载同一组 waky 项目且不可写。"""
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    expected_targets = {
+        "/repositories/waky3": "WAKY3_REPOSITORY_PATH",
+        "/repositories/waky4": "WAKY4_REPOSITORY_PATH",
+        "/repositories/waky6": "WAKY6_REPOSITORY_PATH",
+    }
+    for service_name in ("api", "worker", "index-worker"):
+        volumes = {item["target"]: item for item in compose["services"][service_name]["volumes"]}
+        assert set(volumes) == set(expected_targets)
+        for target, variable in expected_targets.items():
+            assert variable in volumes[target]["source"]
+            assert volumes[target]["read_only"] is True
+            assert volumes[target]["bind"]["create_host_path"] is False
+
+
 def test_release_workflow_is_read_only_and_blocks_high_vulnerabilities() -> None:
     """验证标签发布只读取仓库，并保留 SBOM 与高危漏洞阻断步骤。"""
     workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))

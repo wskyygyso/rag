@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.auth import api_identity, operation_actor, require_project_access
 from app.projects import (
     discover_projects,
+    get_latest_project_index_runs,
     get_project_overview,
     get_project_task_board,
     read_repository_revision,
@@ -56,12 +57,35 @@ def _operation_detail(task_id: str, outcome: str, reason: str = "") -> Dict:
 
 @router.get("")
 async def list_projects(request: Request) -> Dict:
-    """返回调用方有权访问的项目目录及 Git 版本。
+    """返回调用方有权访问的项目目录、Git 版本和真实文档索引状态。
 
     参数:
         - `request`：携带认证身份和项目根目录配置的 FastAPI 请求。
     """
     projects = discover_projects(settings.code_repositories_root, api_identity(request))
+    pool = getattr(request.app.state, "db_pool", None)
+    index_status = "UNAVAILABLE"
+    latest_indexes = {}
+    if pool is not None:
+        try:
+            latest_indexes = await get_latest_project_index_runs(
+                pool,
+                [item["name"] for item in projects],
+            )
+            index_status = "AVAILABLE"
+        except Exception:
+            # 项目目录仍应可浏览，数据库异常由 readiness 和索引操作接口单独报告。
+            index_status = "UNAVAILABLE"
+    for project in projects:
+        latest = latest_indexes.get(project["name"])
+        project["index_status"] = (
+            "UNAVAILABLE"
+            if index_status == "UNAVAILABLE"
+            else "NOT_INDEXED" if latest is None else str(latest["status"])
+        )
+        project["indexed_chunk_count"] = int(latest["chunk_count"]) if latest else 0
+        project["index_revision"] = latest.get("repository_revision") if latest else None
+        project["index_updated_at"] = latest.get("finished_at") if latest else None
     return {"projects": projects}
 
 

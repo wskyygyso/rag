@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import index_document_repository
+from app import document_index
 
 
 @pytest.mark.asyncio
@@ -45,17 +45,17 @@ async def test_document_index_reuses_complete_same_revision(monkeypatch, tmp_pat
 
     pool.close = close
     monkeypatch.setattr(
-        index_document_repository,
+        document_index,
         "get_settings",
         lambda: SimpleNamespace(code_repositories_root=str(tmp_path)),
     )
-    monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
-    monkeypatch.setattr(index_document_repository, "_repository_revision", lambda root, project: "abc123")
-    monkeypatch.setattr(index_document_repository, "recover_stale_document_index_runs", _recover)
-    monkeypatch.setattr(index_document_repository, "find_reusable_document_index_run", reusable)
-    monkeypatch.setattr(index_document_repository, "index_repository_documents", should_not_index)
+    monkeypatch.setattr(document_index, "create_pool", lambda settings: _return(pool))
+    monkeypatch.setattr(document_index, "_repository_revision", lambda root, project: "abc123")
+    monkeypatch.setattr(document_index, "recover_stale_document_index_runs", _recover)
+    monkeypatch.setattr(document_index, "find_reusable_document_index_run", reusable)
+    monkeypatch.setattr(document_index, "index_repository_documents", should_not_index)
 
-    result = await index_document_repository._run_detailed("waky3")
+    result = await document_index.run_document_index("waky3")
     assert result.chunk_count == 42
     assert result.reused is True
 

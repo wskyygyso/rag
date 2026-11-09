@@ -1,4 +1,28 @@
 # RAgent 本地/单机部署编排：API、诊断 Worker、索引 Worker、Redis 和 PostgreSQL。
+
+# 本地待诊断项目的只读挂载集合。项目名必须对应 /repositories 下一级目录；
+# 默认路径适用于当前 macOS 开发机，其他机器通过对应环境变量覆盖。
+# 禁止 create_host_path，避免路径写错时 Docker 创建空目录并让诊断静默缺失代码。
+x-ragent-repositories: &ragent-repositories
+  - type: bind
+    source: ${WAKY3_REPOSITORY_PATH:-/Users/wskyygyso/work/www/waky3}
+    target: /repositories/waky3
+    read_only: true
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ${WAKY4_REPOSITORY_PATH:-/Users/wskyygyso/work/www/waky4}
+    target: /repositories/waky4
+    read_only: true
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ${WAKY6_REPOSITORY_PATH:-/Users/wskyygyso/work/www/waky6}
+    target: /repositories/waky6
+    read_only: true
+    bind:
+      create_host_path: false
+
 services:
   # HTTP API：处理认证、任务、报告、验证请求和前端页面。
   api:
@@ -7,9 +31,8 @@ services:
     # 本地开发配置从 .env 读取；生产应由部署平台注入 Secret Manager 值。
     env_file:
       - .env
-    # 仓库只读挂载，禁止 API 修改被诊断项目代码。
-    volumes:
-      - ./repositories:/repositories:ro
+    # waky3、waky4、waky6 分别以只读目录挂载，禁止 API 修改被诊断项目代码。
+    volumes: *ragent-repositories
     # 宿主机 8000 端口映射到 API 容器。
     ports:
       - "8000:8000"
@@ -37,8 +60,8 @@ services:
     command: celery -A app.worker.celery_app worker --loglevel=INFO -Q diagnosis
     env_file:
       - .env
-    volumes:
-      - ./repositories:/repositories:ro
+    # 诊断 Worker 与 API 使用完全相同的项目只读视图。
+    volumes: *ragent-repositories
     depends_on:
       redis:
         condition: service_healthy
@@ -60,8 +83,8 @@ services:
     command: celery -A app.worker.celery_app worker --loglevel=INFO -Q index
     env_file:
       - .env
-    volumes:
-      - ./repositories:/repositories:ro
+    # 索引 Worker 使用同一只读项目视图，避免分析与索引读取不同代码快照。
+    volumes: *ragent-repositories
     depends_on:
       redis:
         condition: service_healthy

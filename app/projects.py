@@ -117,6 +117,40 @@ async def get_project_overview(pool, project: str) -> Dict[str, Any]:
     }
 
 
+async def get_latest_project_index_runs(pool, project_names: List[str]) -> Dict[str, Dict[str, Any]]:
+    """批量读取多个项目最近一次文档索引运行，供项目列表展示真实索引状态。
+
+    参数:
+        - `pool`：RAgent 元数据库连接池，只读取索引运行记录。
+        - `project_names`：当前调用方可见的项目目录名，用作参数化查询白名单。
+
+    返回:
+        以项目名为键的最新索引运行字典；从未建立索引的项目不会出现在结果中。
+    """
+    if not project_names:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (project)
+               project, status, chunk_count, repository_revision,
+               index_version, error, started_at, finished_at
+        FROM document_index_runs
+        WHERE project = ANY($1::varchar[])
+        ORDER BY project, started_at DESC, id DESC
+        """,
+        project_names,
+    )
+    latest = {}
+    for row in rows:
+        item = dict(row)
+        for key in ("started_at", "finished_at"):
+            value = item.get(key)
+            if hasattr(value, "isoformat"):
+                item[key] = value.isoformat()
+        latest[str(item["project"])] = item
+    return latest
+
+
 async def get_project_task_board(pool, project: str, recent_limit: int = 5) -> Dict[str, Any]:
     """聚合项目任务状态、运行中任务和最近终态任务。
 

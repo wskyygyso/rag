@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import index_document_repository
+from app import document_index
 
 
 @pytest.mark.asyncio
@@ -22,11 +22,11 @@ async def test_document_index_script_dry_run_does_not_connect_database(
     project.mkdir()
     (project / "README.md").write_text("guild invite", encoding="utf-8")
     monkeypatch.setattr(
-        index_document_repository,
+        document_index,
         "get_settings",
         lambda: SimpleNamespace(code_repositories_root=str(tmp_path)),
     )
-    assert await index_document_repository._run("waky3", dry_run=True) == 1
+    assert await document_index.run_document_index_chunks("waky3", dry_run=True) == 1
 
 
 def test_repository_revision_returns_none_for_non_git_directory(tmp_path: Path) -> None:
@@ -35,7 +35,7 @@ def test_repository_revision_returns_none_for_non_git_directory(tmp_path: Path) 
     参数:
         - `tmp_path`：pytest 临时目录，类型为 `Path`。
     """
-    assert index_document_repository._repository_revision(str(tmp_path), "waky3") is None
+    assert document_index._repository_revision(str(tmp_path), "waky3") is None
 
 
 @pytest.mark.asyncio
@@ -86,18 +86,18 @@ async def test_document_index_script_records_success(monkeypatch) -> None:
 
     pool.close = close
     monkeypatch.setattr(
-        index_document_repository,
+        document_index,
         "get_settings",
         lambda: SimpleNamespace(code_repositories_root="/repositories"),
     )
-    monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
-    monkeypatch.setattr(index_document_repository, "start_document_index_run_with_revision", start)
-    monkeypatch.setattr(index_document_repository, "recover_stale_document_index_runs", _recover)
-    monkeypatch.setattr(index_document_repository, "cleanup_document_index_runs", _cleanup)
-    monkeypatch.setattr(index_document_repository, "index_repository_documents", index)
-    monkeypatch.setattr(index_document_repository, "finish_document_index_run", finish)
+    monkeypatch.setattr(document_index, "create_pool", lambda settings: _return(pool))
+    monkeypatch.setattr(document_index, "start_document_index_run_with_revision", start)
+    monkeypatch.setattr(document_index, "recover_stale_document_index_runs", _recover)
+    monkeypatch.setattr(document_index, "cleanup_document_index_runs", _cleanup)
+    monkeypatch.setattr(document_index, "index_repository_documents", index)
+    monkeypatch.setattr(document_index, "finish_document_index_run", finish)
 
-    assert await index_document_repository._run("waky3") == 12
+    assert await document_index.run_document_index_chunks("waky3") == 12
     assert statuses == [(7, "COMPLETED", 12, None)]
     assert pool.closed is True
 
@@ -150,19 +150,19 @@ async def test_document_index_script_records_failure(monkeypatch) -> None:
 
     pool.close = close
     monkeypatch.setattr(
-        index_document_repository,
+        document_index,
         "get_settings",
         lambda: SimpleNamespace(code_repositories_root="/repositories"),
     )
-    monkeypatch.setattr(index_document_repository, "create_pool", lambda settings: _return(pool))
-    monkeypatch.setattr(index_document_repository, "start_document_index_run_with_revision", start)
-    monkeypatch.setattr(index_document_repository, "recover_stale_document_index_runs", _recover)
-    monkeypatch.setattr(index_document_repository, "cleanup_document_index_runs", _cleanup)
-    monkeypatch.setattr(index_document_repository, "index_repository_documents", index)
-    monkeypatch.setattr(index_document_repository, "finish_document_index_run", finish)
+    monkeypatch.setattr(document_index, "create_pool", lambda settings: _return(pool))
+    monkeypatch.setattr(document_index, "start_document_index_run_with_revision", start)
+    monkeypatch.setattr(document_index, "recover_stale_document_index_runs", _recover)
+    monkeypatch.setattr(document_index, "cleanup_document_index_runs", _cleanup)
+    monkeypatch.setattr(document_index, "index_repository_documents", index)
+    monkeypatch.setattr(document_index, "finish_document_index_run", finish)
 
     with pytest.raises(RuntimeError, match="index failed"):
-        await index_document_repository._run("waky3")
+        await document_index.run_document_index_chunks("waky3")
     assert statuses == [(8, "FAILED", 0, "index failed")]
     assert pool.closed is True
 

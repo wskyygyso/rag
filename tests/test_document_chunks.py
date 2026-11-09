@@ -41,6 +41,15 @@ def test_chunk_text_rejects_invalid_boundaries() -> None:
         chunk_text("waky3", "code", "id", "content", overlap_lines=21)
 
 
+def test_chunk_text_splits_single_line_longer_than_database_limit() -> None:
+    """验证超长单行被拆成来源唯一且长度受限的字符分块。"""
+    chunks = chunk_text("waky3", "document", "large.json", "x" * 1200, max_chars=500)
+    assert len(chunks) == 3
+    assert all(len(chunk["content"]) <= 500 for chunk in chunks)
+    assert len({chunk["source_id"] for chunk in chunks}) == 3
+    assert {chunk["line_start"] for chunk in chunks} == {1}
+
+
 def test_build_repository_chunks_skips_dependencies_and_classifies_sources(tmp_path) -> None:
     """验证仓库扫描跳过依赖目录，并区分 PHP 代码和普通文档。
 
@@ -56,6 +65,23 @@ def test_build_repository_chunks_skips_dependencies_and_classifies_sources(tmp_p
     chunks = build_repository_chunks(str(tmp_path), "waky3", max_chars=100)
     assert {chunk["source_type"] for chunk in chunks} == {"code", "document"}
     assert all("vendor" not in chunk["file_path"] for chunk in chunks)
+
+
+def test_build_repository_chunks_skips_gitnexus_generated_cache(tmp_path) -> None:
+    """验证 GitNexus 生成缓存不会进入项目代码索引。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+    """
+    project = tmp_path / "waky3"
+    source = project / "src"
+    cache = project / ".gitnexus" / "parsedfile-cache"
+    source.mkdir(parents=True)
+    cache.mkdir(parents=True)
+    (source / "Guild.php").write_text("<?php class Guild {}", encoding="utf-8")
+    (cache / "large.json").write_text('{"content":"' + "x" * 2000 + '"}', encoding="utf-8")
+    chunks = build_repository_chunks(str(tmp_path), "waky3", max_chars=100)
+    assert {chunk["file_path"] for chunk in chunks} == {"src/Guild.php"}
 
 
 def test_embedding_is_deterministic_and_similarity_is_bounded() -> None:

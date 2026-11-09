@@ -3,206 +3,937 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="RAgent PHP 代码诊断工作台" />
     <title>PHP 代码诊断 RAgent</title>
     <style>
-      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { margin: 0; background: #f5f7fb; color: #202637; }
-      main { max-width: 980px; margin: 0 auto; padding: 32px 20px 60px; }
-      h1 { margin: 0 0 24px; font-size: 28px; }
-      h2 { margin-top: 28px; font-size: 20px; }
-      .card { background: #fff; border: 1px solid #e2e6ef; border-radius: 12px; padding: 20px; margin-bottom: 18px; box-shadow: 0 4px 16px #1e2a3a0d; }
-      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-      label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: #586174; }
-      textarea, input, select { box-sizing: border-box; width: 100%; border: 1px solid #cfd6e4; border-radius: 8px; padding: 10px; font: inherit; color: #202637; }
-      textarea { min-height: 100px; resize: vertical; }
-      .wide { grid-column: 1 / -1; }
-      button, a.button { display: inline-block; border: 0; border-radius: 8px; padding: 10px 15px; background: #315efb; color: #fff; cursor: pointer; text-decoration: none; font: inherit; }
-      button.secondary, a.secondary { background: #e9edf7; color: #26324a; }
-      button:disabled { opacity: .55; cursor: not-allowed; }
-      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-      .status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-      .metric { background: #f7f9fd; border-radius: 8px; padding: 12px; }
-      .metric small { display: block; color: #657087; margin-bottom: 5px; }
-      .metric strong { word-break: break-word; }
-      pre { overflow: auto; white-space: pre-wrap; background: #172033; color: #eff3fb; border-radius: 8px; padding: 14px; min-height: 80px; }
-      .muted { color: #657087; }
-      .history-item { display: block; width: 100%; margin: 6px 0; text-align: left; background: #f7f9fd; color: #26324a; }
-      .error { color: #b42318; }
-      @media (max-width: 680px) { .grid, .status { grid-template-columns: 1fr; } }
+      :root {
+        color-scheme: light;
+        --canvas: #f3f5f2;
+        --paper: #ffffff;
+        --paper-soft: #f7f9f7;
+        --ink: #17221d;
+        --muted: #68736d;
+        --line: #dfe5e1;
+        --line-strong: #cbd4ce;
+        --accent: #176b4c;
+        --accent-strong: #0d5139;
+        --accent-soft: #e6f3ec;
+        --amber: #99610a;
+        --amber-soft: #fff4dc;
+        --danger: #a43a31;
+        --danger-soft: #fff0ee;
+        --code: #14221c;
+        --shadow: 0 12px 34px rgba(23, 34, 29, 0.07);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; min-width: 320px; background: var(--canvas); color: var(--ink); }
+      button, input, textarea, select { font: inherit; }
+      button, a { -webkit-tap-highlight-color: transparent; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible {
+        outline: 3px solid rgba(23, 107, 76, 0.22);
+        outline-offset: 2px;
+      }
+
+      .app-header {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        min-height: 72px;
+        padding: 12px max(22px, calc((100vw - 1480px) / 2 + 22px));
+        color: #f5fbf7;
+        background: #12291f;
+        border-bottom: 1px solid #244436;
+        box-shadow: 0 5px 20px rgba(13, 32, 24, 0.14);
+      }
+
+      .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 auto;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.08);
+        font-weight: 800;
+        letter-spacing: -1px;
+      }
+      .brand-copy { min-width: 0; }
+      .brand-copy strong { display: block; font-size: 16px; letter-spacing: 0.01em; }
+      .brand-copy span { display: block; margin-top: 2px; color: #aec7b9; font-size: 12px; }
+      .header-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+      .readonly-badge { padding: 6px 10px; border: 1px solid #436858; border-radius: 999px; color: #cce4d6; font-size: 12px; }
+
+      .connection { position: relative; }
+      .connection > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 8px 12px;
+        border: 1px solid #4b6a5c;
+        border-radius: 9px;
+        color: #eef8f2;
+        background: #1d3a2d;
+        font-size: 13px;
+        user-select: none;
+      }
+      .connection > summary::-webkit-details-marker { display: none; }
+      .connection[open] > summary { background: #264a39; }
+      .connection-panel {
+        position: absolute;
+        top: calc(100% + 10px);
+        right: 0;
+        width: min(360px, calc(100vw - 32px));
+        padding: 16px;
+        color: var(--ink);
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+      }
+      .connection-panel p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: 360px minmax(0, 1fr);
+        gap: 22px;
+        width: min(1480px, 100%);
+        margin: 0 auto;
+        padding: 22px;
+        align-items: start;
+      }
+      .sidebar { position: sticky; top: 94px; display: grid; gap: 16px; max-height: calc(100vh - 114px); overflow-y: auto; padding-right: 2px; }
+      .result-pane { min-width: 0; display: grid; gap: 16px; }
+      .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+      .panel-body { padding: 18px; }
+      .sidebar .panel-body { padding: 16px; }
+      .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+      .panel-heading h2, .panel-heading h3 { margin: 0; font-size: 16px; line-height: 1.35; }
+      .panel-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+
+      .field { display: grid; gap: 7px; margin-bottom: 13px; color: #3d4b44; font-size: 13px; font-weight: 650; }
+      .field:last-child { margin-bottom: 0; }
+      .field small { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
+      input, textarea, select {
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        border-radius: 9px;
+        padding: 10px 11px;
+        color: var(--ink);
+        background: #fff;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      input:hover, textarea:hover, select:hover { border-color: #aab9b0; }
+      input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(23, 107, 76, 0.1); outline: none; }
+      textarea { min-height: 132px; resize: vertical; line-height: 1.6; }
+      .field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, 0.62fr); gap: 10px; }
+      .toggle-row { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-soft); }
+      .toggle-row input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--accent); }
+      .toggle-copy strong { display: block; font-size: 13px; }
+      .toggle-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+      button, .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        min-height: 38px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        padding: 8px 13px;
+        color: #fff;
+        background: var(--accent);
+        cursor: pointer;
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.3;
+        transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+      }
+      button:hover, .button:hover { background: var(--accent-strong); }
+      button:active, .button:active { transform: translateY(1px); }
+      button.secondary, .button.secondary { color: #314038; background: #eef2ef; border-color: var(--line); }
+      button.secondary:hover, .button.secondary:hover { background: #e4ebe6; }
+      button.quiet { min-height: 32px; padding: 5px 9px; color: var(--accent); background: transparent; border-color: var(--line); font-size: 12px; }
+      button.quiet:hover { background: var(--accent-soft); }
+      button.danger { color: var(--danger); background: var(--danger-soft); border-color: #f0cbc5; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+      .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+      .actions.compact { margin-top: 9px; }
+      .status-text { color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .status-text.error { color: var(--danger); }
+
+      .project-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+      .project-item {
+        display: grid;
+        gap: 2px;
+        min-height: 0;
+        padding: 7px 9px;
+        color: #3c4a43;
+        background: var(--paper-soft);
+        border: 1px solid var(--line);
+        text-align: left;
+        font-weight: 650;
+      }
+      .project-item:hover { color: var(--accent-strong); background: var(--accent-soft); }
+      .project-item.active { color: var(--accent-strong); background: var(--accent-soft); border-color: #8fc0a9; box-shadow: 0 0 0 2px rgba(23, 107, 76, 0.08); }
+      .project-item strong { font-size: 12px; }
+      .project-item small { color: var(--muted); font-size: 10px; font-weight: 400; }
+
+      details.panel > summary, details.subsection > summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        user-select: none;
+      }
+      details.panel > summary::-webkit-details-marker, details.subsection > summary::-webkit-details-marker { display: none; }
+      details.panel > summary::after, details.subsection > summary::after { content: "+"; color: var(--muted); font-size: 18px; line-height: 1; }
+      details.panel[open] > summary::after, details.subsection[open] > summary::after { content: "−"; }
+      details.panel > summary strong, details.subsection > summary strong { display: block; font-size: 14px; }
+      details.panel > summary span, details.subsection > summary span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
+      details.panel .details-body { padding: 0 16px 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+
+      .history-list, .index-list, .operation-list, .feedback-list { display: grid; gap: 8px; margin-top: 10px; }
+      .list-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper-soft);
+      }
+      .list-row.main { align-items: start; }
+      .list-row strong { display: block; overflow: hidden; color: #26342d; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+      .list-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+      .history-button { width: 100%; min-height: 0; padding: 0; color: inherit; background: transparent; border: 0; text-align: left; justify-content: stretch; }
+      .history-button:hover { background: transparent; }
+      .history-button .history-content { width: 100%; }
+      .task-board-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+      .task-board-row input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+      .task-board-row .row-actions { display: flex; gap: 5px; align-items: center; }
+      .empty-copy { padding: 14px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 10px; background: #fafbfa; font-size: 12px; line-height: 1.65; }
+
+      .metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+      .metric { padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-soft); }
+      .metric small { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; }
+      .metric strong { display: block; overflow-wrap: anywhere; font-size: 13px; line-height: 1.35; }
+      .project-overview { margin: 0 0 9px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+      .quality-copy { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.65; }
+
+      .empty-result { padding: clamp(28px, 7vw, 72px); border: 1px dashed var(--line-strong); border-radius: 18px; background: linear-gradient(145deg, #ffffff, #f8faf8); }
+      .empty-result h1 { max-width: 620px; margin: 0; font-size: clamp(26px, 4vw, 42px); line-height: 1.18; letter-spacing: -0.035em; }
+      .empty-result > p { max-width: 620px; margin: 14px 0 26px; color: var(--muted); font-size: 14px; line-height: 1.75; }
+      .guide-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 800px; }
+      .guide-item { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.82); }
+      .guide-item b { display: grid; place-items: center; width: 25px; height: 25px; margin-bottom: 9px; border-radius: 50%; color: var(--accent-strong); background: var(--accent-soft); font-size: 12px; }
+      .guide-item strong { display: block; font-size: 13px; }
+      .guide-item span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+      .result-view { display: grid; gap: 16px; }
+      .result-header { position: relative; overflow: hidden; padding: 22px; }
+      .result-header::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--accent); }
+      .result-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+      .result-title { min-width: 0; }
+      .result-title h1 { margin: 2px 0 7px; font-size: clamp(20px, 2.6vw, 30px); line-height: 1.35; letter-spacing: -0.02em; }
+      .result-meta { display: flex; flex-wrap: wrap; gap: 7px 13px; color: var(--muted); font-size: 11px; }
+      .result-meta code { overflow-wrap: anywhere; color: #425047; }
+      .status-badge { flex: 0 0 auto; padding: 6px 10px; border-radius: 999px; color: var(--amber); background: var(--amber-soft); font-size: 11px; font-weight: 800; }
+      .status-badge[data-status="COMPLETED"] { color: var(--accent-strong); background: var(--accent-soft); }
+      .status-badge[data-status="FAILED"], .status-badge[data-status="CANCELLED"] { color: var(--danger); background: var(--danger-soft); }
+      .progress-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; margin-top: 18px; }
+      .progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: #e7ece8; }
+      .progress-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2a8d68, #176b4c); transition: width 0.35s ease; }
+      #task-progress { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      #task-step { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+      .result-actions { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+
+      .conclusion-card { padding: 24px; background: linear-gradient(160deg, #173b2d, #11281f); color: #f3fbf6; border: 0; }
+      .conclusion-card .eyebrow { color: #9cd5b9; }
+      .conclusion-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+      .conclusion-card h2 { margin: 0; font-size: 16px; }
+      .confidence { flex: 0 0 auto; padding: 6px 9px; border: 1px solid rgba(202, 232, 216, 0.24); border-radius: 999px; color: #d7eee1; background: rgba(255, 255, 255, 0.07); font-size: 11px; }
+      #conclusion-text { max-width: 940px; margin: 16px 0 0; color: #f8fffb; font-size: clamp(17px, 2vw, 21px); font-weight: 620; line-height: 1.75; }
+      #confidence-reason { margin: 12px 0 0; color: #abc8b9; font-size: 12px; line-height: 1.65; }
+      .conclusion-stats { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 18px; padding-top: 15px; border-top: 1px solid rgba(214, 240, 226, 0.16); color: #c5ded0; font-size: 11px; }
+
+      .section-body { padding: 20px; }
+      .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+      .section-heading h2 { margin: 0; font-size: 19px; letter-spacing: -0.015em; }
+      .section-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+      .section-count { flex: 0 0 auto; min-width: 30px; padding: 5px 8px; border-radius: 999px; color: var(--accent-strong); background: var(--accent-soft); font-size: 11px; font-weight: 800; text-align: center; }
+      .facts-list { display: grid; gap: 11px; }
+      .fact-card { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fcfdfc; }
+      .fact-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+      .fact-category { display: inline-block; padding: 4px 8px; border-radius: 6px; color: var(--accent-strong); background: var(--accent-soft); font-size: 11px; font-weight: 800; }
+      .fact-index { color: #9aa59f; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .fact-card p { margin: 11px 0 12px; color: #27352e; font-size: 14px; line-height: 1.72; }
+      .ref-list { display: flex; flex-wrap: wrap; gap: 6px; }
+      .evidence-ref { min-height: 28px; padding: 4px 8px; color: #315344; background: #fff; border-color: var(--line-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 600; }
+      .evidence-ref:hover { color: var(--accent-strong); background: var(--accent-soft); border-color: #98c2ad; }
+
+      .callout { padding: 13px 14px; border: 1px solid #efd9a9; border-radius: 10px; color: #674715; background: var(--amber-soft); font-size: 12px; line-height: 1.65; }
+      .callout.neutral { color: #425047; background: var(--paper-soft); border-color: var(--line); }
+      .ai-summary { margin: 0; color: #29372f; font-size: 14px; line-height: 1.75; }
+      .ai-block { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+      .ai-block h3 { margin: 0 0 8px; font-size: 13px; }
+      .ai-block ul { margin: 0; padding-left: 19px; color: #445249; font-size: 12px; line-height: 1.72; }
+
+      .evidence-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+      .evidence-tools input { max-width: 300px; padding: 8px 10px; font-size: 12px; }
+      .evidence-list { display: grid; gap: 8px; }
+      .evidence-item { border: 1px solid var(--line); border-radius: 10px; background: #fbfcfb; scroll-margin-top: 94px; }
+      .evidence-item[hidden] { display: none; }
+      .evidence-item > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; user-select: none; }
+      .evidence-item > summary::-webkit-details-marker { display: none; }
+      .evidence-path { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 700; }
+      .evidence-query { color: var(--muted); font-size: 10px; white-space: nowrap; }
+      .evidence-item[open] { border-color: #b8d4c5; box-shadow: 0 0 0 2px rgba(23, 107, 76, 0.06); }
+      .evidence-content { padding: 0 12px 12px; }
+      .evidence-line { margin: 0 0 9px; color: #36463d; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+      .evidence-context { overflow: auto; max-height: 380px; border-radius: 9px; color: #eaf4ee; background: var(--code); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.62; }
+      .source-line { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px; padding: 1px 12px; white-space: pre-wrap; word-break: break-word; }
+      .source-line-number { color: #769183; text-align: right; user-select: none; }
+      .source-line.is-target { color: #17221d; background: #d7f2e2; box-shadow: inset 3px 0 #51bc87; }
+      .source-line.is-target .source-line-number { color: #176b4c; font-weight: 800; }
+      pre { overflow: auto; margin: 0; padding: 13px; border-radius: 9px; color: #eaf4ee; background: var(--code); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
+      .subsection { border-top: 1px solid var(--line); }
+      .subsection + .subsection { border-top: 0; }
+      .subsection-body { padding: 0 18px 16px; }
+      .chip-list { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip { padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: #415047; background: var(--paper-soft); font-size: 10px; }
+      .technical-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .technical-card { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-soft); }
+      .technical-card strong { display: block; margin-bottom: 6px; font-size: 12px; }
+      .technical-card span { color: var(--muted); font-size: 11px; line-height: 1.55; }
+      .operation-row, .feedback-row { padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-soft); }
+      .operation-row strong, .feedback-row strong { display: block; margin-bottom: 4px; font-size: 12px; }
+      .operation-row span, .feedback-row span { color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+      .feedback-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(240px, 0.9fr); gap: 18px; }
+      .feedback-form .field { margin-bottom: 10px; }
+      .feedback-list { margin-top: 0; }
+      #feedback-list { margin-top: 10px; }
+
+      @media (max-width: 1100px) {
+        .workspace { grid-template-columns: 320px minmax(0, 1fr); padding: 18px; }
+        .feedback-layout { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 860px) {
+        .app-header { position: static; align-items: flex-start; padding: 14px 16px; }
+        .workspace { grid-template-columns: 1fr; padding: 14px; }
+        .sidebar { position: static; max-height: none; overflow: visible; }
+        .guide-grid { grid-template-columns: 1fr; }
+        .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 560px) {
+        .app-header { flex-direction: column; }
+        .header-meta { width: 100%; justify-content: space-between; }
+        .readonly-badge { display: none; }
+        .connection { margin-left: auto; }
+        .result-header, .conclusion-card, .section-body { padding: 17px; }
+        .field-row, .technical-grid { grid-template-columns: 1fr; }
+        .result-topline { flex-direction: column; }
+        .evidence-tools { align-items: stretch; flex-direction: column; }
+        .evidence-tools input { max-width: none; }
+        .list-row { grid-template-columns: minmax(0, 1fr); }
+        .task-board-row { grid-template-columns: auto minmax(0, 1fr); }
+        .task-board-row .row-actions { grid-column: 2; }
+      }
     </style>
   </head>
   <body>
-    <main>
-      <h1>PHP 代码诊断 RAgent</h1>
-      <section class="card">
-        <form id="diagnosis-form">
-          <div class="grid">
-            <label>项目<input id="project" name="project" value="waky3" list="project-options" required maxlength="100" /><datalist id="project-options"></datalist></label>
-            <label>环境<input id="environment" name="environment" value="development" maxlength="100" /></label>
-            <label class="wide">API Key<input id="api-key" type="password" autocomplete="off" placeholder="启用访问控制时填写，仅保存在当前页面内存" /></label>
-            <label class="wide"><span><input id="use-ai" type="checkbox" checked /> 使用 AI 诊断叙写（可能产生模型费用）</span></label>
-            <label class="wide">问题<textarea id="question" name="question" placeholder="例如：公会邀请失败可能是什么原因？" required maxlength="10000"></textarea></label>
-          </div>
-          <div class="actions">
-            <button id="submit" type="submit">开始诊断</button>
-            <span id="message" class="muted" role="status">等待输入问题</span>
-          </div>
-        </form>
-      </section>
-
-      <p id="project-overview" class="muted">项目概览：正在加载…</p>
-      <div class="actions">
-        <button id="rebuild-index" class="secondary" type="button">重建文档索引</button>
-        <span id="index-message" class="muted" role="status">索引任务进入独立队列</span>
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">RA</div>
+        <div class="brand-copy">
+          <strong>PHP 代码诊断 RAgent</strong>
+          <span>从源码证据形成可复核的业务结论</span>
+        </div>
       </div>
-      <div id="index-history" class="muted">暂无索引运行记录。</div>
-      <div id="task-board" class="muted">暂无项目任务。</div>
-      <div class="actions">
-        <button id="cancel-selected" class="secondary" type="button" hidden>取消选中任务</button>
-        <button id="retry-selected" class="secondary" type="button" hidden>重试选中任务</button>
-        <span id="board-message" class="muted" role="status">看板每 5 秒自动刷新</span>
-      </div>
-      <ul id="board-operation-result" class="muted" aria-live="polite" hidden></ul>
-
-      <section class="card" aria-live="polite">
-        <h2>任务进度</h2>
-        <div class="status">
-          <div class="metric"><small>任务 ID</small><strong id="task-id">-</strong></div>
-          <div class="metric"><small>状态</small><strong id="task-status">-</strong></div>
-          <div class="metric"><small>进度</small><strong id="task-progress">-</strong></div>
-        </div>
-        <p id="task-step" class="muted">尚未创建任务</p>
-        <div class="actions">
-          <a id="report-link" class="button secondary" href="#" hidden>下载 Markdown 报告</a>
-          <button id="copy-report" class="secondary" type="button" disabled>复制报告</button>
-          <button id="cancel-task" class="secondary" type="button" hidden>取消任务</button>
-          <button id="retry-task" class="secondary" type="button" hidden>重新执行失败任务</button>
-          <button id="rerun-task" class="secondary" type="button" hidden>复制配置重新诊断</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>操作轨迹</h2>
-        <pre id="operation-list">选择任务后可查看创建、取消和重试记录。</pre>
-      </section>
-
-      <section class="card">
-        <h2>历史任务</h2>
-        <div class="grid">
-          <label>状态
-            <select id="history-status">
-              <option value="">全部状态</option>
-              <option value="COMPLETED">已完成</option>
-              <option value="FAILED">失败</option>
-              <option value="CANCELLED">已取消</option>
-              <option value="RUNNING">执行中</option>
-            </select>
-          </label>
-          <label>最近天数<input id="history-days" type="number" min="1" max="3650" placeholder="不限" /></label>
-          <label class="wide">请求 ID<input id="history-request-id" maxlength="128" placeholder="从访问日志中的 X-Request-ID 定位任务" /></label>
-        </div>
-        <div class="actions">
-          <button id="history-load" class="secondary" type="button">加载最近任务</button>
-          <button id="history-more" class="secondary" type="button" hidden>加载更多</button>
-          <span id="history-message" class="muted" role="status">可按项目查看历史任务</span>
-        </div>
-        <div id="history-list" class="muted">暂无历史任务。</div>
-        <p id="project-summary" class="muted">项目反馈摘要：暂无数据</p>
-        <p id="ai-quality" class="muted">AI 质量摘要：暂无数据</p>
-      </section>
-
-      <section class="card">
-        <h2>报告预览</h2>
-        <pre id="report">完成诊断后可在这里预览 Markdown 报告。</pre>
-      </section>
-
-      <section class="card">
-        <h2>人工反馈</h2>
-        <form id="feedback-form">
-          <div class="grid">
-            <label>反馈类型
-              <select id="rating" required>
-                <option value="correct">正确</option>
-                <option value="inaccurate">不准确</option>
-                <option value="insufficient_evidence">证据不足</option>
-                <option value="escalate">转人工</option>
-              </select>
+      <div class="header-meta">
+        <span class="readonly-badge">只读诊断 · 不改业务代码</span>
+        <details class="connection">
+          <summary>连接设置</summary>
+          <div class="connection-panel">
+            <label class="field" for="api-key">API Key
+              <input id="api-key" type="password" autocomplete="off" placeholder="未启用访问控制时可留空" />
+              <small>仅保存在当前页面内存；修改后会重新加载有权限的项目。</small>
             </label>
-            <label>提交者<input id="submitted-by" maxlength="100" placeholder="可选" /></label>
-            <label class="wide">说明<textarea id="comment" maxlength="2000" placeholder="可选，补充审阅意见"></textarea></label>
+            <p>访问控制开启时，请先在项目白名单中授权对应项目，再发起诊断。</p>
           </div>
-          <div class="actions">
-            <button id="feedback-submit" type="submit" disabled>提交反馈</button>
-            <span id="feedback-message" class="muted" role="status">创建任务后可提交反馈</span>
+        </details>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" aria-label="诊断任务流程">
+        <section class="panel">
+          <div class="panel-body">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">New diagnosis</p>
+                <h2>新建诊断</h2>
+                <p>先选项目，再用自然语言描述要排查的业务问题。</p>
+              </div>
+            </div>
+            <form id="diagnosis-form">
+              <div class="field-row">
+                <label class="field" for="project">项目
+                  <select id="project" name="project" required>
+                    <option value="waky3">正在加载项目…</option>
+                  </select>
+                </label>
+                <label class="field" for="environment">环境
+                  <input id="environment" name="environment" value="development" maxlength="100" />
+                </label>
+              </div>
+              <label class="field" for="question">要排查的问题
+                <textarea id="question" name="question" placeholder="例如：waky6 触发美元熔断时，业务有哪些具体限制？" required maxlength="10000"></textarea>
+                <small>建议写清项目、错误现象、错误码或业务对象，结论会更聚焦。</small>
+              </label>
+              <label class="toggle-row" for="use-ai">
+                <input id="use-ai" type="checkbox" checked />
+                <span class="toggle-copy">
+                  <strong>补充 AI 诊断叙写</strong>
+                  <span>可能产生模型费用；模型失败时，源码确定性结论仍然保留。</span>
+                </span>
+              </label>
+              <div class="actions">
+                <button id="submit" type="submit">开始诊断</button>
+                <span id="message" class="status-text" role="status">等待输入问题</span>
+              </div>
+            </form>
+            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line)">
+              <span class="status-text">可访问项目</span>
+              <div id="project-list" class="project-list" aria-live="polite"></div>
+            </div>
           </div>
-        </form>
-        <pre id="feedback-list">暂无反馈。</pre>
-      </section>
-    </main>
+        </section>
+
+        <section class="panel">
+          <div class="panel-body">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Recent work</p>
+                <h2>最近诊断</h2>
+                <p>点击任务会在右侧直接切换报告，不会把历史内容堆到页面底部。</p>
+              </div>
+            </div>
+            <details class="subsection">
+              <summary><span><strong>筛选条件</strong><span>按状态、时间和请求 ID 定位</span></span></summary>
+              <div class="subsection-body">
+                <div class="field-row">
+                  <label class="field" for="history-status">状态
+                    <select id="history-status">
+                      <option value="">全部状态</option>
+                      <option value="COMPLETED">已完成</option>
+                      <option value="FAILED">失败</option>
+                      <option value="CANCELLED">已取消</option>
+                      <option value="RUNNING">执行中</option>
+                    </select>
+                  </label>
+                  <label class="field" for="history-days">最近天数
+                    <input id="history-days" type="number" min="1" max="3650" placeholder="不限" />
+                  </label>
+                </div>
+                <label class="field" for="history-request-id">请求 ID
+                  <input id="history-request-id" maxlength="128" placeholder="从访问日志中的 X-Request-ID 定位" />
+                </label>
+                <button id="history-load" class="secondary" type="button">应用筛选</button>
+              </div>
+            </details>
+            <div id="history-list" class="history-list"><div class="empty-copy">正在加载最近任务…</div></div>
+            <div class="actions compact">
+              <button id="history-more" class="secondary" type="button" hidden>加载更多</button>
+              <span id="history-message" class="status-text" role="status">可按项目查看历史任务</span>
+            </div>
+          </div>
+        </section>
+
+        <details class="panel">
+          <summary><span><strong>项目与运维</strong><span>索引、任务看板、质量和操作记录</span></span></summary>
+          <div class="details-body">
+            <p id="project-overview" class="project-overview">项目概览：正在加载…</p>
+            <div class="actions compact">
+              <button id="rebuild-index" class="secondary" type="button">重建文档索引</button>
+              <span id="index-message" class="status-text" role="status">索引任务进入独立队列</span>
+            </div>
+            <details class="subsection">
+              <summary><span><strong>索引运行记录</strong><span>最近 10 次</span></span></summary>
+              <div class="subsection-body"><div id="index-history" class="index-list"><div class="empty-copy">暂无索引运行记录。</div></div></div>
+            </details>
+            <details class="subsection">
+              <summary><span><strong>任务看板</strong><span>运行中任务每 5 秒刷新</span></span></summary>
+              <div class="subsection-body">
+                <div id="task-board" class="history-list"><div class="empty-copy">暂无项目任务。</div></div>
+                <div class="actions compact">
+                  <button id="cancel-selected" class="danger" type="button" hidden>取消选中任务</button>
+                  <button id="retry-selected" class="secondary" type="button" hidden>重试选中任务</button>
+                </div>
+                <span id="board-message" class="status-text" role="status">看板每 5 秒自动刷新</span>
+                <ul id="board-operation-result" class="status-text" aria-live="polite" hidden></ul>
+              </div>
+            </details>
+            <p id="project-summary" class="quality-copy">项目反馈摘要：暂无数据</p>
+            <p id="ai-quality" class="quality-copy">AI 质量摘要：暂无数据</p>
+          </div>
+        </details>
+      </aside>
+
+      <main class="result-pane" aria-label="诊断结果">
+        <section id="result-empty" class="empty-result">
+          <p class="eyebrow">Evidence first</p>
+          <h1>先看结论，再沿证据核对。</h1>
+          <p>发起诊断后，这里会直接展示业务限制、源码行号和上下文。AI 只做补充，不会覆盖已由源码证明的事实。</p>
+          <div class="guide-grid">
+            <div class="guide-item"><b>1</b><strong>选择项目并提问</strong><span>尽量提供错误现象、错误码或业务入口。</span></div>
+            <div class="guide-item"><b>2</b><strong>阅读确定性结论</strong><span>结论由检索到的源码事实生成，不依赖模型在线。</span></div>
+            <div class="guide-item"><b>3</b><strong>下载证据文件</strong><span>每条业务限制附带文件、行号和源码上下文。</span></div>
+          </div>
+        </section>
+
+        <section id="result-view" class="result-view" aria-live="polite" hidden>
+          <section class="panel result-header">
+            <div class="result-topline">
+              <div class="result-title">
+                <p class="eyebrow">Current diagnosis</p>
+                <h1 id="task-question">正在加载诊断任务…</h1>
+                <div class="result-meta">
+                  <span id="task-project">项目 -</span>
+                  <span>任务 <code id="task-id">-</code></span>
+                  <span>环境 <code id="task-environment">-</code></span>
+                </div>
+              </div>
+              <span id="task-status" class="status-badge" data-status="">-</span>
+            </div>
+            <div class="progress-line">
+              <div class="progress-track" role="progressbar" aria-label="诊断进度" aria-valuemin="0" aria-valuemax="100">
+                <div id="progress-fill" class="progress-fill"></div>
+              </div>
+              <strong id="task-progress">0%</strong>
+            </div>
+            <p id="task-step">尚未创建任务</p>
+            <div class="actions result-actions">
+              <a id="evidence-link" class="button" href="#" hidden>下载证据 .md</a>
+              <a id="report-link" class="button secondary" href="#" hidden>下载完整报告 .md</a>
+              <button id="copy-report" class="quiet" type="button" disabled>复制完整报告</button>
+              <button id="cancel-task" class="danger" type="button" hidden>取消任务</button>
+              <button id="retry-task" class="secondary" type="button" hidden>重新执行失败任务</button>
+              <button id="rerun-task" class="secondary" type="button" hidden>复制配置重新诊断</button>
+            </div>
+          </section>
+
+          <section class="conclusion-card" aria-labelledby="conclusion-heading">
+            <div class="conclusion-head">
+              <div>
+                <p class="eyebrow">Direct answer</p>
+                <h2 id="conclusion-heading">诊断结论</h2>
+              </div>
+              <span id="confidence-label" class="confidence">置信度待生成</span>
+            </div>
+            <p id="conclusion-text">报告生成后，这里会显示直接回答问题的结论。</p>
+            <p id="confidence-reason">尚未完成诊断。</p>
+            <div class="conclusion-stats">
+              <span id="fact-count">0 条业务限制</span>
+              <span id="evidence-count">0 条源码证据</span>
+              <span id="analysis-source">等待源码分析</span>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="facts-heading">
+            <div class="section-body">
+              <div class="section-heading">
+                <div>
+                  <h2 id="facts-heading">业务限制</h2>
+                  <p>按问题相关性整理；点击引用可直接展开对应源码上下文。</p>
+                </div>
+                <span id="fact-count-badge" class="section-count">0</span>
+              </div>
+              <div id="facts-list" class="facts-list"><div class="empty-copy">诊断完成后显示业务限制。</div></div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="ai-heading">
+            <div class="section-body">
+              <div class="section-heading">
+                <div>
+                  <h2 id="ai-heading">AI 补充</h2>
+                  <p>仅作为解释和下一步建议；失败或缺失不影响上方源码事实。</p>
+                </div>
+              </div>
+              <div id="ai-diagnosis"><div class="callout neutral">等待诊断完成。</div></div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="evidence-heading">
+            <div class="section-body">
+              <div class="section-heading">
+                <div>
+                  <h2 id="evidence-heading">源码证据</h2>
+                  <p>默认折叠，展开后可核对命中行和上下文；证据文件会完整导出。</p>
+                </div>
+                <span id="evidence-count-badge" class="section-count">0</span>
+              </div>
+              <div class="evidence-tools">
+                <input id="evidence-filter" type="search" placeholder="按路径、错误码或符号筛选证据" aria-label="筛选源码证据" />
+                <span class="status-text">证据来自本次只读检索快照</span>
+              </div>
+              <div id="evidence-list" class="evidence-list"><div class="empty-copy">尚未采集源码证据。</div></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <details class="subsection" open>
+              <summary><span><strong>检索与环境验证</strong><span>关键词、符号、配置、SQL 和只读验证状态</span></span></summary>
+              <div class="subsection-body" id="verification-details"></div>
+            </details>
+            <details class="subsection">
+              <summary><span><strong>完整 Markdown 报告</strong><span>审阅或复制原始导出内容</span></span></summary>
+              <div class="subsection-body"><pre id="report">完整报告将在诊断结束后加载。</pre></div>
+            </details>
+            <details class="subsection">
+              <summary><span><strong>操作轨迹</strong><span>任务创建、取消、重试和重新诊断记录</span></span></summary>
+              <div class="subsection-body"><div id="operation-list" class="operation-list"><div class="empty-copy">选择任务后可查看操作记录。</div></div></div>
+            </details>
+          </section>
+
+          <section class="panel" aria-labelledby="feedback-heading">
+            <div class="section-body">
+              <div class="section-heading">
+                <div>
+                  <h2 id="feedback-heading">人工反馈</h2>
+                  <p>记录结论是否正确、证据是否充分，供后续质量复盘。</p>
+                </div>
+              </div>
+              <div class="feedback-layout">
+                <form id="feedback-form" class="feedback-form">
+                  <div class="field-row">
+                    <label class="field" for="rating">反馈类型
+                      <select id="rating" required>
+                        <option value="correct">正确</option>
+                        <option value="inaccurate">不准确</option>
+                        <option value="insufficient_evidence">证据不足</option>
+                        <option value="escalate">转人工</option>
+                      </select>
+                    </label>
+                    <label class="field" for="submitted-by">提交者
+                      <input id="submitted-by" maxlength="100" placeholder="可选" />
+                    </label>
+                  </div>
+                  <label class="field" for="comment">补充说明
+                    <textarea id="comment" maxlength="2000" placeholder="可选，说明遗漏、错误或需要人工确认的部分"></textarea>
+                  </label>
+                  <div class="actions compact">
+                    <button id="feedback-submit" type="submit" disabled>提交反馈</button>
+                    <span id="feedback-message" class="status-text" role="status">创建任务后可提交反馈</span>
+                  </div>
+                </form>
+                <div>
+                  <strong class="status-text">已有反馈</strong>
+                  <div id="feedback-list" class="feedback-list"><div class="empty-copy">暂无反馈。</div></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
 
     <script>
-      // 用于展示任务状态、报告和反馈的最小前端示例，不依赖外部 JavaScript 包。
+      // 页面使用原生 JavaScript，保持部署简单；所有外部数据通过 textContent 渲染，避免源码内容注入页面。
       const state = {
         taskId: null,
+        currentTask: null,
+        currentReport: null,
         eventController: null,
         historyOffset: 0,
         boardCancelIds: new Set(),
         boardRetryIds: new Set(),
+        indexPollToken: 0,
+        evidenceElements: new Map(),
       };
       const $ = (id) => document.getElementById(id);
       const nativeFetch = window.fetch.bind(window);
 
-      /** 加载调用方有权访问的项目目录并填充项目候选项。 */
-      async function loadProjects() {
-        const response = await apiFetch("/api/projects");
-        if (!response.ok) throw new Error(`项目列表获取失败（${response.status}）`);
-        const data = await response.json();
-        const options = $("project-options");
-        options.replaceChildren();
-        data.projects.forEach((project) => {
-          const option = document.createElement("option");
-          option.value = project.name;
-          option.label = project.repository_revision ? project.repository_revision.slice(0, 8) : "未索引版本";
-          options.appendChild(option);
+      /**
+       * 创建带有类名和纯文本的 DOM 元素，统一避免使用 innerHTML 渲染外部内容。
+       * @param {string} tagName 需要创建的语义化标签名。
+       * @param {string} [className] 可选的样式类名，多个类名以空格分隔。
+       * @param {string} [text] 需要作为 textContent 写入的页面文案。
+       * @returns {HTMLElement} 已创建但尚未挂载的元素。
+       */
+      function createElement(tagName, className = "", text = "") {
+        const element = document.createElement(tagName);
+        if (className) element.className = className;
+        if (text) element.textContent = text;
+        return element;
+      }
+
+      /**
+       * 将任务状态转换为普通用户可理解的短文案。
+       * @param {string} status 服务端返回的 QUEUED、RUNNING、COMPLETED 等状态。
+       * @returns {string} 页面状态标签使用的业务状态说明。
+       */
+      function statusLabel(status) {
+        const labels = {
+          QUEUED: "排队中",
+          RUNNING: "诊断中",
+          SEARCHING: "检索代码",
+          VERIFYING: "环境验证",
+          REPORTING: "生成报告",
+          COMPLETED: "已完成",
+          FAILED: "失败",
+          CANCELLED: "已取消",
+        };
+        return labels[status] || status || "未知";
+      }
+
+      /**
+       * 将服务端时间转换为当前地区可读时间；无法解析时保留原值以保留证据。
+       * @param {string} value ISO 8601 时间文本或历史任务可能包含的原始文本。
+       * @returns {string} 用于页面展示的日期时间。
+       */
+      function formatDateTime(value) {
+        if (!value) return "未知";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return String(value);
+        return parsed.toLocaleString("zh-CN", { hour12: false });
+      }
+
+      /**
+       * 把网络异常和 API 异常转换为用户能采取行动的提示。
+       * @param {unknown} error fetch 或业务逻辑抛出的异常。
+       * @param {string} fallback 未识别异常时使用的业务兜底文案。
+       * @returns {string} 可显示在状态区的错误说明。
+       */
+      function friendlyError(error, fallback) {
+        const message = error instanceof Error ? error.message : String(error || "");
+        if (/failed to fetch|networkerror|load failed/i.test(message)) {
+          return "无法连接诊断服务，请确认 API 容器已启动、当前页面地址可访问服务后重试。";
+        }
+        return message || fallback;
+      }
+
+      /**
+       * 读取失败响应中的业务错误详情，避免只显示 HTTP 状态码。
+       * @param {Response} response 未成功的 fetch 响应。
+       * @param {string} fallback 响应不是 JSON 时使用的兜底提示。
+       * @returns {Promise<string>} 可直接展示的错误文案。
+       */
+      async function readApiError(response, fallback) {
+        try {
+          const body = await response.json();
+          return body.detail || fallback;
+        } catch (error) {
+          return fallback;
+        }
+      }
+
+      /**
+       * 将项目索引运行状态转换为页面可读文本。
+       * @param {{index_status: string, indexed_chunk_count: number}} project 项目目录和最新索引摘要。
+       * @returns {string} 项目选择器和项目卡片使用的简短状态说明。
+       */
+      function projectIndexText(project) {
+        if (project.index_status === "COMPLETED") return `已索引 ${project.indexed_chunk_count} 个分块`;
+        if (project.index_status === "RUNNING") return "索引中";
+        if (project.index_status === "FAILED") return "索引失败";
+        if (project.index_status === "QUEUED") return "索引排队中";
+        if (project.index_status === "UNAVAILABLE") return "索引状态不可用";
+        return "未建立索引";
+      }
+
+      /**
+       * 标记当前项目卡片的选中状态，便于同时查看全部项目和当前操作对象。
+       * @returns {void}
+       */
+      function syncProjectSelection() {
+        const selected = $("project").value;
+        document.querySelectorAll(".project-item").forEach((button) => {
+          const active = button.dataset.project === selected;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-pressed", String(active));
         });
       }
 
-      /** 加载当前项目的任务、反馈和索引概览。 */
+      /**
+       * 加载调用方有权访问的项目目录、索引状态和可点击项目卡片。
+       * @returns {Promise<Array<{name: string, index_status: string, indexed_chunk_count: number}>>} 当前调用方可见的项目摘要。
+       */
+      async function loadProjects() {
+        const response = await apiFetch("/api/projects");
+        if (!response.ok) throw new Error(await readApiError(response, `项目列表获取失败（${response.status}）`));
+        const data = await response.json();
+        const select = $("project");
+        const previous = select.value;
+        select.replaceChildren();
+        const list = $("project-list");
+        list.replaceChildren();
+        if (!data.projects.length) {
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = "当前 API Key 没有可访问项目";
+          select.appendChild(empty);
+          list.textContent = "未发现已挂载项目，请检查仓库目录和 API Key 项目白名单。";
+          return [];
+        }
+        data.projects.forEach((project) => {
+          const option = document.createElement("option");
+          option.value = project.name;
+          option.textContent = project.name;
+          select.appendChild(option);
+
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "project-item";
+          button.dataset.project = project.name;
+          const name = document.createElement("strong");
+          name.textContent = project.name;
+          const status = document.createElement("small");
+          status.textContent = projectIndexText(project);
+          button.append(name, status);
+          button.addEventListener("click", () => {
+            if (select.value === project.name) {
+              syncProjectSelection();
+              return;
+            }
+            select.value = project.name;
+            select.dispatchEvent(new Event("change"));
+          });
+          list.appendChild(button);
+        });
+        if (data.projects.some((project) => project.name === previous)) {
+          select.value = previous;
+        }
+        syncProjectSelection();
+        return data.projects;
+      }
+
+      /**
+       * 停止当前页面发起的索引状态轮询，避免切换项目后旧请求覆盖新项目状态。
+       * @returns {void}
+       */
+      function stopIndexPolling() {
+        state.indexPollToken += 1;
+      }
+
+      /**
+       * 轮询当前项目的真实索引运行状态，直到完成、失败或超过等待期限。
+       * @param {string} project 正在重建索引的项目名。
+       * @param {number} token 本次轮询令牌，用于丢弃项目切换后的过期结果。
+       * @param {number} startedAt 投递索引任务的本地时间戳，单位毫秒。
+       * @returns {Promise<void>}
+       */
+      async function pollIndexStatus(project, token, startedAt) {
+        if (token !== state.indexPollToken) return;
+        try {
+          const projects = await loadProjects();
+          const current = $("project").value.trim();
+          const summary = projects.find((item) => item.name === project);
+          if (current === project) {
+            await Promise.all([loadProjectOverview(), loadIndexHistory()]);
+          }
+          if (!summary || summary.index_status === "UNAVAILABLE") {
+            $("index-message").textContent = "索引状态不可用，请检查数据库和 Worker";
+            return;
+          }
+          if (summary.index_status === "COMPLETED") {
+            $("index-message").textContent = `索引完成：${summary.indexed_chunk_count} 个分块`;
+            return;
+          }
+          if (summary.index_status === "FAILED") {
+            $("index-message").textContent = "索引失败，可在索引记录中查看原因并重试";
+            return;
+          }
+          if (summary.index_status === "QUEUED" || summary.index_status === "RUNNING") {
+            $("index-message").textContent = summary.index_status === "QUEUED" ? "索引排队中" : "索引运行中";
+          } else if (Date.now() - startedAt >= 60000) {
+            $("index-message").textContent = "索引任务尚未开始，请检查索引 Worker 状态";
+            return;
+          } else {
+            $("index-message").textContent = "等待索引 Worker 接收任务";
+          }
+          if (Date.now() - startedAt >= 15 * 60 * 1000) {
+            $("index-message").textContent = "索引仍在运行，可稍后刷新页面查看结果";
+            return;
+          }
+          window.setTimeout(() => pollIndexStatus(project, token, startedAt), 3000);
+        } catch (error) {
+          if (token === state.indexPollToken) {
+            $("index-message").textContent = friendlyError(error, "索引状态获取失败");
+          }
+        }
+      }
+
+      /**
+       * 从当前时间开始跟踪指定项目的索引进度。
+       * @param {string} project 已成功投递索引任务的项目名。
+       * @returns {void}
+       */
+      function startIndexPolling(project) {
+        stopIndexPolling();
+        const token = state.indexPollToken;
+        window.setTimeout(() => pollIndexStatus(project, token, Date.now()), 1200);
+      }
+
+      /**
+       * 加载当前项目的任务、反馈和索引概览。
+       * @returns {Promise<void>} 项目概览写入后完成。
+       */
       async function loadProjectOverview() {
         const project = encodeURIComponent($("project").value.trim());
         const response = await apiFetch(`/api/projects/${project}/overview`);
-        if (!response.ok) throw new Error(`项目概览获取失败（${response.status}）`);
+        if (!response.ok) throw new Error(await readApiError(response, `项目概览获取失败（${response.status}）`));
         const data = await response.json();
         const index = data.latest_index_run;
         const indexText = index
-          ? `${index.status}，${index.chunk_count} 个分块，版本 ${index.repository_revision || "未知"}`
+          ? `${statusLabel(index.status)}，${index.chunk_count} 个分块，版本 ${index.repository_revision || "未知"}`
           : "暂无索引运行";
         $("project-overview").textContent = `项目概览：${data.tasks_total} 个任务；最近索引 ${indexText}`;
       }
 
-      /** 加载当前项目最近 10 次文档索引运行。 */
+      /**
+       * 加载当前项目最近 10 次文档索引运行，并为失败运行提供重试入口。
+       * @returns {Promise<void>} 索引历史写入页面后完成。
+       */
       async function loadIndexHistory() {
         const project = encodeURIComponent($("project").value.trim());
         const response = await apiFetch(`/api/index/${project}/runs?limit=10`);
-        if (!response.ok) throw new Error(`索引历史获取失败（${response.status}）`);
+        if (!response.ok) throw new Error(await readApiError(response, `索引历史获取失败（${response.status}）`));
         const data = await response.json();
         const container = $("index-history");
         container.replaceChildren();
         if (!data.runs.length) {
-          container.textContent = "暂无索引运行记录。";
+          container.appendChild(createElement("div", "empty-copy", "暂无索引运行记录。"));
           return;
         }
         data.runs.forEach((run) => {
-          const row = document.createElement("div");
-          row.className = "history-item";
-          const summary = document.createElement("span");
-          summary.textContent = `#${run.id} | ${run.status} | ${run.chunk_count} 分块 | ${run.repository_revision ? run.repository_revision.slice(0, 8) : "无版本"}${run.error ? ` | ${run.error}` : ""}`;
-          row.appendChild(summary);
+          const row = createElement("div", "list-row main");
+          const copy = createElement("div");
+          const revision = run.repository_revision ? run.repository_revision.slice(0, 8) : "无版本";
+          copy.append(
+            createElement("strong", "", `运行 #${run.id} · ${statusLabel(run.status)}`),
+            createElement("small", "", `${run.chunk_count} 个分块 · 版本 ${revision}${run.error ? ` · ${run.error}` : ""}`),
+          );
+          row.appendChild(copy);
           if (run.status === "FAILED") {
-            const retry = document.createElement("button");
+            const retry = createElement("button", "quiet", "重试");
             retry.type = "button";
-            retry.className = "secondary";
-            retry.textContent = "重试";
             retry.addEventListener("click", () => retryIndexRun(run.id));
             row.appendChild(retry);
           }
@@ -211,8 +942,9 @@
       }
 
       /**
-       * 重新投递失败的索引运行。
+       * 重新投递失败的索引运行并刷新索引历史。
        * @param {number} runId 失败索引运行 ID。
+       * @returns {Promise<void>} 重试请求和状态提示处理完成后结束。
        */
       async function retryIndexRun(runId) {
         const project = encodeURIComponent($("project").value.trim());
@@ -222,50 +954,20 @@
           const body = await response.json();
           if (!response.ok) throw new Error(body.detail || `索引重试失败（${response.status}）`);
           $("index-message").textContent = `索引已重试排队：${body.task_id}`;
-          setTimeout(() => Promise.all([loadIndexHistory(), loadProjectOverview()]).catch(() => null), 1500);
+          window.setTimeout(() => Promise.all([loadIndexHistory(), loadProjectOverview()]).catch(() => null), 1500);
         } catch (error) {
-          $("index-message").textContent = error.message;
+          $("index-message").textContent = friendlyError(error, "索引重试失败");
         }
       }
 
       /**
-       * 在页面中打开任务看板选中的诊断任务。
-       * @param {Object} task 任务看板返回的任务摘要。
+       * 显示项目任务状态、运行中任务和最近终态任务。
+       * @returns {Promise<void>} 看板渲染完成后结束。
        */
-      async function openBoardTask(task) {
-        state.taskId = task.id;
-        $("report-link").href = `/api/diagnoses/${encodeURIComponent(task.id)}/report?format=markdown`;
-        $("report-link").hidden = false;
-        renderTask({ task_id: task.id, status: task.status, progress: task.progress, current_step: task.current_step });
-        try {
-          await Promise.all([loadReport(task.id), loadFeedback(task.id), loadOperations(task.id)]);
-          $("message").textContent = "已加载看板任务";
-        } catch (error) {
-          $("message").textContent = error.message;
-        }
-      }
-
-      /**
-       * 从项目看板取消运行中的诊断任务。
-       * @param {string} taskId 需要取消的诊断任务 ID。
-       */
-      async function cancelBoardTask(taskId) {
-        try {
-          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
-          const body = await response.json();
-          if (!response.ok) throw new Error(body.detail || `任务取消失败（${response.status}）`);
-          $("message").textContent = "任务已取消";
-          await Promise.all([loadTaskBoard(), loadProjectOverview()]);
-        } catch (error) {
-          $("message").textContent = error.message;
-        }
-      }
-
-      /** 加载项目任务状态统计、运行中任务和最近终态任务。 */
       async function loadTaskBoard() {
         const project = encodeURIComponent($("project").value.trim());
         const response = await apiFetch(`/api/projects/${project}/task-board`);
-        if (!response.ok) throw new Error(`任务看板获取失败（${response.status}）`);
+        if (!response.ok) throw new Error(await readApiError(response, `任务看板获取失败（${response.status}）`));
         const data = await response.json();
         const activeIds = new Set(data.active_tasks.map((task) => task.id));
         const retryableIds = new Set(
@@ -277,58 +979,92 @@
         state.boardRetryIds = new Set([...state.boardRetryIds].filter((id) => retryableIds.has(id)));
         const container = $("task-board");
         container.replaceChildren();
-        const summary = document.createElement("p");
-        summary.textContent = `任务状态：${Object.entries(data.status_counts).map(([status, count]) => `${status} ${count}`).join("，") || "暂无"}`;
+        const counts = Object.entries(data.status_counts)
+          .map(([status, count]) => `${statusLabel(status)} ${count}`)
+          .join("，") || "暂无任务";
+        const summary = createElement("div", "chip-list");
+        summary.appendChild(createElement("span", "chip", counts));
         container.appendChild(summary);
-        [...data.active_tasks, ...data.recent_tasks].forEach((task) => {
-          const row = document.createElement("div");
-          row.className = "history-item";
-          const label = document.createElement("span");
-          label.textContent = `${task.id} | ${task.status} | ${task.progress}% | ${task.question}`;
-          const open = document.createElement("button");
-          open.type = "button";
-          open.className = "secondary";
-          open.textContent = "打开";
-          open.addEventListener("click", () => openBoardTask(task));
+        const tasks = [...data.active_tasks, ...data.recent_tasks];
+        if (!tasks.length) {
+          container.appendChild(createElement("div", "empty-copy", "当前项目还没有诊断任务。"));
+        }
+        tasks.forEach((task) => {
           const isActive = activeIds.has(task.id);
           const isRetryable = retryableIds.has(task.id);
+          const row = createElement("div", "list-row task-board-row");
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.value = task.id;
           if (isActive) {
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.value = task.id;
             checkbox.checked = state.boardCancelIds.has(task.id);
             checkbox.setAttribute("aria-label", `选择取消任务 ${task.id}`);
             checkbox.addEventListener("change", () => {
               if (checkbox.checked) state.boardCancelIds.add(task.id);
               else state.boardCancelIds.delete(task.id);
             });
-            row.appendChild(checkbox);
-          }
-          if (isRetryable) {
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.value = task.id;
+          } else if (isRetryable) {
             checkbox.checked = state.boardRetryIds.has(task.id);
             checkbox.setAttribute("aria-label", `选择重试任务 ${task.id}`);
             checkbox.addEventListener("change", () => {
               if (checkbox.checked) state.boardRetryIds.add(task.id);
               else state.boardRetryIds.delete(task.id);
             });
-            row.appendChild(checkbox);
+          } else {
+            checkbox.hidden = true;
           }
-          row.append(label, open);
+          const copy = createElement("button", "history-button");
+          copy.type = "button";
+          const content = createElement("div", "history-content");
+          content.append(
+            createElement("strong", "", task.question),
+            createElement("small", "", `${statusLabel(task.status)} · ${task.progress}% · ${task.id}`),
+          );
+          copy.appendChild(content);
+          copy.addEventListener("click", () => openBoardTask(task));
+          const rowActions = createElement("div", "row-actions");
+          const open = createElement("button", "quiet", "打开");
+          open.type = "button";
+          open.addEventListener("click", () => openBoardTask(task));
+          rowActions.appendChild(open);
           if (isActive) {
-            const cancel = document.createElement("button");
+            const cancel = createElement("button", "quiet danger", "取消");
             cancel.type = "button";
-            cancel.className = "secondary";
-            cancel.textContent = "取消";
             cancel.addEventListener("click", () => cancelBoardTask(task.id));
-            row.appendChild(cancel);
+            rowActions.appendChild(cancel);
           }
+          row.append(checkbox, copy, rowActions);
           container.appendChild(row);
         });
         $("cancel-selected").hidden = activeIds.size === 0;
         $("retry-selected").hidden = retryableIds.size === 0;
+      }
+
+      /**
+       * 在右侧工作区打开任务看板中的诊断任务。
+       * @param {Object} task 任务看板返回的任务摘要，包含 id、状态和问题文本。
+       * @returns {Promise<void>} 任务报告和关联信息加载完成后结束。
+       */
+      async function openBoardTask(task) {
+        await selectTask(task.id, "已从任务看板打开诊断");
+      }
+
+      /**
+       * 从项目看板取消一个运行中的诊断任务。
+       * @param {string} taskId 需要取消的诊断任务 ID。
+       * @returns {Promise<void>} 取消结果与看板刷新完成后结束。
+       */
+      async function cancelBoardTask(taskId) {
+        try {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `任务取消失败（${response.status}）`);
+          $("board-message").textContent = "任务已取消";
+          if (state.taskId === taskId) await loadReport(taskId);
+          await Promise.all([loadTaskBoard(), loadProjectOverview()]);
+        } catch (error) {
+          $("board-message").textContent = friendlyError(error, "任务取消失败");
+        }
       }
 
       /**
@@ -340,14 +1076,10 @@
       function renderBoardOperationResult(title, body) {
         const container = $("board-operation-result");
         container.replaceChildren();
-        const heading = document.createElement("li");
-        heading.textContent = title;
-        container.appendChild(heading);
+        container.appendChild(createElement("li", "", title));
         (body.details || []).forEach((item) => {
-          const row = document.createElement("li");
           const outcome = item.outcome === "skipped" ? "跳过" : "成功";
-          row.textContent = `${item.task_id}：${outcome}${item.reason ? `（${item.reason}）` : ""}`;
-          container.appendChild(row);
+          container.appendChild(createElement("li", "", `${item.task_id}：${outcome}${item.reason ? `（${item.reason}）` : ""}`));
         });
         container.hidden = false;
       }
@@ -365,44 +1097,441 @@
         return nativeFetch(input, { ...init, headers });
       }
 
-      /** 停止当前任务进度流，避免切换任务后保留旧连接。 */
+      /**
+       * 停止当前任务进度流，避免切换任务后保留旧连接。
+       * @returns {void}
+       */
       function stopWatching() {
         if (state.eventController) state.eventController.abort();
         state.eventController = null;
       }
 
       /**
-       * 将 API 任务摘要同步到页面，并以纯文本方式渲染。
-       * @param {Object} task 诊断任务状态摘要。
+       * 将任务元数据、状态和进度同步到右侧结果页。
+       * @param {Object} task 完整任务响应或历史任务摘要，包含任务 ID、状态、进度和问题。
+       * @returns {void}
        */
       function renderTask(task) {
-        $("task-id").textContent = task.task_id || "-";
-        $("task-status").textContent = task.status || "-";
-        $("task-progress").textContent = `${task.progress ?? 0}%`;
-        $("task-step").textContent = task.current_step || "-";
-        $("feedback-submit").disabled = !task.task_id;
-        $("feedback-message").textContent = task.task_id ? "可以提交审阅意见" : "创建任务后可提交反馈";
-        $("cancel-task").hidden = !["QUEUED", "RUNNING", "SEARCHING", "VERIFYING", "REPORTING"].includes(task.status);
-        $("retry-task").hidden = task.status !== "FAILED";
-        $("rerun-task").hidden = !["COMPLETED", "FAILED", "CANCELLED"].includes(task.status);
+        state.currentTask = task;
+        const status = task.status || "";
+        const progress = Math.max(0, Math.min(100, Number(task.progress ?? 0)));
+        $("result-empty").hidden = true;
+        $("result-view").hidden = false;
+        $("task-question").textContent = task.question || "诊断任务";
+        $("task-project").textContent = `项目 ${task.project || $("project").value || "-"}`;
+        $("task-id").textContent = task.task_id || task.id || "-";
+        $("task-environment").textContent = task.environment || "-";
+        $("task-status").textContent = statusLabel(status);
+        $("task-status").dataset.status = status;
+        $("task-progress").textContent = `${progress}%`;
+        $("progress-fill").style.width = `${progress}%`;
+        $("progress-fill").parentElement.setAttribute("aria-valuenow", String(progress));
+        $("task-step").textContent = task.current_step || (status === "COMPLETED" ? "诊断已完成" : "正在等待任务进度");
+        $("feedback-submit").disabled = !state.taskId;
+        $("feedback-message").textContent = state.taskId ? "可以提交审阅意见" : "创建任务后可提交反馈";
+        $("cancel-task").hidden = !["QUEUED", "RUNNING", "SEARCHING", "VERIFYING", "REPORTING"].includes(status);
+        $("retry-task").hidden = status !== "FAILED";
+        $("rerun-task").hidden = !["COMPLETED", "FAILED", "CANCELLED"].includes(status);
+        const terminal = ["COMPLETED", "FAILED", "CANCELLED"].includes(status);
+        $("evidence-link").hidden = !terminal;
+        $("report-link").hidden = !terminal;
+        if (state.taskId) {
+          $("evidence-link").href = `/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=evidence`;
+          $("report-link").href = `/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`;
+        }
       }
 
       /**
-       * 拉取 Markdown 报告并在页面中以纯文本预览。
+       * 生成源码证据的稳定定位键，与后端 evidence_refs 的“文件:行号”格式一致。
+       * @param {string} file 仓库内源码相对路径。
+       * @param {number|string} line 证据所在的一基行号。
+       * @returns {string} 用于业务限制和证据卡片关联的引用键。
+       */
+      function evidenceKey(file, line) {
+        return `${file || ""}:${line ?? ""}`;
+      }
+
+      /**
+       * 打开并滚动到业务限制引用的源码证据，让审阅人不必手工搜索路径。
+       * @param {string} key 证据的“文件:行号”引用键。
+       * @returns {void}
+       */
+      function openEvidenceReference(key) {
+        const element = state.evidenceElements.get(key);
+        if (!element) {
+          $("message").textContent = `本次证据快照中未包含 ${key}`;
+          return;
+        }
+        element.hidden = false;
+        element.open = true;
+        element.querySelectorAll(".source-line.is-target").forEach((line) => line.classList.remove("is-target"));
+        let target = element;
+        element.querySelectorAll(".source-line").forEach((line) => {
+          if (line.dataset.evidenceRef === key) {
+            line.classList.add("is-target");
+            target = line;
+          }
+        });
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+
+      /**
+       * 渲染确定性业务限制，并把每条源码引用关联到可展开的证据卡片。
+       * @param {Array<Object>} facts 后端从源码生成的分类业务事实。
+       * @returns {void}
+       */
+      function renderFacts(facts) {
+        const container = $("facts-list");
+        container.replaceChildren();
+        $("fact-count").textContent = `${facts.length} 条业务限制`;
+        $("fact-count-badge").textContent = String(facts.length);
+        if (!facts.length) {
+          container.appendChild(
+            createElement(
+              "div",
+              "callout neutral",
+              "本次检索没有形成确定性业务限制。请补充错误码、类名、方法名或业务对象后重新诊断，不要把这一点理解为业务没有限制。",
+            ),
+          );
+          return;
+        }
+        facts.forEach((fact, index) => {
+          const card = createElement("article", "fact-card");
+          const head = createElement("div", "fact-head");
+          head.append(
+            createElement("span", "fact-category", fact.category || "业务限制"),
+            createElement("span", "fact-index", String(index + 1).padStart(2, "0")),
+          );
+          card.append(head, createElement("p", "", fact.statement || "未提供事实说明。"));
+          const refs = (fact.evidence_refs || []).map(String);
+          if (refs.length) {
+            const refList = createElement("div", "ref-list");
+            refs.forEach((ref) => {
+              const button = createElement("button", "evidence-ref", ref);
+              button.type = "button";
+              button.title = `查看证据 ${ref}`;
+              button.addEventListener("click", () => openEvidenceReference(ref));
+              refList.appendChild(button);
+            });
+            card.appendChild(refList);
+          } else {
+            card.appendChild(createElement("div", "callout", "该条限制没有附带源码引用，需要人工补充验证。"));
+          }
+          container.appendChild(card);
+        });
+      }
+
+      /**
+       * 渲染可筛选的源码证据列表，默认折叠上下文以保持阅读密度。
+       * @param {Array<Object>} evidence Worker 返回的源码命中行及上下文快照。
+       * @returns {void}
+       */
+      function renderEvidenceLibrary(evidence) {
+        const container = $("evidence-list");
+        container.replaceChildren();
+        state.evidenceElements.clear();
+        $("evidence-count").textContent = `${evidence.length} 条源码证据`;
+        $("evidence-count-badge").textContent = String(evidence.length);
+        if (!evidence.length) {
+          container.appendChild(createElement("div", "empty-copy", "本次没有采集到源码证据，无法核对业务限制。"));
+          return;
+        }
+        evidence.forEach((item) => {
+          const key = evidenceKey(item.file, item.line);
+          const details = createElement("details", "evidence-item");
+          details.dataset.evidenceKey = key;
+          details.dataset.searchText = `${key} ${item.query || ""} ${item.content || ""}`.toLowerCase();
+          const summary = createElement("summary");
+          const path = createElement("span", "evidence-path", key);
+          const query = createElement("span", "evidence-query", item.query ? `命中：${item.query}` : "源码命中");
+          summary.append(path, query);
+          const body = createElement("div", "evidence-content");
+          if (item.content) body.appendChild(createElement("p", "evidence-line", item.content));
+          body.appendChild(renderEvidenceContext(item));
+          details.append(summary, body);
+          indexEvidenceContext(details, item);
+          container.appendChild(details);
+        });
+      }
+
+      /**
+       * 把源码上下文渲染成逐行元素，便于业务限制引用精确高亮目标行。
+       * @param {Object} item Worker 返回的证据项，包含文件路径、命中和带行号上下文。
+       * @returns {HTMLElement} 可滚动且逐行标记的源码上下文区域。
+       */
+      function renderEvidenceContext(item) {
+        const context = String(item.context || "");
+        if (!context) {
+          const fallback = document.createElement("pre");
+          fallback.textContent = item.content || "无可用上下文";
+          return fallback;
+        }
+        const container = createElement("div", "evidence-context");
+        const linePattern = /^\s*(\d+):\s?(.*)$/;
+        context.split("\n").forEach((rawLine) => {
+          const match = rawLine.match(linePattern);
+          if (!match) return;
+          const row = createElement("div", "source-line");
+          row.dataset.evidenceRef = evidenceKey(item.file, Number(match[1]));
+          row.append(
+            createElement("span", "source-line-number", match[1]),
+            createElement("span", "", match[2]),
+          );
+          container.appendChild(row);
+        });
+        if (!container.childElementCount) container.textContent = context;
+        return container;
+      }
+
+      /**
+       * 把证据顶层命中行和整段上下文中的每个源码行都映射到同一张证据卡片。
+       * @param {HTMLDetailsElement} details 可展开的源码证据卡片。
+       * @param {Object} item Worker 返回的证据项，包含文件和带行号的上下文。
+       * @returns {void}
+       */
+      function indexEvidenceContext(details, item) {
+        const file = item.file || "";
+        state.evidenceElements.set(evidenceKey(file, item.line), details);
+        const context = String(item.context || "");
+        const linePattern = /^\s*(\d+):\s?(.*)$/gm;
+        let match = linePattern.exec(context);
+        while (match) {
+          state.evidenceElements.set(evidenceKey(file, Number(match[1])), details);
+          match = linePattern.exec(context);
+        }
+      }
+
+      /**
+       * 渲染 AI 解释与建议，并明确模型失败不会否定源码确定性结论。
+       * @param {Object} result 诊断任务的结构化结果。
+       * @returns {void}
+       */
+      function renderAiDiagnosis(result) {
+        const container = $("ai-diagnosis");
+        container.replaceChildren();
+        const diagnosis = result.ai_diagnosis;
+        if (!diagnosis) {
+          const hasAiWarning = (result.warnings || []).some((item) => /AI|模型|timeout|超时/i.test(String(item)));
+          const message = hasAiWarning
+            ? "本次 AI 补充未完成，但上方确定性结论由源码检索直接生成，仍可继续审阅证据。"
+            : "本次未生成 AI 补充；这不影响上方源码确定性结论。";
+          container.appendChild(createElement("div", "callout neutral", message));
+          return;
+        }
+        container.appendChild(createElement("p", "ai-summary", diagnosis.conclusion || "AI 未提供额外结论。"));
+        if ((diagnosis.possible_causes || []).length) {
+          const block = createElement("div", "ai-block");
+          block.appendChild(createElement("h3", "", "候选原因"));
+          const list = document.createElement("ul");
+          diagnosis.possible_causes.forEach((cause) => {
+            const refs = (cause.evidence_refs || []).join("、") || "无引用";
+            list.appendChild(createElement("li", "", `${cause.title || "候选原因"}：${cause.reasoning || ""}（证据：${refs}）`));
+          });
+          block.appendChild(list);
+          container.appendChild(block);
+        }
+        if ((diagnosis.uncertainties || []).length) {
+          const block = createElement("div", "ai-block");
+          block.appendChild(createElement("h3", "", "仍需确认"));
+          const list = document.createElement("ul");
+          diagnosis.uncertainties.forEach((item) => list.appendChild(createElement("li", "", String(item))));
+          block.appendChild(list);
+          container.appendChild(block);
+        }
+        if ((diagnosis.recommended_actions || []).length) {
+          const block = createElement("div", "ai-block");
+          block.appendChild(createElement("h3", "", "建议动作"));
+          const list = document.createElement("ul");
+          diagnosis.recommended_actions.forEach((item) => list.appendChild(createElement("li", "", String(item))));
+          block.appendChild(list);
+          container.appendChild(block);
+        }
+      }
+
+      /**
+       * 渲染检索关键词、自动扩展来源、符号、配置、SQL、调用链和只读验证状态。
+       * @param {Object} result 诊断任务的结构化结果。
+       * @param {Object} assessment 报告置信度、未验证项和下一步建议。
+       * @returns {void}
+       */
+      function renderVerificationDetails(result, assessment) {
+        const container = $("verification-details");
+        container.replaceChildren();
+        const retrievalPlan = result.retrieval_plan || {};
+        const metrics = createElement("div", "metric-strip");
+        [
+          ["检索关键词", (result.queries || []).length],
+          ["动态发现", (retrievalPlan.discovered_queries || []).length],
+          ["符号", (result.symbols || []).length],
+          ["配置", (result.configs || []).length],
+          ["SQL", (result.sql || []).length],
+        ].forEach(([label, count]) => {
+          const metric = createElement("div", "metric");
+          metric.append(createElement("small", "", label), createElement("strong", "", String(count)));
+          metrics.appendChild(metric);
+        });
+        container.appendChild(metrics);
+
+        const retrievalSupport = retrievalPlan.retrieval_support || {};
+        if (retrievalSupport.level) {
+          const support = createElement("div", "ai-block");
+          support.appendChild(createElement("h3", "", "检索支撑"));
+          support.appendChild(
+            createElement(
+              "p",
+              "muted-copy",
+              retrievalSupport.reason || "已完成检索支撑判定。",
+            ),
+          );
+          const supportList = document.createElement("ul");
+          supportList.appendChild(
+            createElement(
+              "li",
+              "",
+              `支撑等级：${retrievalSupport.level}；业务锚点 ${retrievalSupport.direct_anchor_count || 0} 条；概念覆盖 ${retrievalSupport.best_concept_coverage || 0}/${retrievalSupport.required_concept_coverage || 0}。`,
+            ),
+          );
+          if (retrievalSupport.grounded === false) {
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                "系统已停止符号发现和调用链扩展，避免把泛化词拼成虚假业务结论。",
+              ),
+            );
+          }
+          support.appendChild(supportList);
+          container.appendChild(support);
+        }
+
+        const warnings = result.warnings || [];
+        if (warnings.length) {
+          const warning = createElement("div", "callout");
+          warning.appendChild(createElement("strong", "", "诊断警告"));
+          const list = document.createElement("ul");
+          warnings.forEach((item) => list.appendChild(createElement("li", "", String(item))));
+          warning.appendChild(list);
+          container.appendChild(warning);
+        }
+
+        if ((result.queries || []).length) {
+          const block = createElement("div", "ai-block");
+          block.appendChild(createElement("h3", "", "检索关键词"));
+          const chips = createElement("div", "chip-list");
+          result.queries.forEach((item) => chips.appendChild(createElement("span", "chip", String(item))));
+          block.appendChild(chips);
+          container.appendChild(block);
+        }
+
+        const discoverySources = retrievalPlan.discovery_sources || [];
+        if ((retrievalPlan.discovered_queries || []).length || discoverySources.length) {
+          const block = createElement("div", "ai-block");
+          block.appendChild(createElement("h3", "", "自动发现来源"));
+          const intro = createElement(
+            "p",
+            "muted-copy",
+            `通用片段命中 ${retrievalPlan.generic_hit_count || 0} 条；系统从命中的源码、配置和符号索引自动扩展 ${discoverySources.length} 个可追溯检索词，不依赖预先维护领域映射。`,
+          );
+          block.appendChild(intro);
+          const list = document.createElement("ul");
+          discoverySources.forEach((item) => {
+            const reason = item.reason || "通用业务命中";
+            const location = item.file ? `${item.file}:${item.line || 0}` : "未记录位置";
+            list.appendChild(createElement("li", "", `${item.query || "未命名词"} ← ${reason}（${location}）`));
+          });
+          block.appendChild(list);
+          container.appendChild(block);
+        }
+
+        const technical = createElement("div", "technical-grid");
+        [
+          ["符号证据", `${(result.symbols || []).length} 个类、方法或函数定义`],
+          ["调用链线索", `${(result.call_chains || []).length} 条入口或调用关系`],
+          ["配置线索", `${(result.configs || []).length} 个配置键`],
+          ["SQL 线索", `${(result.sql || []).length} 条数据库操作片段`],
+        ].forEach(([label, copy]) => {
+          const card = createElement("div", "technical-card");
+          card.append(createElement("strong", "", label), createElement("span", "", copy));
+          technical.appendChild(card);
+        });
+        container.appendChild(technical);
+
+        const verificationBlock = createElement("div", "ai-block");
+        verificationBlock.appendChild(createElement("h3", "", "只读验证结果"));
+        const hasValidation = result.validation && Object.keys(result.validation).length;
+        const validation = document.createElement("pre");
+        validation.textContent = hasValidation
+          ? JSON.stringify(result.validation, null, 2)
+          : "本次未执行数据库、配置或日志事实验证；源码结论仍需在目标环境按需核对。";
+        verificationBlock.appendChild(validation);
+        container.appendChild(verificationBlock);
+
+        const nextSteps = assessment.suggested_next_steps || [];
+        if (nextSteps.length) {
+          const block = createElement("div", "ai-block");
+          block.appendChild(createElement("h3", "", "建议下一步"));
+          const list = document.createElement("ul");
+          nextSteps.forEach((item) => list.appendChild(createElement("li", "", String(item))));
+          block.appendChild(list);
+          container.appendChild(block);
+        }
+      }
+
+      /**
+       * 将完整报告响应渲染为结论、事实、证据和验证四个阅读层级。
+       * @param {Object} report 报告接口返回的任务、结果和评估信息。
+       * @returns {void}
+       */
+      function renderReport(report) {
+        state.currentReport = report;
+        const result = report.result || {};
+        const assessment = report.assessment || result.assessment || {};
+        const confidence = assessment.confidence || {};
+        const deterministic = result.deterministic_findings || {};
+        const facts = deterministic.facts || [];
+        const evidence = result.evidence || [];
+        const conclusion = facts.length
+          ? deterministic.conclusion || assessment.conclusion
+          : assessment.conclusion;
+        $("conclusion-text").textContent = conclusion || "当前没有形成可靠结论，请检查检索结果和未验证项。";
+        $("confidence-label").textContent = `置信度 ${confidence.label || "未评估"}`;
+        $("confidence-reason").textContent = confidence.reason || "尚未生成置信度说明。";
+        $("analysis-source").textContent = facts.length ? "源码确定性分析" : "证据不足";
+        renderFacts(facts);
+        renderEvidenceLibrary(evidence);
+        renderAiDiagnosis(result);
+        renderVerificationDetails(result, assessment);
+      }
+
+      /**
+       * 获取结构化报告和完整 Markdown，并在右侧直接展示可读结论。
        * @param {string} taskId 诊断任务 ID。
-       * @returns {Promise<void>}
+       * @returns {Promise<Object>} 已渲染的结构化报告。
        */
       async function loadReport(taskId) {
-        const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
-        if (!response.ok) throw new Error(`报告获取失败（${response.status}）`);
-        $("report").textContent = await response.text();
-        $("copy-report").disabled = false;
+        const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report`);
+        if (!response.ok) throw new Error(await readApiError(response, `报告获取失败（${response.status}）`));
+        const report = await response.json();
+        state.taskId = report.task_id || taskId;
+        renderTask(report);
+        renderReport(report);
+        $("report").textContent = "正在加载完整 Markdown 报告…";
+        try {
+          const markdownResponse = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/report?format=markdown`);
+          if (!markdownResponse.ok) throw new Error(`完整报告获取失败（${markdownResponse.status}）`);
+          $("report").textContent = await markdownResponse.text();
+          $("copy-report").disabled = false;
+        } catch (error) {
+          $("report").textContent = friendlyError(error, "完整报告暂不可用");
+          $("copy-report").disabled = true;
+        }
+        return report;
       }
 
       /**
-       * 拉取任务人工反馈和反馈类型统计。
+       * 拉取任务人工反馈和反馈类型统计，并以列表而非原始文本展示。
        * @param {string} taskId 诊断任务 ID。
-       * @returns {Promise<void>}
+       * @returns {Promise<void>} 反馈列表渲染完成后结束。
        */
       async function loadFeedback(taskId) {
         const base = `/api/diagnoses/${encodeURIComponent(taskId)}/feedback`;
@@ -410,30 +1539,58 @@
         if (!response.ok || !summaryResponse.ok) throw new Error("反馈获取失败");
         const data = await response.json();
         const summary = await summaryResponse.json();
-        const header = `共 ${summary.total} 条反馈：正确 ${summary.counts.correct}，不准确 ${summary.counts.inaccurate}，证据不足 ${summary.counts.insufficient_evidence}，转人工 ${summary.counts.escalate}`;
-        $("feedback-list").textContent = data.feedback.length
-          ? `${header}\n\n${data.feedback.map((item) => `${item.rating}：${item.comment || "（无说明）"}`).join("\n")}`
-          : `${header}\n\n暂无反馈。`;
+        const container = $("feedback-list");
+        container.replaceChildren();
+        container.appendChild(
+          createElement(
+            "div",
+            "chip",
+            `共 ${summary.total} 条 · 正确 ${summary.counts.correct} · 不准确 ${summary.counts.inaccurate} · 证据不足 ${summary.counts.insufficient_evidence} · 转人工 ${summary.counts.escalate}`,
+          ),
+        );
+        if (!data.feedback.length) {
+          container.appendChild(createElement("div", "empty-copy", "暂无人工反馈。"));
+          return;
+        }
+        data.feedback.forEach((item) => {
+          const row = createElement("div", "feedback-row");
+          row.append(
+            createElement("strong", "", `${item.rating} · ${item.submitted_by || "匿名"} · ${formatDateTime(item.created_at)}`),
+            createElement("span", "", item.comment || "（无补充说明）"),
+          );
+          container.appendChild(row);
+        });
       }
 
       /**
-       * 拉取任务创建、取消和重试操作审计轨迹。
+       * 拉取任务创建、取消、重试和重新诊断操作审计轨迹。
        * @param {string} taskId 诊断任务 ID。
-       * @returns {Promise<void>}
+       * @returns {Promise<void>} 操作列表渲染完成后结束。
        */
       async function loadOperations(taskId) {
         const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/operations?limit=100`);
-        if (!response.ok) throw new Error(`操作轨迹获取失败（${response.status}）`);
+        if (!response.ok) throw new Error(await readApiError(response, `操作轨迹获取失败（${response.status}）`));
         const data = await response.json();
-        $("operation-list").textContent = data.operations.length
-          ? data.operations.map((item) => `${item.operation} | ${item.from_status || "-"} → ${item.to_status || "-"} | ${item.actor || "系统"} | ${item.created_at}`).join("\n")
-          : "暂无操作记录。";
+        const container = $("operation-list");
+        container.replaceChildren();
+        if (!data.operations.length) {
+          container.appendChild(createElement("div", "empty-copy", "暂无操作记录。"));
+          return;
+        }
+        data.operations.forEach((item) => {
+          const row = createElement("div", "operation-row");
+          row.append(
+            createElement("strong", "", `${item.operation} · ${item.from_status || "-"} → ${item.to_status || "-"}`),
+            createElement("span", "", `${item.actor || "系统"} · ${formatDateTime(item.created_at)}${item.request_id ? ` · 请求 ${item.request_id}` : ""}`),
+          );
+          container.appendChild(row);
+        });
       }
 
       /**
-       * 使用 fetch 流读取 SSE，以便认证模式下携带 API Key。
+       * 使用带认证的 fetch 读取 SSE，让进度条和任务步骤随 Worker 状态更新。
        * @param {string} taskId 诊断任务 ID。
-       * @returns {Promise<void>}
+       * @returns {Promise<void>} 任务进入终态或连接关闭后结束。
        */
       async function watchTask(taskId) {
         stopWatching();
@@ -442,9 +1599,7 @@
         try {
           const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/events`, { signal: controller.signal });
           if (!response.ok) {
-            let message = `进度连接失败（${response.status}）`;
-            try { message = (await response.json()).detail || message; } catch (error) { /* 非 JSON 错误保持状态码提示 */ }
-            throw new Error(message);
+            throw new Error(await readApiError(response, `进度连接失败（${response.status}）`));
           }
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
@@ -456,61 +1611,62 @@
             const blocks = buffer.split("\n\n");
             buffer = blocks.pop();
             for (const block of blocks) {
-              const data = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+              const data = block.split("\n")
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).trim())
+                .join("\n");
               if (!data) continue;
               const task = JSON.parse(data);
               renderTask(task);
               if (["COMPLETED", "FAILED", "CANCELLED"].includes(task.status)) {
                 stopWatching();
-                loadReport(taskId).catch((error) => { $("report").textContent = error.message; });
-                loadFeedback(taskId).catch((error) => { $("feedback-list").textContent = error.message; });
-                loadOperations(taskId).catch((error) => { $("operation-list").textContent = error.message; });
+                await Promise.allSettled([loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
+                $("message").textContent = task.status === "COMPLETED" ? "诊断完成，结论和证据已加载" : `任务${statusLabel(task.status)}`;
                 return;
               }
             }
           }
         } catch (error) {
-          if (error.name !== "AbortError") $("message").textContent = error.message || "进度连接已断开，可刷新页面重试";
+          if (error.name !== "AbortError") {
+            $("message").textContent = friendlyError(error, "进度连接已断开，可刷新页面重试");
+          }
         }
       }
 
       /**
-       * 创建诊断任务并订阅执行进度。
-       * @param {SubmitEvent} event 诊断表单提交事件。
-       * @returns {Promise<void>}
+       * 切换当前审阅任务，并行加载报告、反馈和操作轨迹。
+       * @param {string} taskId 需要打开的诊断任务 ID。
+       * @param {string} successMessage 报告加载成功后显示的业务提示。
+       * @returns {Promise<void>} 当前任务及其关联信息加载完成后结束。
        */
-      $("diagnosis-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        $("submit").disabled = true;
-        $("message").textContent = "正在创建任务…";
-        const payload = {
-          project: $("project").value.trim(),
-          environment: $("environment").value.trim() || "development",
-          question: $("question").value.trim(),
-          use_ai: $("use-ai").checked,
-        };
-        try {
-          const response = await apiFetch("/api/diagnoses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-          if (!response.ok) throw new Error(`任务创建失败（${response.status}）`);
-          const task = await response.json();
-          state.taskId = task.task_id;
-          $("report-link").href = `/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`;
-          $("report-link").hidden = false;
-          $("message").textContent = "任务已创建，正在等待进度…";
-          renderTask(task);
-          watchTask(state.taskId);
-          loadOperations(state.taskId).catch((error) => { $("operation-list").textContent = error.message; });
-        } catch (error) {
-          $("message").textContent = error.message;
-        } finally {
-          $("submit").disabled = false;
+      async function selectTask(taskId, successMessage = "已加载诊断任务") {
+        state.taskId = taskId;
+        stopWatching();
+        $("result-empty").hidden = true;
+        $("result-view").hidden = false;
+        $("task-question").textContent = "正在加载诊断报告…";
+        $("task-id").textContent = taskId;
+        $("message").textContent = "正在加载报告与证据…";
+        const results = await Promise.allSettled([loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
+        const reportResult = results[0];
+        if (reportResult.status === "rejected") {
+          $("message").textContent = friendlyError(reportResult.reason, "诊断报告加载失败");
+          return;
         }
-      });
+        $("message").textContent = successMessage;
+        const task = state.currentTask || {};
+        if (["QUEUED", "RUNNING", "SEARCHING", "VERIFYING", "REPORTING"].includes(task.status)) {
+          watchTask(taskId);
+        }
+        if (window.matchMedia("(max-width: 860px)").matches) {
+          $("result-view").scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }
 
       /**
        * 提交当前任务人工反馈并刷新反馈列表。
        * @param {SubmitEvent} event 反馈表单提交事件。
-       * @returns {Promise<void>}
+       * @returns {Promise<void>} 反馈写入并刷新列表后结束。
        */
       $("feedback-form").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -518,63 +1674,59 @@
         $("feedback-submit").disabled = true;
         try {
           const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/feedback`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rating: $("rating").value, comment: $("comment").value.trim() || null, submitted_by: $("submitted-by").value.trim() || null }),
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              rating: $("rating").value,
+              comment: $("comment").value.trim() || null,
+              submitted_by: $("submitted-by").value.trim() || null,
+            }),
           });
-          if (!response.ok) throw new Error(`反馈提交失败（${response.status}）`);
+          if (!response.ok) throw new Error(await readApiError(response, `反馈提交失败（${response.status}）`));
           $("feedback-message").textContent = "反馈已提交";
           $("comment").value = "";
           await loadFeedback(state.taskId);
+          loadProjectSummary().catch(() => null);
         } catch (error) {
-          $("feedback-message").textContent = error.message;
+          $("feedback-message").textContent = friendlyError(error, "反馈提交失败");
         } finally {
           $("feedback-submit").disabled = false;
         }
       });
 
-      /** 重新加载当前项目的最近诊断任务。 */
-      $("history-load").addEventListener("click", async () => {
-        state.historyOffset = 0;
-        await loadHistory(false);
-      });
-
       /**
-       * 根据历史摘要创建纯文本任务按钮。
+       * 根据历史接口返回的摘要创建可切换任务按钮。
        * @param {Array<Object>} items 历史任务摘要集合。
        * @param {boolean} append 是否追加到已有列表。
+       * @returns {void}
        */
       function renderHistory(items, append) {
         const list = $("history-list");
         if (!append) list.replaceChildren();
         if (!items.length && !append) {
-          list.textContent = "暂无历史任务。";
+          list.appendChild(createElement("div", "empty-copy", "当前筛选条件下没有历史任务。"));
           return;
         }
         items.forEach((item) => {
-          const button = document.createElement("button");
+          const row = createElement("div", "list-row main");
+          const button = createElement("button", "history-button");
           button.type = "button";
-          button.className = "history-item";
-          button.textContent = `${item.id} | ${item.status} | ${item.question}`;
-          button.addEventListener("click", async () => {
-            state.taskId = item.id;
-            $("report-link").href = `/api/diagnoses/${encodeURIComponent(item.id)}/report?format=markdown`;
-            $("report-link").hidden = false;
-            renderTask({ task_id: item.id, status: item.status, progress: item.progress, current_step: item.current_step });
-            try {
-              await Promise.all([loadReport(item.id), loadFeedback(item.id), loadOperations(item.id)]);
-              $("message").textContent = "已加载历史任务报告";
-            } catch (error) {
-              $("message").textContent = error.message;
-            }
-          });
-          list.appendChild(button);
+          const content = createElement("div", "history-content");
+          content.append(
+            createElement("strong", "", item.question || "未命名诊断"),
+            createElement("small", "", `${statusLabel(item.status)} · ${formatDateTime(item.created_at)} · ${item.id}`),
+          );
+          button.appendChild(content);
+          button.addEventListener("click", () => selectTask(item.id, "已加载历史诊断"));
+          row.appendChild(button);
+          list.appendChild(row);
         });
       }
 
       /**
        * 分页加载历史任务并更新“加载更多”状态。
        * @param {boolean} append 是否追加到已有任务列表。
-       * @returns {Promise<void>}
+       * @returns {Promise<void>} 历史列表更新完成后结束。
        */
       async function loadHistory(append) {
         const project = encodeURIComponent($("project").value.trim());
@@ -585,21 +1737,25 @@
         try {
           const filters = `project=${project}&offset=${state.historyOffset}&limit=20${status ? `&status=${status}` : ""}${days ? `&days=${days}` : ""}${requestId ? `&request_id=${requestId}` : ""}`;
           const response = await apiFetch(`/api/diagnoses/history?${filters}`);
-          if (!response.ok) throw new Error(`历史任务获取失败（${response.status}）`);
+          if (!response.ok) throw new Error(await readApiError(response, `历史任务获取失败（${response.status}）`));
           const data = await response.json();
           renderHistory(data.items, append);
           state.historyOffset += data.items.length;
           $("history-more").hidden = data.items.length < data.limit;
           $("history-message").textContent = `已加载 ${state.historyOffset} 条任务`;
-          if (!append) await Promise.all([loadProjectSummary(), loadAiQuality()]);
+          if (!append) {
+            loadProjectSummary().catch(() => null);
+            loadAiQuality().catch(() => null);
+          }
         } catch (error) {
-          $("history-message").textContent = error.message;
+          $("history-message").textContent = friendlyError(error, "历史任务加载失败");
         }
       }
 
-      $("history-more").addEventListener("click", () => loadHistory(true));
-
-      /** 加载当前项目的反馈质量摘要。 */
+      /**
+       * 加载当前项目的反馈质量摘要。
+       * @returns {Promise<void>} 项目反馈摘要写入后结束。
+       */
       async function loadProjectSummary() {
         const project = encodeURIComponent($("project").value.trim());
         const response = await apiFetch(`/api/feedback/${project}/summary`);
@@ -608,7 +1764,10 @@
         $("project-summary").textContent = `项目反馈摘要：共 ${data.total} 条，涉及 ${data.task_count} 个任务；正确 ${data.counts.correct}，不准确 ${data.counts.inaccurate}，证据不足 ${data.counts.insufficient_evidence}，转人工 ${data.counts.escalate}`;
       }
 
-      /** 加载当前项目 AI 调用量、缓存、token、延迟和反馈质量摘要。 */
+      /**
+       * 加载当前项目 AI 调用量、缓存、token、延迟和反馈质量摘要。
+       * @returns {Promise<void>} 质量摘要和评测趋势写入后结束。
+       */
       async function loadAiQuality() {
         const project = encodeURIComponent($("project").value.trim());
         const days = encodeURIComponent($("history-days").value || "30");
@@ -632,6 +1791,137 @@
         $("ai-quality").textContent = `AI 质量摘要：${data.ai_tasks} 个任务，缓存命中 ${hitRate}，平均 ${data.latency_ms.avg}ms，消耗 ${data.tokens.total} tokens；正确 ${data.feedback.correct}，不准确 ${data.feedback.inaccurate}；${evaluationText}`;
       }
 
+      /**
+       * 刷新当前项目的概览、索引、看板和最近任务。
+       * @returns {Promise<void>} 项目级数据刷新完成后结束。
+       */
+      async function refreshProjectData() {
+        const operations = [
+          loadProjectOverview(),
+          loadIndexHistory(),
+          loadTaskBoard(),
+          loadHistory(false),
+        ];
+        await Promise.allSettled(operations);
+      }
+
+      /**
+       * 使用认证请求下载指定格式的报告，并触发浏览器文件保存。
+       * @param {"evidence"|"markdown"} format 证据文件或完整报告格式。
+       * @returns {Promise<void>} 文件触发下载后结束。
+       */
+      async function downloadReport(format) {
+        if (!state.taskId) return;
+        const suffix = format === "evidence" ? "evidence" : "report";
+        try {
+          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=${format}`);
+          if (!response.ok) throw new Error(await readApiError(response, `下载失败（${response.status}）`));
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${state.taskId}-${suffix}.md`;
+          link.click();
+          URL.revokeObjectURL(url);
+          $("message").textContent = format === "evidence" ? "证据 Markdown 已下载" : "完整报告已下载";
+        } catch (error) {
+          $("message").textContent = friendlyError(error, "报告下载失败");
+        }
+      }
+
+      /**
+       * 创建诊断任务，并立即把结果区切换到该任务的实时进度。
+       * @param {SubmitEvent} event 诊断问题表单提交事件。
+       * @returns {Promise<void>} 任务创建和进度订阅启动后结束。
+       */
+      $("diagnosis-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const project = $("project").value.trim();
+        const question = $("question").value.trim();
+        if (!project || !question) {
+          $("message").textContent = "请先选择项目并填写要排查的问题";
+          return;
+        }
+        $("submit").disabled = true;
+        $("message").textContent = "正在创建诊断任务…";
+        try {
+          const response = await apiFetch("/api/diagnoses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              project,
+              environment: $("environment").value.trim() || "development",
+              question,
+              use_ai: $("use-ai").checked,
+            }),
+          });
+          if (!response.ok) throw new Error(await readApiError(response, `任务创建失败（${response.status}）`));
+          const task = await response.json();
+          state.taskId = task.task_id;
+          state.currentReport = null;
+          $("result-empty").hidden = true;
+          $("result-view").hidden = false;
+          $("report").textContent = "诊断结束后生成完整 Markdown 报告。";
+          $("copy-report").disabled = true;
+          $("facts-list").replaceChildren(createElement("div", "empty-copy", "诊断正在检索源码，完成后在这里展示业务限制。"));
+          $("evidence-list").replaceChildren(createElement("div", "empty-copy", "诊断正在采集源码证据。"));
+          $("ai-diagnosis").replaceChildren(createElement("div", "callout neutral", "诊断完成后展示 AI 补充；模型失败不会影响确定性结论。"));
+          renderTask(task);
+          $("message").textContent = "任务已创建，正在等待进度…";
+          watchTask(state.taskId);
+          loadOperations(state.taskId).catch((error) => {
+            $("operation-list").textContent = friendlyError(error, "操作轨迹加载失败");
+          });
+          loadTaskBoard().catch(() => null);
+        } catch (error) {
+          $("message").textContent = friendlyError(error, "任务创建失败");
+        } finally {
+          $("submit").disabled = false;
+        }
+      });
+
+      /** 应用当前历史筛选条件，并从第一页重新加载。 */
+      $("history-load").addEventListener("click", async () => {
+        state.historyOffset = 0;
+        await loadHistory(false);
+      });
+
+      /** 追加加载下一页历史任务。 */
+      $("history-more").addEventListener("click", () => loadHistory(true));
+
+      /**
+       * 根据输入框内容即时筛选源码证据，便于按错误码或类名定位。
+       * @param {Event} event 证据筛选输入事件。
+       * @returns {void}
+       */
+      $("evidence-filter").addEventListener("input", (event) => {
+        const keyword = event.target.value.trim().toLowerCase();
+        document.querySelectorAll(".evidence-item").forEach((item) => {
+          item.hidden = Boolean(keyword) && !item.dataset.searchText.includes(keyword);
+        });
+      });
+
+      /** 将当前完整 Markdown 报告文本写入剪贴板。 */
+      $("copy-report").addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText($("report").textContent);
+          $("message").textContent = "完整报告已复制";
+        } catch (error) {
+          $("message").textContent = "复制失败，请在“完整 Markdown 报告”中手动选择内容";
+        }
+      });
+
+      /** 以带认证的请求下载业务限制与源码证据 Markdown。 */
+      $("evidence-link").addEventListener("click", async (event) => {
+        event.preventDefault();
+        await downloadReport("evidence");
+      });
+
+      /** 以带认证的请求下载包含 AI、检索和验证信息的完整 Markdown。 */
+      $("report-link").addEventListener("click", async (event) => {
+        event.preventDefault();
+        await downloadReport("markdown");
+      });
+
       /** 将当前失败任务重新排队并重新订阅执行进度。 */
       $("retry-task").addEventListener("click", async () => {
         if (!state.taskId) return;
@@ -639,118 +1929,63 @@
         $("message").textContent = "正在重新投递任务…";
         try {
           const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/retry`, { method: "POST" });
-          if (!response.ok) {
-            const body = await response.json();
-            throw new Error(body.detail || `任务重试失败（${response.status}）`);
-          }
+          if (!response.ok) throw new Error(await readApiError(response, `任务重试失败（${response.status}）`));
           const task = await response.json();
           renderTask(task);
           $("message").textContent = "任务已重新排队";
           watchTask(state.taskId);
           await loadOperations(state.taskId);
         } catch (error) {
-          $("message").textContent = error.message;
+          $("message").textContent = friendlyError(error, "任务重试失败");
         } finally {
           $("retry-task").disabled = false;
         }
       });
 
-      /** 复制当前历史任务的配置并发起一次新诊断。 */
+      /** 复制当前任务配置并发起一次新的诊断。 */
       $("rerun-task").addEventListener("click", async () => {
         if (!state.taskId) return;
         $("rerun-task").disabled = true;
         try {
           const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/rerun`, { method: "POST" });
+          if (!response.ok) throw new Error(await readApiError(response, `重新诊断失败（${response.status}）`));
           const task = await response.json();
-          if (!response.ok) throw new Error(task.detail || `重新诊断失败（${response.status}）`);
           state.taskId = task.task_id;
-          $("report-link").href = `/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`;
-          $("report-link").hidden = false;
           renderTask(task);
           $("message").textContent = "已创建新的诊断任务";
           watchTask(state.taskId);
           await loadOperations(state.taskId);
+          loadTaskBoard().catch(() => null);
         } catch (error) {
-          $("message").textContent = error.message;
+          $("message").textContent = friendlyError(error, "重新诊断失败");
         } finally {
           $("rerun-task").disabled = false;
         }
       });
 
-      /** 取消当前未结束任务并刷新任务状态。 */
+      /** 取消当前未结束任务并刷新状态和操作轨迹。 */
       $("cancel-task").addEventListener("click", async () => {
         if (!state.taskId) return;
         $("cancel-task").disabled = true;
         try {
           const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/cancel`, { method: "POST" });
-          if (!response.ok) {
-            const body = await response.json();
-            throw new Error(body.detail || `任务取消失败（${response.status}）`);
-          }
+          if (!response.ok) throw new Error(await readApiError(response, `任务取消失败（${response.status}）`));
           const task = await response.json();
           stopWatching();
           renderTask(task);
           $("message").textContent = "任务已取消";
-          await loadOperations(state.taskId);
+          await Promise.allSettled([loadOperations(state.taskId), loadTaskBoard(), loadProjectOverview()]);
         } catch (error) {
-          $("message").textContent = error.message;
+          $("message").textContent = friendlyError(error, "任务取消失败");
         } finally {
           $("cancel-task").disabled = false;
         }
       });
 
-      /** 将当前 Markdown 报告文本写入剪贴板。 */
-      $("copy-report").addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText($("report").textContent);
-          $("message").textContent = "报告已复制";
-        } catch (error) {
-          $("message").textContent = "复制失败，请手动选择报告内容";
-        }
-      });
-
-      /**
-       * 使用认证请求下载 Markdown 报告。
-       * @param {MouseEvent} event 报告下载链接点击事件。
-       * @returns {Promise<void>}
-       */
-      $("report-link").addEventListener("click", async (event) => {
-        event.preventDefault();
-        if (!state.taskId) return;
-        try {
-          const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(state.taskId)}/report?format=markdown`);
-          if (!response.ok) throw new Error(`报告下载失败（${response.status}）`);
-          const url = URL.createObjectURL(await response.blob());
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = `${state.taskId}.md`;
-          link.click();
-          URL.revokeObjectURL(url);
-        } catch (error) {
-          $("message").textContent = error.message;
-        }
-      });
-
-      // 页面初始化项目列表，并在项目名称变化时刷新概览。
-      loadProjects().catch((error) => { $("project-overview").textContent = error.message; });
-      loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
-      loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
-      loadTaskBoard().catch((error) => { $("task-board").textContent = error.message; });
-      $("project").addEventListener("change", () => {
-        loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
-        loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
-        loadTaskBoard().catch((error) => { $("task-board").textContent = error.message; });
-      });
-      $("api-key").addEventListener("change", () => {
-        loadProjects().catch(() => null);
-        loadProjectOverview().catch((error) => { $("project-overview").textContent = error.message; });
-        loadIndexHistory().catch((error) => { $("index-history").textContent = error.message; });
-        loadTaskBoard().catch((error) => { $("task-board").textContent = error.message; });
-      });
-
       // 将当前项目文档索引重建任务投递到 Worker。
       $("rebuild-index").addEventListener("click", async () => {
         const project = encodeURIComponent($("project").value.trim());
+        if (!project) return;
         $("rebuild-index").disabled = true;
         $("index-message").textContent = "正在投递索引任务…";
         try {
@@ -758,9 +1993,9 @@
           const body = await response.json();
           if (!response.ok) throw new Error(body.detail || `索引投递失败（${response.status}）`);
           $("index-message").textContent = `索引已排队：${body.task_id}`;
-          setTimeout(() => Promise.all([loadProjectOverview(), loadIndexHistory()]).catch(() => null), 1500);
+          startIndexPolling(decodeURIComponent(project));
         } catch (error) {
-          $("index-message").textContent = error.message;
+          $("index-message").textContent = friendlyError(error, "索引投递失败");
         } finally {
           $("rebuild-index").disabled = false;
         }
@@ -788,7 +2023,7 @@
           state.boardCancelIds.clear();
           await Promise.all([loadTaskBoard(), loadProjectOverview()]);
         } catch (error) {
-          $("board-message").textContent = error.message;
+          $("board-message").textContent = friendlyError(error, "批量取消失败");
         } finally {
           $("cancel-selected").disabled = false;
         }
@@ -816,15 +2051,56 @@
           state.boardRetryIds.clear();
           await Promise.all([loadTaskBoard(), loadProjectOverview()]);
         } catch (error) {
-          $("board-message").textContent = error.message;
+          $("board-message").textContent = friendlyError(error, "批量重试失败");
         } finally {
           $("retry-selected").disabled = false;
         }
       });
 
-      // 页面可见时每 5 秒自动刷新项目任务看板。
+      // 项目切换后停止旧索引轮询，并刷新项目级概览、索引、看板和历史任务。
+      $("project").addEventListener("change", () => {
+        stopIndexPolling();
+        syncProjectSelection();
+        state.historyOffset = 0;
+        refreshProjectData();
+      });
+
+      // API Key 修改后重新确认项目权限；密钥只保留在当前页面输入框中。
+      $("api-key").addEventListener("change", async () => {
+        try {
+          const projects = await loadProjects();
+          if (projects.length) await refreshProjectData();
+        } catch (error) {
+          $("project-overview").textContent = friendlyError(error, "项目权限刷新失败");
+        }
+      });
+
+      /**
+       * 初始化项目目录和当前项目工作区，并恢复仍在运行的索引轮询。
+       * @returns {Promise<void>} 首屏项目数据加载完成后结束。
+       */
+      async function initializePage() {
+        try {
+          const projects = await loadProjects();
+          if (!projects.length) {
+            $("message").textContent = "当前没有可访问项目，请先挂载仓库并配置权限";
+            return;
+          }
+          const selected = projects.find((project) => project.name === $("project").value);
+          if (selected && ["QUEUED", "RUNNING"].includes(selected.index_status)) startIndexPolling(selected.name);
+          await refreshProjectData();
+        } catch (error) {
+          const message = friendlyError(error, "项目工作区初始化失败");
+          $("message").textContent = message;
+          $("project-overview").textContent = message;
+        }
+      }
+
+      initializePage();
+
+      // 页面可见时每 5 秒刷新项目任务看板；后台标签页不会持续请求。
       setInterval(() => {
-        if (document.visibilityState === "visible") {
+        if (document.visibilityState === "visible" && $("project").value.trim()) {
           loadTaskBoard().catch(() => null);
         }
       }, 5000);

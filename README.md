@@ -21,6 +21,12 @@ PostgreSQL/Redis、只读业务库、监控告警、镜像仓库和上线责任�
 
 API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 
+本地 Compose 默认以只读方式挂载 `waky3`、`waky4`、`waky6`，容器内对应路径为
+`/repositories/waky3`、`/repositories/waky4`、`/repositories/waky6`。目录不在默认位置时，
+在 `.env` 中设置 `WAKY3_REPOSITORY_PATH`、`WAKY4_REPOSITORY_PATH` 和
+`WAKY6_REPOSITORY_PATH` 后重新执行 `docker compose up -d`。挂载路径不存在时 Compose 会直接失败，
+不会创建空目录冒充项目仓库。
+
 生产环境使用 `docker-compose.production.yml` 和 `RELEASE.md`，不要直接复用本地 Compose 的开发数据库密码。
 生产镜像使用 `requirements.lock` 固定 Python 依赖、以 UID/GID `10001` 非 root 运行，并要求不可变镜像地址。
 
@@ -345,6 +351,22 @@ Redis 不可用时验证接口会安全返回 503，不会降级为无限制访�
 
 当前诊断报告会汇总关键词检索、PHP 符号和调用链、按需数据库/配置/日志验证结果。LLM 生成式叙写
 默认关闭，报告中的事实和建议始终以代码证据及验证结果为准。
+
+业务问题检索采用“通用理解 + 源码验证”流程，不为完整问题维护固定实现映射：
+
+1. **问题理解**：提取可组合业务概念、问题原句中的中文业务锚点和显式代码符号；
+2. **首轮检索**：检索 PHP 注释、配置、业务文本和文档，得到候选源码位置；
+3. **支撑门禁**：只有四字以上业务锚点、显式符号或足够的业务概念共现时才继续扩展；
+   仅命中“用户”“阈值”“配置”等泛词时停止扩展，证据数保持 0；
+4. **动态发现**：从当前 PHP 符号和配置索引中发现真实类、方法、配置键，并从点号配置键
+   反查配置文件中的定义值；
+5. **调用链与证据**：按业务子仓收敛，保留入口、最近校验/扣款/转账方法和配置定义，
+   最终证据上限为 64 条；
+6. **确定性解释**：只解释已经取得的源码守卫、配置值和调用关系，LLM 不能补造事实。
+
+详细设计见 [`docs/retrieval-architecture.md`](docs/retrieval-architecture.md)。报告中的
+`retrieval_support`、`discovered_queries`、`config_definition_queries` 和
+`discovery_sources` 会说明系统为何继续或停止扩展，以及每个动态检索词的来源。
 
 查询诊断报告并导出 Markdown：
 

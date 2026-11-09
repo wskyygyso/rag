@@ -22,7 +22,7 @@ from app.task_store import (
     update_task,
 )
 from app.validation_plan import ValidationPlan, validation_plan_dict
-from app.reporting import build_assessment, build_markdown_report
+from app.reporting import build_assessment, build_evidence_markdown, build_markdown_report
 
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
 settings = get_settings()
@@ -366,14 +366,15 @@ async def rerun_diagnosis(task_id: str, request: Request) -> Dict:
 async def get_report(
     task_id: str,
     request: Request,
-    format: str = Query(default="json", pattern="^(json|markdown)$"),
+    format: str = Query(default="json", pattern="^(json|markdown|evidence)$"),
 ):
-    """获取稳定诊断报告，支持 JSON 摘要或 Markdown 导出。
+    """获取稳定诊断报告，支持 JSON、完整报告和证据文件导出。
 
     参数:
         - `task_id`：诊断任务 ID，类型为 `str`。
         - `request`：FastAPI 请求上下文，类型为 `Request`。
-        - `format`：报告导出格式，类型为 `str`。
+        - `format`：报告导出格式；`json` 供前端结构化阅读，`markdown` 导出完整
+          报告，`evidence` 导出业务限制与源码上下文，类型为 `str`。
     """
     task = await _authorized_task(_pool(request), request, task_id)
     response = _task_response(task)
@@ -383,6 +384,12 @@ async def get_report(
             build_markdown_report(response),
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{task_id}.md"'},
+        )
+    if format == "evidence":
+        return PlainTextResponse(
+            build_evidence_markdown(response),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{task_id}-evidence.md"'},
         )
     return response
 
