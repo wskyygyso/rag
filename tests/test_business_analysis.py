@@ -1,6 +1,11 @@
 """确定性业务约束摘要和报告兜底测试。"""
 
-from app.business_analysis import build_deterministic_findings
+from app.business_analysis import (
+    _explicit_fact_conclusion,
+    _explicit_question_category_bonus,
+    _explicit_symbol_line_signal,
+    build_deterministic_findings,
+)
 from app.llm_diagnosis import build_evidence_context
 from app.reporting import build_assessment
 
@@ -1048,3 +1053,517 @@ def test_generic_facts_require_question_concepts_on_the_same_line() -> None:
 
     assert len(findings["facts"]) == 1
     assert "$riskThreshold" in findings["facts"][0]["statement"]
+
+
+def test_explicit_symbol_facts_use_target_class_instead_of_unrelated_control_points() -> None:
+    """验证显式类问题会解释目标类条件与动作，而不是引用无关 return false。"""
+    service_lines = [
+        "class UserScoreService extends ServiceHelper",
+        "{",
+        "    public function handleSendGift(int $uid, int $coins): array",
+        "    {",
+        "        [$addScore, $gift] = logic_base::getGiftScore($gid, $coins, $num);",
+        "        if ($addScore <= 0) {",
+        "            return ['score' => 0, 'family_id' => 0];",
+        "        }",
+        "        $user->addScore('onSendGift', $addScore, $tm);",
+        "        TaskService::getInstance()->finishTask($uid, TaskService::TASK_SEND_GIFT, $coins);",
+        "        return ['score' => $addScore, 'family_id' => 0];",
+        "    }",
+        "}",
+    ]
+    result = {
+        "evidence": [
+            {
+                "file": "waky4_miyouactivity/Logic/happyPark/service/UserScoreService.php",
+                "line": 12,
+                "context": _context(1, service_lines),
+            },
+            {
+                "file": "waky4_miyouactivity/controller/UnrelatedControl.php",
+                "line": 20,
+                "context": _context(20, ["return false;"]),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "explicit_symbol"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "happyPark 的 UserScoreService 如何累计和消耗用户积分？",
+        result,
+    )
+
+    assert findings["facts"]
+    assert all(
+        "UserScoreService.php:" in ref
+        for fact in findings["facts"]
+        for ref in fact["evidence_refs"]
+    )
+    statements = "\n".join(item["statement"] for item in findings["facts"])
+    assert "handleSendGift" in statements
+    assert "$addScore <= 0" in statements
+    assert "finishTask" in statements
+    assert "UnrelatedControl" not in statements
+    assert "$addScore <= 0" in findings["conclusion"]
+    assert "积分计算" in findings["conclusion"]
+    assert any(
+        "未观察到对应的数据变更语句" in item and "消耗" in item
+        for item in findings["uncertainties"]
+    )
+
+
+def test_explicit_fact_budget_keeps_time_boundary_alongside_many_conditions() -> None:
+    """验证同类高频条件不会挤掉问题同时询问的时间边界。"""
+    source_lines = ["class SettlementService", "{", "    public function settleByTime(int $tm): void", "    {"]
+    source_lines.extend(
+        f"        if ($flag{i}) {{" for i in range(10)
+    )
+    source_lines.extend(
+        [
+            "        if ($tm <= intval($cfg['etime']) + 300 || $tm >= intval($cfg['etime']) + 1200) {",
+            "            return;",
+            "        }",
+            "    }",
+            "}",
+        ]
+    )
+    result = {
+        "evidence": [
+            {
+                "file": "module/service/SettlementService.php",
+                "line": 1,
+                "context": _context(1, source_lines),
+            }
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "explicit_symbol"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "SettlementService 按什么条件和时间范围结算？",
+        result,
+    )
+
+    categories = {item["category"] for item in findings["facts"]}
+    assert "业务条件" in categories
+    assert "时间边界" in categories
+    assert "$tm <= intval($cfg['etime']) + 300" in findings["conclusion"]
+
+
+def test_explicit_facts_include_verified_parent_cleanup_action() -> None:
+    """验证基类中的过期清理动作会进入显式类报告和确认事实。"""
+    child_file = "module/service/CleanupService.php"
+    parent_file = "module/ActivityBase.php"
+    result = {
+        "evidence": [
+            {
+                "file": child_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "class CleanupService extends ActivityBase",
+                        "{",
+                        "    protected function eachAllRedisKey($redis): iterable",
+                        "    {",
+                        "        return scanRedisKey($redis, 'prefix_*');",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+            {
+                "file": parent_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "abstract class ActivityBase",
+                        "{",
+                        "    protected static int $reserveVolNum = 10;",
+                        "    public function clearByTime(int $tm): void",
+                        "    {",
+                        "        if (!$this->check()) { return; }",
+                        "        foreach ($this->eachAllRedisKey($redis) as $key) {",
+                        "            $redis->expire($key, random_int(1, 3600));",
+                        "        }",
+                        "    }",
+                        "    protected function getExpiredVol(int $vol): int",
+                        "    {",
+                        "        return $vol - static::$reserveVolNum;",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "explicit_symbol"},
+            "inherited_target_files": [parent_file],
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "模块 CleanupService 清理哪些 Redis key，触发边界是什么？",
+        result,
+    )
+
+    assert "清理动作" in {item["category"] for item in findings["facts"]}
+    assert "$redis->expire($key, random_int(1, 3600));" in findings["conclusion"]
+    assert "protected static int $reserveVolNum = 10;" in findings["conclusion"]
+    assert "$vol - static::$reserveVolNum" in findings["conclusion"]
+    assert not any("未观察到对应的数据变更语句" in item for item in findings["uncertainties"])
+
+
+def test_unrelated_service_helper_parent_does_not_pollute_level_facts() -> None:
+    """验证目标类证据充足时，通用 ServiceHelper 访问器不会进入等级事实。
+
+    Returns:
+        该测试没有返回值；通过断言确认父类 `getType`、`getId` 不会被误标为
+        资产等级计算规则。
+    """
+    child_file = "module/service/PersonalAssetLevelService.php"
+    parent_file = "module/ServiceHelper.php"
+    result = {
+        "evidence": [
+            {
+                "file": child_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "class PersonalAssetLevelService extends ServiceHelper",
+                        "{",
+                        "    protected function init(): void { $cfg = getConfig('asset_levels'); }",
+                        "    public function addAsset($user, int $profit): array {",
+                        "        $asset = $redis->hIncrBy($key, $user->getId(), $profit);",
+                        "        if ($asset >= intval($cfg['limit'])) {",
+                        "            RewardRecordService::getInstance()->sendReward($user, $cfg['prizes']);",
+                        "        }",
+                        "        return ['asset' => $asset];",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+            {
+                "file": parent_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "abstract class ServiceHelper",
+                        "{",
+                        "    public function getType() { return $this->type; }",
+                        "    public function getId() { return $this->type; }",
+                        "}",
+                    ],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "explicit_symbol"},
+            "inherited_target_files": [parent_file],
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "PersonalAssetLevelService 按什么条件计算个人资产等级？",
+        result,
+    )
+
+    facts = findings["facts"]
+    assert facts
+    assert all(parent_file not in ref for fact in facts for ref in fact["evidence_refs"])
+    assert "getType" not in findings["conclusion"]
+    assert "return $this->type" not in findings["conclusion"]
+    assert "目标类及已验证直接基类" not in findings["conclusion"]
+
+
+def test_unrelated_crontab_destructor_does_not_pollute_settlement_time_facts() -> None:
+    """验证结算类不会把定时任务基类的析构耗时开关当作业务时间边界。
+
+    Returns:
+        该测试没有返回值；通过断言确认父类 `__destruct` 和 `showTakeTime` 未进入
+        结算事实。
+    """
+    child_file = "module/service/SettlementService.php"
+    parent_file = "module/BaseCrontab.php"
+    result = {
+        "evidence": [
+            {
+                "file": child_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "class SettlementService extends BaseCrontab",
+                        "{",
+                        "    public function settle(array $activity, int $now): void {",
+                        "        if ($now < intval($activity['etime'])) { return; }",
+                        "        $score = $this->scoreService->realScore($activity, $now);",
+                        "        $this->levelRewardService->grantPeriodEnd($activity, $score);",
+                        "        $this->dispatcher->grant($activity, $score);",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+            {
+                "file": parent_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "class BaseCrontab",
+                        "{",
+                        "    public function __destruct() {",
+                        "        if ($this->showTakeTime) {",
+                        "            $this->logger->logInfo('take seconds');",
+                        "        }",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "explicit_symbol"},
+            "inherited_target_files": [parent_file],
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "SettlementService 在结算时如何处理积分和奖励？",
+        result,
+    )
+
+    facts = findings["facts"]
+    assert facts
+    assert all(parent_file not in ref for fact in facts for ref in fact["evidence_refs"])
+    assert "__destruct" not in findings["conclusion"]
+    assert "showTakeTime" not in findings["conclusion"]
+    assert "目标类及已验证直接基类" not in findings["conclusion"]
+
+
+def test_parent_without_requested_consumption_does_not_fill_score_gap() -> None:
+    """验证父类没有消耗动作时，不会用通用实例缓存代码填补积分消耗缺口。
+
+    Returns:
+        该测试没有返回值；通过断言确认只保留子类累计证据，并明确消耗动作仍需
+        继续核对。
+    """
+    child_file = "module/service/UserScoreService.php"
+    parent_file = "module/ServiceHelper.php"
+    result = {
+        "evidence": [
+            {
+                "file": child_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "class UserScoreService extends ServiceHelper",
+                        "{",
+                        "    public function handleSendGift($user, int $score): void {",
+                        "        if ($score <= 0) { return; }",
+                        "        $user->addScore('onSendGift', $score);",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+            {
+                "file": parent_file,
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "abstract class ServiceHelper",
+                        "{",
+                        "    public static function getInstance() {",
+                        "        if ($instance instanceof ServiceHelper) { return $instance; }",
+                        "        return new static();",
+                        "    }",
+                        "}",
+                    ],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "explicit_symbol"},
+            "inherited_target_files": [parent_file],
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "UserScoreService 如何累计和消耗用户积分？",
+        result,
+    )
+
+    facts = findings["facts"]
+    assert any("addScore" in fact["statement"] for fact in facts)
+    assert all(parent_file not in ref for fact in facts for ref in fact["evidence_refs"])
+    assert "目标类及已验证直接基类" not in findings["conclusion"]
+    assert any("消耗" in item for item in findings["uncertainties"])
+
+
+def test_explicit_conclusion_covers_push_pop_and_reward_queue_actions() -> None:
+    """验证队列结论不会只摘录两次入队，而会覆盖消费和奖励分发动作。"""
+    facts = [
+        {"category": "队列流转", "statement": "源码：$redis->lpush($key, $data);"},
+        {"category": "队列流转", "statement": "源码：$ret = $redis->brPop($key, 3);"},
+        {"category": "队列流转", "statement": "源码：addPrizeQueue($redis, $prizes);"},
+    ]
+
+    conclusion = _explicit_fact_conclusion(facts, ["AwardQueueService"])
+
+    assert "lpush(" in conclusion
+    assert "brPop(" in conclusion
+    assert "addPrizeQueue(" in conclusion
+
+
+def test_explicit_conclusion_does_not_repeat_target_class_wording() -> None:
+    """验证无显式类名时，结论不会生成“目标类的目标类”这类重复表述。
+
+    Returns:
+        该测试没有返回值；通过断言确认结论只说明一次证据范围。
+    """
+    facts = [
+        {"category": "业务条件", "statement": "源码：if ($ready) { return; }"},
+    ]
+
+    conclusion = _explicit_fact_conclusion(facts, [])
+
+    assert conclusion.startswith("已从目标类确认")
+    assert "目标类的目标类" not in conclusion
+
+
+def test_explicit_conclusion_keeps_shared_operation_condition() -> None:
+    """验证恢复条件摘要会保留“是否被其他熔断记录共享”这一关键判断。"""
+    facts = [
+        {"category": "业务条件", "statement": "源码：if (true === empty($currentOperations)) {"},
+        {"category": "业务条件", "statement": "源码：if ($recordId === $currentRecordId) {"},
+        {"category": "业务条件", "statement": "源码：if (isset($otherOperationKeys[$operationKey])) {"},
+    ]
+
+    conclusion = _explicit_fact_conclusion(facts, ["FuseRecoveryService"])
+
+    assert "otherOperationKeys" in conclusion
+
+
+def test_explicit_symbol_signal_keeps_score_and_level_reward_services() -> None:
+    """验证结算类中的积分服务和档位奖励调用不会被普通配置字段淹没。"""
+    score_category, score_weight = _explicit_symbol_line_signal(
+        "$score = $this->scoreService->realScore($period, $etime, $encoded);"
+    )
+    reward_category, reward_weight = _explicit_symbol_line_signal(
+        "$this->levelRewardService->grantPeriodEnd($activity, $item, $uid, $score);"
+    )
+
+    assert score_category == "积分计算"
+    assert reward_category == "档位奖励"
+    assert score_weight >= 40
+    assert reward_weight >= 40
+
+
+def test_question_category_bonus_is_additive_for_multi_intent_questions() -> None:
+    """验证同时询问积分和奖励时，两类动作都会获得排序权重。"""
+    question = "SettlementService 在结算时如何处理积分和奖励？"
+
+    assert _explicit_question_category_bonus(question, "积分计算") >= 80
+    assert _explicit_question_category_bonus(question, "奖励派发") >= 90
+
+
+def test_device_registration_limit_uses_config_value_without_question_mapping() -> None:
+    """验证设备注册问题只从配置值、计数查询和校验条件组合数字答案。"""
+    result = {
+        "evidence": [
+            {
+                "file": "service/php/config/device.php",
+                "line": 4,
+                "context": _context(
+                    3,
+                    [
+                        "return [",
+                        "    // 单个设备注册用户数限制",
+                        "    'device_user_count_limit' => 3,",
+                        "];",
+                    ],
+                ),
+            },
+            {
+                "file": "service/php/model/usermodel.php",
+                "line": 1712,
+                "context": _context(
+                    1707,
+                    [
+                        "public function checkRegCount($device_id = '') {",
+                        "$sql = 'select reg_count from hsing_util.t_reg_divice where device_id = ?';",
+                        "$regCount = intval($res[0]['reg_count']);",
+                        "if ($regCount >= Config::get('device.device_user_count_limit')) {",
+                        "    return false;",
+                        "}",
+                    ],
+                ),
+            },
+            {
+                "file": "service/php/api/sms_kit/sendCode.php",
+                "line": 50,
+                "context": _context(
+                    47,
+                    [
+                        "$regCount = $umodel->getDeviceRegCount(strval($deviceId));",
+                        "if ($regCount >= \\Conf\\Config::get('device.device_user_count_limit')) {",
+                        "    return ['ret' => -10003];",
+                        "}",
+                    ],
+                ),
+            },
+        ]
+    }
+
+    findings = build_deterministic_findings("同一设备号最多能注册多少个用户？", result)
+
+    categories = {item["category"] for item in findings["facts"]}
+    statements = " ".join(item["statement"] for item in findings["facts"])
+    assert {
+        "设备注册上限",
+        "注册拦截条件",
+        "注册计数来源",
+        "注册入口校验",
+        "短信注册前置校验",
+    } <= categories
+    assert "device_user_count_limit = 3" in statements
+    assert "同一设备最多可注册 3 个用户" in findings["conclusion"]
+    assert any(ref.endswith("device.php:4") for ref in findings["evidence_refs"])
+
+
+def test_device_registration_question_does_not_guess_limit_without_config() -> None:
+    """验证只有设备注册校验却没有配置赋值时，不根据相似字段猜测数量。"""
+    result = {
+        "evidence": [
+            {
+                "file": "service/php/model/usermodel.php",
+                "line": 1712,
+                "context": _context(
+                    1710,
+                    ["if ($regCount >= $deviceLimit) {", "    return false;", "}"],
+                ),
+            }
+        ]
+    }
+
+    findings = build_deterministic_findings("同一设备号最多能注册多少个用户？", result)
+
+    assert findings["facts"] == []
+    assert "3" not in findings["conclusion"]

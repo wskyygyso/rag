@@ -1107,6 +1107,15 @@
       }
 
       /**
+       * 判断任务是否已经进入无需继续订阅的最终状态。
+       * @param {Object} task 诊断任务响应，至少包含 status 字段。
+       * @returns {boolean} 完成、失败或取消时返回 true。
+       */
+      function isTerminalTask(task) {
+        return ["COMPLETED", "FAILED", "CANCELLED"].includes(task && task.status);
+      }
+
+      /**
        * 将任务元数据、状态和进度同步到右侧结果页。
        * @param {Object} task 完整任务响应或历史任务摘要，包含任务 ID、状态、进度和问题。
        * @returns {void}
@@ -1132,7 +1141,7 @@
         $("cancel-task").hidden = !["QUEUED", "RUNNING", "SEARCHING", "VERIFYING", "REPORTING"].includes(status);
         $("retry-task").hidden = status !== "FAILED";
         $("rerun-task").hidden = !["COMPLETED", "FAILED", "CANCELLED"].includes(status);
-        const terminal = ["COMPLETED", "FAILED", "CANCELLED"].includes(status);
+        const terminal = isTerminalTask(task);
         $("evidence-link").hidden = !terminal;
         $("report-link").hidden = !terminal;
         if (state.taskId) {
@@ -1361,6 +1370,7 @@
         const metrics = createElement("div", "metric-strip");
         [
           ["检索关键词", (result.queries || []).length],
+          ["显式符号", (retrievalPlan.verified_explicit_symbols || []).length],
           ["动态发现", (retrievalPlan.discovered_queries || []).length],
           ["符号", (result.symbols || []).length],
           ["配置", (result.configs || []).length],
@@ -1391,6 +1401,52 @@
               `支撑等级：${retrievalSupport.level}；业务锚点 ${retrievalSupport.direct_anchor_count || 0} 条；概念覆盖 ${retrievalSupport.best_concept_coverage || 0}/${retrievalSupport.required_concept_coverage || 0}。`,
             ),
           );
+          if ((retrievalPlan.verified_explicit_symbols || []).length) {
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                `已验证显式符号：${retrievalPlan.verified_explicit_symbols.join("、")}。`,
+              ),
+            );
+          }
+          if ((retrievalPlan.explicit_target_files || []).length) {
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                `目标文件：${retrievalPlan.explicit_target_files.join("、")}。`,
+              ),
+            );
+          }
+          if ((retrievalPlan.inherited_target_files || []).length) {
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                `已验证直接基类：${retrievalPlan.inherited_target_files.join("、")}。`,
+              ),
+            );
+          }
+          if (retrievalPlan.term_search) {
+            const termSearch = retrievalPlan.term_search;
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                `批量精确检索：${termSearch.query_count || 0} 个检索词，${termSearch.match_count || 0} 条候选，耗时 ${Number(termSearch.elapsed_ms || 0).toFixed(0)} ms。`,
+              ),
+            );
+          }
+          if ((retrievalSupport.rejected_generic_anchor_count || 0) > 0) {
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                `已过滤 ${retrievalSupport.rejected_generic_anchor_count} 条只有通用动作、不能证明业务对象存在的锚点。`,
+              ),
+            );
+          }
           if (retrievalSupport.grounded === false) {
             supportList.appendChild(
               createElement(
@@ -1588,6 +1644,38 @@
       }
 
       /**
+       * 在任务进入终态后停止订阅并并行刷新报告、反馈和操作轨迹。
+       * @param {string} taskId 当前诊断任务 ID。
+       * @param {Object} task 已完成、失败或取消的任务响应。
+       * @returns {Promise<void>} 关联数据刷新完成后结束。
+       */
+      async function finishWatchedTask(taskId, task) {
+        stopWatching();
+        await Promise.allSettled([loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
+        $("message").textContent = task.status === "COMPLETED"
+          ? "诊断完成，结论和证据已加载"
+          : `任务${statusLabel(task.status)}`;
+      }
+
+      /**
+       * 用普通任务查询核对 SSE 结束或中断后的真实状态，避免页面永久停在执行中。
+       * @param {string} taskId 需要核对的诊断任务 ID。
+       * @returns {Promise<boolean>} 已进入终态并加载报告时返回 true，仍在执行时返回 false。
+       */
+      async function reconcileTaskState(taskId) {
+        const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}`);
+        if (!response.ok) throw new Error(await readApiError(response, `任务状态核对失败（${response.status}）`));
+        const task = await response.json();
+        renderTask(task);
+        if (isTerminalTask(task)) {
+          await finishWatchedTask(taskId, task);
+          return true;
+        }
+        $("message").textContent = "进度连接已结束，但任务仍在执行；可稍后重新打开该任务";
+        return false;
+      }
+
+      /**
        * 使用带认证的 fetch 读取 SSE，让进度条和任务步骤随 Worker 状态更新。
        * @param {string} taskId 诊断任务 ID。
        * @returns {Promise<void>} 任务进入终态或连接关闭后结束。
@@ -1618,17 +1706,23 @@
               if (!data) continue;
               const task = JSON.parse(data);
               renderTask(task);
-              if (["COMPLETED", "FAILED", "CANCELLED"].includes(task.status)) {
-                stopWatching();
-                await Promise.allSettled([loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
-                $("message").textContent = task.status === "COMPLETED" ? "诊断完成，结论和证据已加载" : `任务${statusLabel(task.status)}`;
+              if (isTerminalTask(task)) {
+                await finishWatchedTask(taskId, task);
                 return;
               }
             }
           }
+          // SSE 可能在代理超时或浏览器休眠后正常关闭而没有送达终态事件。
+          await reconcileTaskState(taskId);
         } catch (error) {
           if (error.name !== "AbortError") {
-            $("message").textContent = friendlyError(error, "进度连接已断开，可刷新页面重试");
+            const streamMessage = friendlyError(error, "进度连接已断开，可刷新页面重试");
+            $("message").textContent = streamMessage;
+            try {
+              await reconcileTaskState(taskId);
+            } catch (reconcileError) {
+              $("message").textContent = streamMessage;
+            }
           }
         }
       }

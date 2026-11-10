@@ -51,6 +51,309 @@ def test_worker_routes_and_time_limits_are_configured() -> None:
     assert worker.run_document_index_task.queue == "index"
 
 
+def test_explicit_symbol_extraction_excludes_generic_technology_tokens() -> None:
+    """验证首轮精确检索保留真实类名，不把 Redis 等通用技术词当成目标入口。"""
+    symbols = worker._explicit_symbol_queries(
+        ["FuseRecoveryService", "GuildController::inviteGuild", "Redis", "SQL"]
+    )
+
+    assert symbols == ["FuseRecoveryService", "GuildController::inviteGuild"]
+
+
+def test_config_keys_are_extracted_from_hit_context_for_followup_search() -> None:
+    """验证日志命中附近的真实配置读取会进入下一轮定义检索。"""
+    hits = [
+        {
+            "content": "logInfo('device registered users exceeds the limit')",
+            "context": "\n".join(
+                [
+                    "50: $regCount = getDeviceRegCount($deviceId);",
+                    "51: $limit = Config::get('device.device_user_count_limit');",
+                    "52: if ($regCount >= $limit) { return false; }",
+                ]
+            ),
+        },
+        {
+            "content": "\\Conf\\Config::get('device.device_user_count_limit')",
+        },
+    ]
+
+    keys = worker._config_keys_from_hits(hits)
+
+    assert keys == ["device.device_user_count_limit"]
+
+
+def test_initial_hit_tagging_distinguishes_anchor_and_explicit_symbol() -> None:
+    """验证源码命中会保留中文业务锚点和显式符号的可审计来源。"""
+    anchor_stage = worker._tag_initial_retrieval_stage(
+        {"matched_queries": ["钻石提现"]},
+        ["钻石提现"],
+        ["AdvanceServices"],
+    )
+    symbol_stage = worker._tag_initial_retrieval_stage(
+        {"matched_queries": ["AdvanceServices"]},
+        ["钻石提现"],
+        ["AdvanceServices"],
+    )
+
+    assert anchor_stage == "business_anchor"
+    assert symbol_stage == "explicit_symbol"
+
+
+def test_query_evidence_uses_one_batch_search_and_keeps_config_definition(monkeypatch) -> None:
+    """验证全部规划词只触发一次扫描，并保留配置定义与全部命中词。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具，用于记录底层检索调用。
+    """
+    calls = []
+
+    def fake_search(root, project, queries, **kwargs):
+        """返回包含显式符号和配置定义的模拟批量检索结果。
+
+        参数:
+            - `root`：代码仓库根目录。
+            - `project`：当前项目标识。
+            - `queries`：本次批量检索词。
+            - `**kwargs`：批量检索的可选边界参数。
+        """
+        calls.append((root, project, list(queries), kwargs))
+        return {
+            "matches": [
+                {
+                    "file": "module/config/service.php",
+                    "line": 18,
+                    "content": "'daily_limit' => 10,",
+                    "matched_queries": ["SettlementService", "daily_limit"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(worker, "search_code_terms", fake_search)
+
+    evidence = worker._search_query_evidence(
+        "repositories",
+        "project",
+        ["SettlementService", "daily_limit", "SettlementService"],
+        ["daily_limit"],
+    )
+
+    assert len(calls) == 1
+    assert calls[0][2] == ["SettlementService", "daily_limit"]
+    assert evidence[0]["type"] == "config_definition"
+    assert evidence[0]["query"] == "daily_limit"
+    assert evidence[0]["matched_queries"] == ["SettlementService", "daily_limit"]
+
+
+def test_diagnostic_evidence_matches_secondary_batch_query() -> None:
+    """验证批量命中被某一规划词共享时，仍能满足该词的证据保底。"""
+    item = {
+        "type": "code",
+        "query": "SettlementService",
+        "matched_queries": ["SettlementService", "daily_limit"],
+        "file": "module/service/SettlementService.php",
+        "line": 18,
+        "content": "$dailyLimit = 10;",
+    }
+
+    selected = worker._select_diagnostic_evidence([item], ["daily_limit"], limit=1)
+
+    assert selected == [item]
+
+
+def test_explicit_target_file_prefers_question_module_scope() -> None:
+    """验证同名结算类会按问题中的业务模块目录收敛到真实实现。"""
+    project_index = {
+        "symbols": [
+            {
+                "symbol_name": "SettlementService",
+                "symbol_type": "class",
+                "file": "waky3_miyouphp/php/services/PatronCharge/SettlementService.php",
+                "line": 10,
+            },
+            {
+                "symbol_name": "SettlementService",
+                "symbol_type": "class",
+                "file": "waky3_miyouactivity/Logic/cyberStreetBattle/service/settlement/SettlementService.php",
+                "line": 10,
+            },
+        ]
+    }
+
+    targets = worker._select_explicit_target_files(
+        project_index,
+        [],
+        ["PatronCharge", "SettlementService"],
+        "PatronCharge 的 SettlementService 如何处理结算？",
+    )
+
+    assert targets == ["waky3_miyouphp/php/services/PatronCharge/SettlementService.php"]
+
+
+def test_explicit_target_file_uses_ranked_symbol_references_without_module_word() -> None:
+    """验证问题未写目录名时，同名类按首轮高排名符号来源路径消歧。"""
+    project_index = {
+        "symbols": [
+            {
+                "symbol_name": "GiftWeekStarSettlementService",
+                "symbol_type": "class",
+                "file": "waky4_miyouactivity/Logic/giftWeekStarNew/service/GiftWeekStarSettlementService.php",
+                "line": 10,
+            },
+            {
+                "symbol_name": "GiftWeekStarSettlementService",
+                "symbol_type": "class",
+                "file": "waky4_miyouactivity/Logic/giftWeekStarNewRegion/service/GiftWeekStarSettlementService.php",
+                "line": 10,
+            },
+        ]
+    }
+    evidence = [
+        {
+            "file": "waky4_miyouactivity/Logic/giftWeekStarNewRegion/boot/giftWeekStarNewRegionBoot.php",
+            "retrieval_stage": "explicit_symbol",
+            "generic_rank": 0,
+            "matched_queries": ["GiftWeekStarSettlementService", "region"],
+        },
+        {
+            "file": "waky4_miyouactivity/Logic/giftWeekStarNew/boot/giftWeekStarNewBoot.php",
+            "retrieval_stage": "explicit_symbol",
+            "generic_rank": 4,
+            "matched_queries": ["GiftWeekStarSettlementService"],
+        },
+    ]
+
+    targets = worker._select_explicit_target_files(
+        project_index,
+        evidence,
+        ["GiftWeekStarSettlementService"],
+        "GiftWeekStarSettlementService 按什么时间范围结算？",
+    )
+
+    assert targets == [
+        "waky4_miyouactivity/Logic/giftWeekStarNewRegion/service/GiftWeekStarSettlementService.php"
+    ]
+
+
+def test_explicit_target_scope_ignores_generic_redis_inside_class_filename() -> None:
+    """验证通用 Redis 词不会让未指定模块的同名类重新进入候选。"""
+    project_index = {
+        "symbols": [
+            {
+                "symbol_name": "ClearOldRedisKeyService",
+                "symbol_type": "class",
+                "file": "waky4_miyouactivity/Logic/giftWeekStarNew/service/ClearOldRedisKeyService.php",
+                "line": 8,
+            },
+            {
+                "symbol_name": "ClearOldRedisKeyService",
+                "symbol_type": "class",
+                "file": "waky4_miyouactivity/Logic/giftWeekStarNewRegion/service/ClearOldRedisKeyService.php",
+                "line": 10,
+            },
+        ]
+    }
+
+    targets = worker._select_explicit_target_files(
+        project_index,
+        [],
+        ["ClearOldRedisKeyService"],
+        "giftWeekStarNewRegion 的 ClearOldRedisKeyService 清理哪些 Redis key？",
+    )
+
+    assert targets == [
+        "waky4_miyouactivity/Logic/giftWeekStarNewRegion/service/ClearOldRedisKeyService.php"
+    ]
+
+
+def test_explicit_target_focus_removes_other_same_name_module_file() -> None:
+    """验证最终证据会删除其他模块同名类，但保留配置和普通调用方。"""
+    target = "waky3_miyouphp/php/services/PatronCharge/SettlementService.php"
+    evidence = [
+        {
+            "file": "waky3_miyouactivity/Logic/cyberStreetBattle/service/settlement/SettlementService.php",
+            "line": 30,
+        },
+        {"file": target, "line": 36},
+        {"file": "waky3_miyouphp/php/config/patron.php", "line": 7},
+    ]
+
+    focused = worker._focus_explicit_target_evidence(
+        evidence,
+        [target],
+        ["PatronCharge", "SettlementService"],
+    )
+
+    assert focused[0]["file"] == target
+    assert {item["file"] for item in focused} == {
+        target,
+        "waky3_miyouphp/php/config/patron.php",
+    }
+
+
+def test_inherited_class_evidence_follows_extends_declaration(monkeypatch) -> None:
+    """验证显式类证据会沿源码中的 extends 声明补充唯一直接基类。
+
+    参数:
+        - `monkeypatch`：pytest 运行期替换工具，用于提供确定性的源码读取结果。
+    """
+    child_file = "module/service/CleanupService.php"
+    parent_file = "module/ActivityBase.php"
+    project_index = {
+        "symbols": [
+            {
+                "symbol_name": "CleanupService",
+                "symbol_type": "class",
+                "file": child_file,
+                "line": 10,
+            },
+            {
+                "symbol_name": "ActivityBase",
+                "symbol_type": "class",
+                "file": parent_file,
+                "line": 17,
+            },
+        ]
+    }
+
+    def fake_read_file(root, project, relative_path, start_line=1, end_line=200):
+        """返回目标类或基类的模拟带行号源码。
+
+        参数:
+            - `root`：代码仓库根目录。
+            - `project`：当前项目标识。
+            - `relative_path`：当前读取的项目内文件路径。
+            - `start_line`：读取起始行。
+            - `end_line`：读取结束行。
+        """
+        content = {
+            child_file: "10: class CleanupService extends ActivityBase",
+            parent_file: "17: abstract class ActivityBase",
+        }[relative_path]
+        return {"content": content, "start_line": start_line, "end_line": end_line}
+
+    monkeypatch.setattr(worker, "read_file", fake_read_file)
+
+    evidence = worker._inherited_class_evidence(
+        "repositories",
+        "project",
+        project_index,
+        [child_file],
+    )
+
+    assert evidence == [
+        {
+            "type": "symbol",
+            "query": "ActivityBase",
+            "file": parent_file,
+            "line": 17,
+            "content": "ActivityBase 父类定义",
+            "hierarchy_of": child_file,
+            "hierarchy_depth": 1,
+        }
+    ]
+
+
 def test_document_index_task_uses_application_runtime_module(monkeypatch) -> None:
     """验证索引 Worker 不依赖生产镜像未安装的 scripts 包。
 

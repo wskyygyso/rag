@@ -18,6 +18,14 @@ def test_semantic_concepts_compose_without_complete_question_mapping() -> None:
     }
 
 
+def test_device_registration_question_composes_reusable_concepts() -> None:
+    """验证设备注册数量问题只组合名词和动作，不依赖完整问句模板。"""
+    plan = build_semantic_query_plan("同一设备号最多能注册多少个用户？")
+
+    assert {"device", "registration", "count", "limit", "user"} <= set(plan["concepts"])
+    assert {"device", "register", "count", "user"} <= set(plan["code_terms"])
+
+
 def test_semantic_plan_reuses_concepts_for_different_questions() -> None:
     """验证同一组业务概念能服务不同问法，新增问句不需要复制实现符号。"""
     first = build_semantic_query_plan("钻石提现手续费是多少？")
@@ -48,6 +56,22 @@ def test_semantic_terms_contain_only_reusable_words() -> None:
     assert "getdiamondgearlist" not in serialized
     assert "t_user_diamonds" not in serialized
     assert {"display", "diamond", "anchor", "gear"} <= set(plan["concepts"])
+
+
+def test_seed_hits_cannot_inject_unrelated_business_concepts() -> None:
+    """验证无关首轮命中不能把新业务概念带入未知问题并伪造检索支撑。"""
+    plan = build_semantic_query_plan(
+        "晨曦通行证的量子积分每日兑换上限是多少？",
+        seed_hits=[
+            {"file": "php/ceremony/config.php", "content": "// 更新年度主播积分榜"},
+            {"file": "php/control.php", "content": "// 每日兑换次数统计"},
+        ],
+    )
+
+    assert {"daily", "limit", "exchange"} <= set(plan["concepts"])
+    assert "anchor" not in plan["concepts"]
+    assert "annual" not in plan["concepts"]
+    assert "settlement" not in plan["concepts"]
 
 
 def test_unknown_business_has_no_hidden_domain_mapping() -> None:

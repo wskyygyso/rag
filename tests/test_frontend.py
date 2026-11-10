@@ -7,7 +7,8 @@ from app.main import app
 
 def test_ui_page_exposes_structured_evidence_workflow() -> None:
     """验证前端页面提供结构化结论、逐条证据和证据文件下载闭环。"""
-    response = TestClient(app).get("/ui")
+    client = TestClient(app)
+    response = client.get("/ui")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "开始诊断" in response.text
@@ -55,6 +56,9 @@ def test_ui_page_exposes_structured_evidence_workflow() -> None:
     assert "board-operation-result" in response.text
     assert "setInterval" in response.text
     assert "response.body.getReader" in response.text
+    assert "reconcileTaskState" in response.text
+    assert "finishWatchedTask" in response.text
+    assert "进度连接已结束，但任务仍在执行" in response.text
     assert "提交反馈" in response.text
     assert "诊断结论" in response.text
     assert "业务限制" in response.text
@@ -72,5 +76,13 @@ def test_ui_page_exposes_structured_evidence_workflow() -> None:
     assert "自动发现来源" in response.text
     assert "不依赖预先维护领域映射" in response.text
     assert "retrieval_plan" in response.text
+    assert "explicit_target_files" in response.text
+    assert "inherited_target_files" in response.text
+    assert "term_search" in response.text
     assert "result-empty" in response.text
     assert "result-view" in response.text
+
+    root_response = client.get("/")
+    assert root_response.status_code == 200
+    assert root_response.headers["content-type"].startswith("text/html")
+    assert root_response.text == response.text

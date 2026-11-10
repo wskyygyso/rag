@@ -29,6 +29,43 @@ class EvidenceLine:
 
 
 _CONTEXT_LINE_PATTERN = re.compile(r"^\s*(\d+):\s?(.*)$")
+_EXPLICIT_CLASS_PATTERN = re.compile(
+    r"\b([A-Z][A-Za-z0-9_]{2,})(?:::[A-Za-z_][A-Za-z0-9_]*)?\b"
+)
+_METHOD_DECLARATION_PATTERN = re.compile(
+    r"\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+
+# 显式目标类的问题经常一次询问多个数据流动作。这里只保存通用动作与常见代码
+# 写法的对应关系，用于检查证据是否覆盖用户问到的方向；它们不包含项目、类、
+# 表或具体答案，缺失时也只报告证据边界，不推断整个项目一定没有该能力。
+_REQUESTED_ACTION_PROBES: Tuple[Tuple[str, Tuple[str, ...], Tuple[str, ...]], ...] = (
+    (
+        "累计",
+        ("累计", "累加", "增加"),
+        ("hincrby(", "incrby(", "incr(", "addscore(", "+="),
+    ),
+    (
+        "消耗",
+        ("消耗", "扣减", "扣除", "减少", "花费"),
+        ("hdecrby(", "decrby(", "decr(", "subscore(", "deduct", "consume", "spend", "-="),
+    ),
+    (
+        "清理",
+        ("清理", "删除"),
+        ("->expire(", "->del(", "->unlink(", "delete(", "remove("),
+    ),
+    (
+        "写入",
+        ("写入", "记录", "创建"),
+        ("hset(", "hmset(", "setex(", "setnx(", "create(", "createrecord(", "insert"),
+    ),
+    (
+        "更新",
+        ("更新", "修改"),
+        ("hupdate(", "update(", "update_by", "save("),
+    ),
+)
 
 
 def _evidence_lines(evidence: Iterable[Dict[str, Any]]) -> List[EvidenceLine]:
@@ -1590,6 +1627,598 @@ def _analyze_spaceship_fragments(lines: Sequence[EvidenceLine]) -> List[Dict[str
     return facts
 
 
+def _analyze_device_registration_limit(
+    lines: Sequence[EvidenceLine],
+) -> List[Dict[str, Any]]:
+    """从源码证据中提取设备注册数量的配置值、计数来源和拦截条件。
+
+    参数:
+        - `lines`：本次检索展开后的源码上下文，类型为 `Sequence[EvidenceLine]`。
+          配置定义、注册计数查询和阈值判断通常位于不同文件，因此本函数只组合同
+          一次证据快照中已经出现的源码行，不猜测缺失值。
+
+    Returns:
+        设备注册上限、计数来源和注册拦截事实。配置值是唯一答案来源；没有配置
+        赋值或没有注册计数校验时返回不完整事实，调用方不得把相似的表名或字段名
+        当成业务上限。函数不依赖项目名、完整问句、类名或表名。
+    """
+    config_pattern = re.compile(
+        r"['\"](?P<key>[A-Za-z_][A-Za-z0-9_.]*)['\"]\s*=>\s*"
+        r"(?P<value>\d+)\b"
+    )
+    config_entries: List[Tuple[EvidenceLine, str, int]] = []
+    for item in lines:
+        for match in config_pattern.finditer(item.content):
+            key = match.group("key")
+            folded_key = key.casefold()
+            if "device" not in folded_key:
+                continue
+            if not any(marker in folded_key for marker in ("count", "limit", "max")):
+                continue
+            config_entries.append((item, key, int(match.group("value"))))
+
+    if not config_entries:
+        return []
+
+    facts: List[Dict[str, Any]] = []
+    seen_refs: set[str] = set()
+    for config_line, config_key, limit_value in config_entries[:3]:
+        context_refs = [config_line.ref]
+        for nearby in lines:
+            if nearby.file != config_line.file:
+                continue
+            if abs(nearby.line - config_line.line) > 4:
+                continue
+            concepts = {
+                concept.name for concept in detect_semantic_concepts(nearby.content)
+            }
+            if {"device", "registration"}.issubset(concepts):
+                context_refs.append(nearby.ref)
+        config_refs = list(dict.fromkeys(context_refs))
+        facts.append(
+            {
+                "category": "设备注册上限",
+                "statement": (
+                    f"配置项 `{config_key} = {limit_value}` 定义了单个设备允许"
+                    f"注册的用户数量上限为 {limit_value}。"
+                ),
+                "evidence_refs": config_refs,
+            }
+        )
+        seen_refs.update(config_refs)
+
+        key_leaf = config_key.rsplit(".", 1)[-1]
+        matching_guards = [
+            item
+            for item in lines
+            if key_leaf in item.content
+            and any(operator in item.content for operator in (">=", ">", "==", "<=", "<"))
+        ]
+        for guard in matching_guards[:3]:
+            if guard.ref in seen_refs:
+                continue
+            comparison = "达到或超过" if ">=" in guard.content else "触发"
+            facts.append(
+                {
+                    "category": "注册拦截条件",
+                    "statement": (
+                        f"设备注册计数{comparison}配置上限时执行拦截：{guard.content.strip()}"
+                    ),
+                    "evidence_refs": [config_line.ref, guard.ref],
+                }
+            )
+            seen_refs.add(guard.ref)
+
+    count_lines = [
+        item
+        for item in lines
+        if re.search(
+            r"(?:device.{0,60}(?:reg|register).{0,60}count|reg_count.{0,60}device)",
+            item.content,
+            re.IGNORECASE,
+        )
+        and not re.search(r"\$logger|log(?:info|warn|notice)|echo\b", item.content, re.IGNORECASE)
+    ]
+    for item in count_lines[:4]:
+        if item.ref in seen_refs:
+            continue
+        facts.append(
+            {
+                "category": "注册计数来源",
+                "statement": f"设备注册次数从以下源码计数链路读取：{item.content.strip()}",
+                "evidence_refs": [item.ref],
+            }
+        )
+        seen_refs.add(item.ref)
+
+    send_code_guards = [
+        item
+        for item in lines
+        if (
+            re.search(r"\bif\s*\([^\n]*regcount", item.content, re.IGNORECASE)
+            and any(
+                marker in item.content.casefold()
+                for marker in ("config::get", "limit", "上限", "限制")
+            )
+        )
+        and not re.search(r"\$logger|log(?:info|warn|notice)|echo\b", item.content, re.IGNORECASE)
+    ]
+    for item in send_code_guards[:4]:
+        facts.append(
+            {
+                "category": "短信注册前置校验",
+                "statement": f"发送注册短信前复用设备注册数量校验：{item.content.strip()}",
+                "evidence_refs": [item.ref],
+            }
+        )
+
+    registration_guards = [
+        item
+        for item in lines
+        if re.search(
+            r"\b(?:public\s+)?function\s+checkregcount\s*\(",
+            item.content,
+            re.IGNORECASE,
+        )
+    ]
+    for item in registration_guards[:2]:
+        if item.ref in seen_refs:
+            continue
+        facts.append(
+            {
+                "category": "注册入口校验",
+                "statement": f"普通注册流程调用设备注册数量校验入口：{item.content.strip()}",
+                "evidence_refs": [item.ref],
+            }
+        )
+        seen_refs.add(item.ref)
+
+    return facts[:12]
+
+
+def _explicit_class_names(question: str) -> List[str]:
+    """提取问题中可由源码文件验证的显式 PHP 类名。
+
+    参数:
+        - `question`：用户提交的业务诊断问题，类型为 `str`。
+
+    Returns:
+        保持出现顺序的类名列表。HTTP、SQL、Redis 等技术缩写不会作为目标业务类；
+        若用户给出 `Class::method`，这里只保留 `Class` 用于定位类文件，方法名由
+        后续源码行继续约束。
+    """
+    ignored = {
+        "API", "HTTP", "HTTPS", "ID", "JSON", "PHP", "REDIS", "SQL", "URL",
+        "UUID", "YAML",
+    }
+    names = []
+    for match in _EXPLICIT_CLASS_PATTERN.finditer(question):
+        name = match.group(1)
+        if name.upper() in ignored or name.isupper():
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _explicit_symbol_line_signal(content: str) -> Tuple[str, int]:
+    """为显式目标类中的源码行计算与业务问题相关的通用信号。
+
+    参数:
+        - `content`：目标类文件中的一行源码，类型为 `str`。
+
+    Returns:
+        `(事实类别, 权重)`。权重只用于在有限证据预算内优先保留配置、条件、
+        队列、奖励、余额变更和返回结构；它不根据项目名或具体类名判断答案。
+    """
+    stripped = content.strip()
+    lowered = stripped.casefold()
+    if not stripped or stripped.startswith(("*", "//", "/*", "#", "use ", "namespace ")):
+        return "", 0
+    if re.match(
+        r"^(?:public|protected|private)?\s*static\s+(?:int|float)\s+\$[a-z_][a-z0-9_]*\s*=\s*-?\d+(?:\.\d+)?\s*;",
+        lowered,
+    ):
+        return "数值边界", 44
+    if "getconfig(" in lowered or "config::get" in lowered:
+        return "配置来源", 48
+    if lowered.startswith(("const ", "private const ", "protected const ", "public const ")) and any(
+        token in lowered for token in ("lock", "expire", "timeout")
+    ):
+        return "锁与幂等", 44
+    if "runningconfigs" in lowered or "configservice" in lowered:
+        return "活动配置", 44
+    if lowered.startswith(("if ", "if(", "elseif", "} elseif")) and any(
+        token in lowered for token in ("etime", "stime", "strtotime", "formatdate", "time()")
+    ):
+        return "时间边界", 44
+    if lowered.startswith(("if ", "if(", "elseif", "} elseif", "switch", "case ")):
+        return "业务条件", 42
+    if any(token in lowered for token in ("formatdate", "strtotime", "time()", "gettm(")):
+        return "时间边界", 32
+    if any(token in lowered for token in ("lpush(", "rpush(", "brpop(", "blpop(", "addprizequeue(")):
+        return "队列流转", 46
+    if "scoreservice->" in lowered or any(
+        token in lowered for token in ("getgiftscore(", "calculatescore(", "getscore(")
+    ):
+        return "积分计算", 44
+    if "levelrewardservice->" in lowered:
+        return "档位奖励", 44
+    if "->retry(" in lowered:
+        return "失败重试", 40
+    if any(token in lowered for token in ("sendreward(", "grant(", "dispatcher->", "createRecord", "sendmsg(")):
+        return "奖励派发", 44
+    if any(token in lowered for token in ("->expire(", "->del(", "->unlink(", "delete(", "remove(")):
+        return "清理动作", 42
+    if any(token in lowered for token in ("hincrby(", "addscore(", "finishtask(", "setnx(", "hsetnx(")):
+        return "计数与状态变更", 42
+    if "rediskey(" in lowered or "getrediskey(" in lowered or "redis_key" in lowered:
+        return "Redis Key", 38
+    if any(token in lowered for token in ("zrevrange(", "zrange(", "brpop(", "blpop(", "hscan(")) or re.search(
+        r"(?:->|::)get\s*\(|\bexists\s*\(",
+        lowered,
+    ):
+        return "数据读取", 34
+    if lowered.startswith("return") and re.search(
+        r"\$[a-z_][a-z0-9_]*\s*[+\-*/%]\s*|"
+        r"[+\-*/%]\s*\$[a-z_][a-z0-9_]*|\d\s*[+\-*/%]\s*\d",
+        lowered,
+    ):
+        return "计算规则", 38
+    if lowered.startswith("return") and ("[" in stripped or "->" in stripped or "(" in stripped):
+        return "返回结构", 30
+    if "foreach (" in lowered or lowered.startswith("foreach"):
+        return "遍历范围", 26
+    return "", 0
+
+
+def _explicit_target_source_lines(
+    lines: Sequence[EvidenceLine],
+    question: str,
+) -> List[EvidenceLine]:
+    """筛出问题显式指向的类文件源码行，并处理不同模块的同名类。
+
+    参数:
+        - `lines`：本次证据窗口展开后的全部源码行，类型为
+          `Sequence[EvidenceLine]`。
+        - `question`：用户原始问题，类型为 `str`；其中真正的 PHP 类名用于确定
+          文件主干，其他英文模块词用于同名类消歧。
+
+    Returns:
+        目标类文件的源码行。问题没有显式类名或证据未包含目标类时返回空列表；
+        存在多个同名类且问题给出了路径模块词时，只返回路径匹配的候选。
+    """
+    class_names = _explicit_class_names(question)
+    if not class_names:
+        return []
+    class_set = set(class_names)
+    all_target_lines = []
+    for item in lines:
+        basename = item.file.replace("\\", "/").rsplit("/", 1)[-1]
+        class_stem = basename.rsplit(".", 1)[0]
+        if class_stem in class_set:
+            all_target_lines.append(item)
+
+    common_scope_tokens = {
+        "API", "HTTP", "HTTPS", "ID", "JSON", "PHP", "Redis", "SQL", "URL",
+        "UUID", "YAML",
+    }
+    scope_tokens = [
+        value
+        for value in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", question)
+        if value not in class_set and value not in common_scope_tokens
+    ]
+    scoped_lines = [
+        item
+        for item in all_target_lines
+        if any(token.casefold() in item.file.casefold() for token in scope_tokens)
+    ]
+    return scoped_lines or all_target_lines
+
+
+def _requested_action_gaps(
+    lines: Sequence[EvidenceLine],
+    question: str,
+    inherited_files: Sequence[str] = (),
+) -> List[str]:
+    """识别问题询问的数据流动作是否出现在显式目标类源码中。
+
+    参数:
+        - `lines`：本次证据窗口展开后的全部源码行，类型为
+          `Sequence[EvidenceLine]`。
+        - `question`：用户原始问题，类型为 `str`；仅通用的累计、消耗、清理、
+          写入和更新动作会触发覆盖检查。
+        - `inherited_files`：Worker 已确认的直接和间接基类文件，类型为
+          `Sequence[str]`；继承实现也属于目标类可执行行为的一部分。
+
+    Returns:
+        目标类源码未出现对应代码信号的证据边界说明。缺失只表示当前目标类证据
+        窗口未观察到该动作，不能扩大解释为整个项目不存在相关能力。
+    """
+    target_lines = _explicit_target_source_lines(lines, question)
+    inherited_set = set(inherited_files)
+    target_lines.extend(item for item in lines if item.file in inherited_set)
+    if not target_lines:
+        return []
+    source = "\n".join(item.content.casefold() for item in target_lines)
+    gaps = []
+    for action, triggers, code_signals in _REQUESTED_ACTION_PROBES:
+        if not any(trigger in question for trigger in triggers):
+            continue
+        if any(signal in source for signal in code_signals):
+            continue
+        gaps.append(
+            f"问题同时询问“{action}”相关行为，但当前目标类证据窗口未观察到对应的"
+            "数据变更语句；这不等于整个项目不存在该能力，仍需继续核对调用方、父类或相邻服务。"
+        )
+        if len(gaps) >= 3:
+            break
+    return gaps
+
+
+def _source_covers_action(
+    lines: Sequence[EvidenceLine],
+    code_signals: Sequence[str],
+) -> bool:
+    """判断一段源码证据是否包含指定业务动作的真实代码写法。
+
+    参数:
+        - `lines`：待检查的源码证据行，类型为 `Sequence[EvidenceLine]`。
+        - `code_signals`：`_REQUESTED_ACTION_PROBES` 中与动作对应的代码片段，
+          类型为 `Sequence[str]`；用于确认累计、消耗、清理等行为是否真的出现在
+          当前证据窗口。
+
+    Returns:
+        至少命中一个代码片段时返回 `True`。匹配只说明源码中存在该写法，不说明
+        它一定属于用户询问的业务分支，调用方仍需结合目标类和问题语义筛选。
+    """
+    source = "\n".join(item.content.casefold() for item in lines)
+    return any(signal.casefold() in source for signal in code_signals)
+
+
+def _inherited_source_matches_question(
+    lines: Sequence[EvidenceLine],
+    question: str,
+) -> bool:
+    """判断父类证据是否与用户问题存在可解释的业务关联。
+
+    参数:
+        - `lines`：某个已验证直接基类的全部证据行，类型为
+          `Sequence[EvidenceLine]`。
+        - `question`：用户原始业务问题，类型为 `str`；用于提取四字以上业务
+          锚点和可组合语义概念。
+
+    Returns:
+        父类源码包含问题业务锚点、语义概念对应代码词或中文触发词时返回 `True`。
+        该方法只决定父类是否值得进入事实分析，不把父类出现本身当成业务结论。
+    """
+    source = "\n".join(item.content for item in lines).casefold()
+    anchors = [
+        anchor
+        for anchor in extract_generic_anchors(question)
+        if len(anchor) >= 4
+    ]
+    if any(anchor.casefold() in source for anchor in anchors):
+        return True
+    for concept in detect_semantic_concepts(question):
+        if any(term.casefold() in source for term in concept.code_terms):
+            return True
+        if any(trigger.casefold() in source for trigger in concept.triggers):
+            return True
+    return False
+
+
+def _relevant_inherited_source_lines(
+    target_lines: Sequence[EvidenceLine],
+    all_lines: Sequence[EvidenceLine],
+    question: str,
+    inherited_files: Sequence[str],
+) -> List[EvidenceLine]:
+    """选择能够补充目标类事实缺口的直接基类源码。
+
+    参数:
+        - `target_lines`：用户显式指定类的源码证据行，类型为
+          `Sequence[EvidenceLine]`。
+        - `all_lines`：本次证据窗口展开后的全部源码行，类型为
+          `Sequence[EvidenceLine]`；其中包含 Worker 已确认的直接基类。
+        - `question`：用户原始业务问题，类型为 `str`；用于判断询问了哪些数据流
+          动作以及父类是否与业务对象相关。
+        - `inherited_files`：Worker 沿真实 `extends` 声明验证过的基类文件，
+          类型为 `Sequence[str]`。
+
+    Returns:
+        可纳入事实分析的基类源码行。目标类已经提供充足证据且没有缺失动作时，
+        不为通用父类额外制造事实；目标类缺少“消耗”等明确动作时，只有真正包含
+        该动作的父类才会入选。这样既保留模板方法实现，又避免 `getType`、
+        `__destruct`、`getInstance` 等通用基础设施方法污染业务结论。
+    """
+    inherited_set = set(inherited_files)
+    if not inherited_set:
+        return []
+    target_signal_count = sum(
+        1
+        for item in target_lines
+        if _explicit_symbol_line_signal(item.content)[1] > 0
+    )
+    requested_actions = [
+        probe
+        for probe in _REQUESTED_ACTION_PROBES
+        if any(trigger in question for trigger in probe[1])
+    ]
+    missing_actions = [
+        probe
+        for probe in requested_actions
+        if not _source_covers_action(target_lines, probe[2])
+    ]
+    if target_signal_count >= 4 and not missing_actions:
+        return []
+
+    selected: List[EvidenceLine] = []
+    for file_name in dict.fromkeys(inherited_files):
+        parent_lines = [item for item in all_lines if item.file == file_name]
+        if not parent_lines:
+            continue
+        if missing_actions:
+            covers_missing_action = any(
+                _source_covers_action(parent_lines, probe[2])
+                for probe in missing_actions
+            )
+            if not covers_missing_action:
+                continue
+        elif not _inherited_source_matches_question(parent_lines, question):
+            continue
+        selected.extend(parent_lines)
+    return selected
+
+
+def _explicit_question_category_bonus(question: str, category: str) -> int:
+    """按用户询问动作提高同类源码行的优先级。
+
+    参数:
+        - `question`：用户原始业务问题，类型为 `str`。
+        - `category`：`_explicit_symbol_line_signal` 返回的通用源码类别，类型为
+          `str`。
+
+    Returns:
+        与问题动作匹配时增加的排序权重。这里只理解“队列、奖励、条件、Key、
+        累计、时间”等可复用业务动作，不包含项目名、类名或具体答案。
+    """
+    bonus = 0
+    if "排队" in question or "队列" in question:
+        bonus += 100 if category == "队列流转" else 0
+    if "发放" in question or "奖励" in question or "派发" in question:
+        bonus += 90 if category in {"奖励派发", "档位奖励"} else 0
+    if "清理" in question and ("key" in question.casefold() or "Key" in question):
+        bonus += 100 if category in {"Redis Key", "清理动作"} else 0
+    if any(value in question for value in ("累计", "消耗", "积分", "余额")):
+        bonus += 80 if category in {"计数与状态变更", "积分计算"} else 0
+    if any(value in question for value in ("条件", "按什么", "满足哪些", "判断")):
+        bonus += 70 if category in {"业务条件", "锁与幂等"} else 0
+    if "配置" in question:
+        bonus += 80 if category in {"配置来源", "活动配置"} else 0
+    if any(value in question for value in ("时间", "周期", "频次", "触发边界")):
+        bonus += 60 if category in {"时间边界", "活动配置"} else 0
+    if any(value in question for value in ("范围", "边界", "保留", "周期")):
+        bonus += 60 if category in {"时间边界", "数值边界", "计算规则"} else 0
+    return bonus
+
+
+def _explicit_symbol_facts(
+    lines: Sequence[EvidenceLine],
+    question: str,
+    limit: int = 12,
+    inherited_files: Sequence[str] = (),
+) -> List[Dict[str, Any]]:
+    """从用户显式指定类的源码中提取可审计的条件和数据来源。
+
+    参数:
+        - `lines`：本次已检索并展开的源码行，类型为 `Sequence[EvidenceLine]`。
+        - `question`：用户原始问题，用于识别显式类名，类型为 `str`。
+        - `limit`：最多返回的源码事实数量，类型为 `int`。
+        - `inherited_files`：Worker 从 `extends` 声明确认的基类文件，类型为
+          `Sequence[str]`；只纳入这些已验证基类，不扫描其他同名类。
+
+    Returns:
+        只引用目标类文件的事实列表。该方法不猜测完整业务答案，而是按通用代码
+        结构提取配置读取、条件、队列、奖励、计数、Key、时间边界和返回结构，
+        让人工能够从真实源码继续判断业务规则。没有目标类文件证据时返回空列表。
+    """
+    if limit < 1 or limit > 24:
+        raise ValueError("显式符号事实数量必须在 1 到 24 之间")
+    # 不同模块经常存在同名服务。问题给出目录或模块词时，沿用同一套路径消歧
+    # 规则，确保事实提取与 Worker 选中的目标文件完全一致。
+    target_lines = _explicit_target_source_lines(lines, question)
+    if not target_lines:
+        return []
+    inherited_set = set(inherited_files)
+    target_lines.extend(
+        _relevant_inherited_source_lines(
+            target_lines,
+            lines,
+            question,
+            inherited_files,
+        )
+    )
+
+    candidates: List[Tuple[int, int, EvidenceLine, str, str]] = []
+    current_method = "类级逻辑"
+    for order, item in enumerate(target_lines):
+        declaration = _METHOD_DECLARATION_PATTERN.search(item.content)
+        if declaration:
+            current_method = declaration.group(1)
+            continue
+        category, score = _explicit_symbol_line_signal(item.content)
+        if score <= 0:
+            continue
+        score += _explicit_question_category_bonus(question, category)
+        candidates.append((score, order, item, category, current_method))
+    candidates.sort(key=lambda entry: (-entry[0], entry[1]))
+
+    facts = []
+    per_method: Dict[str, int] = {}
+    per_method_category: Dict[Tuple[str, str], int] = {}
+    global_category: Dict[str, int] = {}
+    category_soft_cap = max(2, min(4, limit // 3))
+    deferred_candidates = []
+    seen_refs = set()
+    for _, _, item, category, method_name in candidates:
+        category_key = (method_name, category)
+        if (
+            item.ref in seen_refs
+            or per_method.get(method_name, 0) >= 5
+            or per_method_category.get(category_key, 0) >= 3
+        ):
+            continue
+        if global_category.get(category, 0) >= category_soft_cap:
+            # 同一个目标类常包含大量结构相似的条件判断。若按全局分数直接截断，
+            # 一类高频条件会挤掉问题同时询问的时间边界、配置和奖励动作。第一轮
+            # 先限制单类占比，第二轮再补足不足，兼顾问题覆盖和事实总量。
+            deferred_candidates.append((item, category, method_name))
+            continue
+        seen_refs.add(item.ref)
+        per_method[method_name] = per_method.get(method_name, 0) + 1
+        per_method_category[category_key] = per_method_category.get(category_key, 0) + 1
+        global_category[category] = global_category.get(category, 0) + 1
+        source_subject = method_name
+        if item.file in inherited_set:
+            source_class = item.file.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            source_subject = f"父类 {source_class} 的 {method_name}"
+        facts.append(
+            {
+                "category": category,
+                "statement": f"{source_subject} 中的{category}源码：{item.content.strip()}",
+                "evidence_refs": [item.ref],
+            }
+        )
+        if len(facts) >= limit:
+            return facts
+    for item, category, method_name in deferred_candidates:
+        category_key = (method_name, category)
+        if (
+            item.ref in seen_refs
+            or per_method.get(method_name, 0) >= 5
+            or per_method_category.get(category_key, 0) >= 3
+        ):
+            continue
+        seen_refs.add(item.ref)
+        per_method[method_name] = per_method.get(method_name, 0) + 1
+        per_method_category[category_key] = per_method_category.get(category_key, 0) + 1
+        source_subject = method_name
+        if item.file in inherited_set:
+            source_class = item.file.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            source_subject = f"父类 {source_class} 的 {method_name}"
+        facts.append(
+            {
+                "category": category,
+                "statement": f"{source_subject} 中的{category}源码：{item.content.strip()}",
+                "evidence_refs": [item.ref],
+            }
+        )
+        if len(facts) >= limit:
+            break
+    return facts
+
+
 def _generic_facts(lines: Sequence[EvidenceLine], question: str) -> List[Dict[str, Any]]:
     """为没有专用解释器的问题提取与问题语义共现的业务控制点。
 
@@ -1643,6 +2272,126 @@ def _generic_facts(lines: Sequence[EvidenceLine], question: str) -> List[Dict[st
     return facts
 
 
+def _representative_fact_snippets(category: str, snippets: Sequence[str]) -> List[str]:
+    """为一类源码事实选择覆盖不同动作的代表片段。
+
+    参数:
+        - `category`：事实类别，例如“队列流转”或“业务条件”。
+        - `snippets`：同类别按相关度排序的源码片段。
+
+    Returns:
+        最多四条代表片段。队列优先分别覆盖入队、阻塞出队和奖励入分发队列；
+        条件优先覆盖共享判断、记录排除和空集合边界；其他类别按原始顺序取前两条。
+        这些只是通用代码动作优先级，不绑定任何项目或类名。
+    """
+    if category == "队列流转":
+        priorities = ("lpush(", "rpush(", "brpop(", "blpop(", "addprizequeue(")
+    elif category == "业务条件":
+        priorities = ("otheroperationkeys", "currentrecordid", "shared", "empty(")
+    elif category in {"时间边界", "锁与幂等"}:
+        priorities = ("lock", "expire", "etime", "stime", "formatdate")
+    elif category == "奖励派发":
+        priorities = ("sendreward(", "grant(", "addprizequeue(")
+    elif category == "清理动作":
+        priorities = ("expire(", "del(", "unlink(", "remove(")
+    elif category in {"计算规则", "数值边界"}:
+        priorities = ("reserve", "expire", "limit", "min", "max", "current", "etime", "stime")
+    elif category == "积分计算":
+        priorities = ("realscore(", "scorekey(", "periodkey(", "getgiftscore(")
+    else:
+        return list(snippets[:2])
+
+    selected = []
+    for priority in priorities:
+        candidate = next(
+            (
+                snippet
+                for snippet in snippets
+                if priority in snippet.casefold() and snippet not in selected
+            ),
+            None,
+        )
+        if candidate is not None:
+            selected.append(candidate)
+        if len(selected) >= 4:
+            break
+    for snippet in snippets:
+        if snippet not in selected:
+            selected.append(snippet)
+        if len(selected) >= 2:
+            break
+    return selected
+
+
+def _explicit_fact_conclusion(
+    facts: Sequence[Dict[str, Any]],
+    class_names: Sequence[str],
+    inherited_files: Sequence[str] = (),
+) -> str:
+    """把显式目标类的事实按可复用业务类别压缩成可读结论。
+
+    参数:
+        - `facts`：`_explicit_symbol_facts` 从目标类源码提取的控制点，顺序已经按
+          与问题动作的相关度排序。
+        - `class_names`：用户问题中显式指定的类或模块标识，用于说明结论边界。
+        - `inherited_files`：已纳入事实的直接基类文件，类型为
+          `Sequence[str]`；存在时结论明确说明还包含继承实现。
+
+    返回:
+        一段不依赖具体项目答案的类内机制摘要。每个类别取最多两条真实源码片段，
+        只复述配置、条件、队列、积分、奖励、锁和 Key 等结构，不推断证据之外的
+        业务数值，也不把同义检索命中当作确定规则。
+    """
+    category_labels = {
+        "配置来源": "配置来源",
+        "活动配置": "活动配置依赖",
+        "锁与幂等": "并发锁和幂等边界",
+        "时间边界": "时间边界",
+        "数值边界": "数值边界",
+        "计算规则": "计算规则",
+        "业务条件": "关键条件",
+        "积分计算": "积分计算",
+        "档位奖励": "档位奖励",
+        "队列流转": "队列流转",
+        "计数与状态变更": "计分或状态变更",
+        "奖励派发": "奖励派发",
+        "失败重试": "失败重试",
+        "清理动作": "清理动作",
+        "Redis Key": "Redis Key",
+        "数据读取": "数据读取",
+        "返回结构": "返回结构",
+    }
+    grouped: Dict[str, List[str]] = {}
+    for fact in facts:
+        category = str(fact.get("category") or "")
+        statement = str(fact.get("statement") or "")
+        snippet = statement.rsplit("源码：", 1)[-1].strip()
+        if not category or not snippet:
+            continue
+        bucket = grouped.setdefault(category, [])
+        if snippet not in bucket:
+            bucket.append(snippet)
+    parts = []
+    for category, snippets in grouped.items():
+        label = category_labels.get(category, category)
+        representatives = _representative_fact_snippets(category, snippets)
+        parts.append(f"{label}包括 " + "；".join(f"`{item}`" for item in representatives))
+        if len(parts) >= 6:
+            break
+    target = "、".join(class_names) if class_names else "目标类"
+    source_scope = "目标类及已验证直接基类" if inherited_files else "目标类"
+    # 无显式类名时，检索层只能证明当前证据来自目标类，不能再拼出
+    # “目标类的目标类”。有类名时则同时展示目标类与父类使用范围。
+    source_description = f"{target} 的{source_scope}" if class_names else source_scope
+    if not parts:
+        return f"已从{source_description}定位业务控制点。"
+    return (
+        f"已从{source_description}确认以下类内机制："
+        + "；".join(parts)
+        + "。这些片段回答类内部如何执行，类外调用顺序和运行态数据仍需结合调用方与配置验证。"
+    )
+
+
 def build_deterministic_findings(
     question: str,
     result: Dict[str, Any],
@@ -1662,6 +2411,7 @@ def build_deterministic_findings(
     lines = _evidence_lines(result.get("evidence") or [])
     retrieval_plan = result.get("retrieval_plan") or {}
     retrieval_support = retrieval_plan.get("retrieval_support") or {}
+    inherited_target_files = retrieval_plan.get("inherited_target_files") or []
     if (
         retrieval_support.get("grounded") is False
         or retrieval_plan.get("retrieval_mode") == "insufficient_support"
@@ -1676,9 +2426,33 @@ def build_deterministic_findings(
             ],
         }
     normalized_question = question.casefold()
+    question_concepts = {
+        concept.name for concept in detect_semantic_concepts(question)
+    }
+    explicit_classes = _explicit_class_names(question)
+    explicit_topic = False
     if "美元" in normalized_question and "熔断" in normalized_question:
         facts = _analyze_usd_fuse(lines)
         topic = "美元熔断"
+        if not facts and explicit_classes:
+            facts = _explicit_symbol_facts(
+                lines,
+                question,
+                inherited_files=inherited_target_files,
+            )
+            topic = "显式熔断恢复逻辑"
+            explicit_topic = bool(facts)
+    elif (
+        {"device", "registration"}.issubset(question_concepts)
+        and bool(question_concepts.intersection({"count", "limit"}))
+    ):
+        facts = _analyze_device_registration_limit(lines)
+        topic = "设备注册上限"
+        if not facts:
+            # 设备、注册和数量概念已经共现，但证据窗口没有配置赋值或计数校验时，
+            # 只能复述通用控制点，不能根据表名、字段名或相似方法猜一个数字。
+            facts = _generic_facts(lines, question)
+            topic = "当前问题"
     elif (
         "钻石" in normalized_question
         and ("前端" in normalized_question or "钱包" in normalized_question or "页面" in normalized_question)
@@ -1689,8 +2463,18 @@ def build_deterministic_findings(
         if not facts:
             # 领域分析器只解释已经命中的完整链路；若本次证据窗口没有覆盖接口、
             # 余额和配置，保留通用控制点并明确降级，避免输出看似完整的猜测。
-            facts = _generic_facts(lines, question)
-            topic = "当前问题"
+            explicit_facts = _explicit_symbol_facts(
+                lines,
+                question,
+                inherited_files=inherited_target_files,
+            )
+            if explicit_facts:
+                facts = explicit_facts
+                topic = "显式钱包展示逻辑"
+                explicit_topic = True
+            else:
+                facts = _generic_facts(lines, question)
+                topic = "当前问题"
     elif "钻石" in normalized_question and "提现" in normalized_question:
         facts = _analyze_diamond_withdrawal(lines)
         topic = "钻石提现"
@@ -1701,8 +2485,18 @@ def build_deterministic_findings(
             facts = _analyze_anchor_withdrawal(lines)
             topic = "当前仓库主播钻石提现"
         if not facts:
-            facts = _generic_facts(lines, question)
-            topic = "当前问题"
+            explicit_facts = _explicit_symbol_facts(
+                lines,
+                question,
+                inherited_files=inherited_target_files,
+            )
+            if explicit_facts:
+                facts = explicit_facts
+                topic = "显式提现逻辑"
+                explicit_topic = True
+            else:
+                facts = _generic_facts(lines, question)
+                topic = "当前问题"
     elif "钻石" in normalized_question and ("兑金币" in normalized_question or "兑换金币" in normalized_question):
         facts = _analyze_diamond_exchange(lines)
         topic = "钻石兑金币"
@@ -1712,11 +2506,30 @@ def build_deterministic_findings(
         if not facts:
             # 领域分析器只负责解释已经证实的规则。如果检索窗口没有同时覆盖
             # 配置和公式，仍保留通用控制点，避免误报“完全没有证据”。
+            explicit_facts = _explicit_symbol_facts(
+                lines,
+                question,
+                inherited_files=inherited_target_files,
+            )
+            if explicit_facts:
+                facts = explicit_facts
+                topic = "显式商品碎片逻辑"
+                explicit_topic = True
+            else:
+                facts = _generic_facts(lines, question)
+                topic = "当前问题"
+    else:
+        facts = _explicit_symbol_facts(
+            lines,
+            question,
+            inherited_files=inherited_target_files,
+        )
+        if facts:
+            topic = f"{', '.join(explicit_classes)} 业务逻辑"
+            explicit_topic = True
+        else:
             facts = _generic_facts(lines, question)
             topic = "当前问题"
-    else:
-        facts = _generic_facts(lines, question)
-        topic = "当前问题"
 
     evidence_refs = list(
         dict.fromkeys(
@@ -1725,6 +2538,14 @@ def build_deterministic_findings(
             for ref in fact.get("evidence_refs") or []
         )
     )
+    # `inherited_target_files` 表示 Worker 验证过的全部父类，不等于这些父类一定
+    # 进入了事实。结论范围只根据最终 evidence_refs 中实际使用的父类文件计算，
+    # 避免目标类证据充足时仍声称结论覆盖了无关的 `ServiceHelper` 或 `BaseCrontab`。
+    fact_inherited_files = [
+        file_name
+        for file_name in inherited_target_files
+        if any(ref.startswith(f"{file_name}:") for ref in evidence_refs)
+    ]
     if not facts:
         return {
             "conclusion": "",
@@ -1736,6 +2557,19 @@ def build_deterministic_findings(
     uncertainties = []
     if len(facts) < 6:
         uncertainties.append("部分业务分支未在本次检索证据中完整出现，建议沿已引用文件继续核对。")
+    if explicit_topic:
+        fact_scope = "目标类及已验证直接基类" if fact_inherited_files else "目标类"
+        uncertainties.append(
+            f"上述事实来自用户显式指定的{fact_scope}及其当前证据窗口；"
+            "类外调用方、运行态数据和未展开的私有方法仍需继续核对。"
+        )
+        uncertainties.extend(
+            _requested_action_gaps(
+                lines,
+                question,
+                inherited_files=inherited_target_files,
+            )
+        )
     if topic == "美元熔断":
         conclusion_parts = []
         category_names = {str(item.get("category") or "") for item in facts}
@@ -1756,6 +2590,26 @@ def build_deterministic_findings(
         if "故障策略" in category_names:
             conclusion_parts.append("读取异常时 fail-open")
         conclusion = "已从源码确认美元熔断的业务边界：" + "；".join(conclusion_parts) + "。"
+    elif topic == "设备注册上限":
+        limit_fact = next(
+            (item for item in facts if item.get("category") == "设备注册上限"),
+            None,
+        )
+        limit_match = re.search(
+            r"=\s*(\d+)",
+            str((limit_fact or {}).get("statement") or ""),
+        )
+        category_names = {str(item.get("category") or "") for item in facts}
+        if limit_match:
+            conclusion = (
+                f"已从源码确认同一设备最多可注册 {int(limit_match.group(1))} 个用户。"
+            )
+            if "注册拦截条件" in category_names:
+                conclusion += "设备注册计数达到或超过该上限后，注册校验会拒绝继续创建账号。"
+            if "短信注册前置校验" in category_names:
+                conclusion += "发送注册短信前也会执行同类数量校验。"
+        else:
+            conclusion = "已定位设备注册控制点，但本次证据未包含明确的数值上限。"
     elif topic == "前端钻石展示":
         conclusion_parts = []
         category_names = {str(item.get("category") or "") for item in facts}
@@ -1834,7 +2688,11 @@ def build_deterministic_findings(
             conclusion_parts.append("四级以上沿用四级普通奖励模板")
         conclusion = "已从 2025 年度金主源码确认飞船商品碎片规则：" + "；".join(conclusion_parts) + "。"
     else:
-        conclusion = f"已从源码定位 {len(facts)} 条与{topic}直接相关的业务控制点，详见确定性事实。"
+        conclusion = _explicit_fact_conclusion(
+            facts,
+            explicit_classes,
+            inherited_files=fact_inherited_files,
+        )
     if topic == "钻石提现":
         uncertainties.append(
             "官方手续费的具体金额取决于用户所选渠道、结算币种和提现金额，未选择渠道时不存在唯一费用。"
@@ -1862,6 +2720,11 @@ def build_deterministic_findings(
         uncertainties.append(
             "等级 1 至 4 的商品碎片总量来自当前 2025 配置；更高等级沿用四级模板，"
             "不会随等级继续增加普通商品碎片总量。"
+        )
+    if topic == "设备注册上限":
+        uncertainties.append(
+            "该结论表示源码注册校验的上限；历史清理、设备号伪造、第三方登录异常路径"
+            "或运行态计数器修复仍需结合目标环境数据核对。"
         )
     return {
         "conclusion": conclusion,

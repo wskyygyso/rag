@@ -57,7 +57,10 @@ services:
   # 诊断 Worker：只消费 diagnosis 队列，避免被长索引任务阻塞。
   worker:
     build: .
-    command: celery -A app.worker.celery_app worker --loglevel=INFO -Q diagnosis
+    # 诊断包含大仓库源码扫描和证据关联，默认并发必须与 CPU/磁盘预算匹配。
+    # 超出容量时任务会互相拖慢并触发单任务软超时；排队时间不计入任务软超时，
+    # 因此默认 2 个执行槽比 Celery 根据 10 核自动开启 10 个进程更稳定。
+    command: celery -A app.worker.celery_app worker --loglevel=INFO -Q diagnosis --concurrency=${DIAGNOSIS_WORKER_CONCURRENCY:-2}
     env_file:
       - .env
     # 诊断 Worker 与 API 使用完全相同的项目只读视图。
@@ -80,7 +83,8 @@ services:
   # 文档索引 Worker：只消费 index 队列，可与诊断 Worker 独立扩缩容。
   index-worker:
     build: .
-    command: celery -A app.worker.celery_app worker --loglevel=INFO -Q index
+    # 文档索引与诊断相互隔离，默认单并发避免大型仓库嵌入计算争抢 CPU。
+    command: celery -A app.worker.celery_app worker --loglevel=INFO -Q index --concurrency=${INDEX_WORKER_CONCURRENCY:-1}
     env_file:
       - .env
     # 索引 Worker 使用同一只读项目视图，避免分析与索引读取不同代码快照。

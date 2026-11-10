@@ -38,12 +38,16 @@ SEMANTIC_CONCEPTS: Tuple[SemanticConcept, ...] = (
     SemanticConcept("balance", ("余额", "钱包"), ("balance", "wallet")),
     SemanticConcept("anchor", ("主播",), ("anchor",)),
     SemanticConcept("user", ("用户",), ("user",)),
+    SemanticConcept("device", ("设备", "机型"), ("device",)),
+    SemanticConcept("registration", ("注册", "开户"), ("register", "registration")),
+    SemanticConcept("account", ("账号", "账户"), ("account",)),
+    SemanticConcept("count", ("数量", "多少个", "几个", "次数"), ("count", "num")),
     SemanticConcept("region", ("区域", "地区"), ("region", "area")),
     SemanticConcept("config", ("配置",), ("config", "conf")),
     SemanticConcept("status", ("状态",), ("status",)),
     SemanticConcept(
         "limit",
-        ("上限", "下限", "限制", "阈值", "门槛", "最大", "最小"),
+        ("上限", "下限", "限制", "阈值", "门槛", "最大", "最多", "最小", "超过"),
         ("limit", "threshold", "max", "min"),
     ),
     SemanticConcept("withdrawal", ("提现",), ("withdraw",)),
@@ -137,12 +141,30 @@ def build_semantic_query_plan(
     """
     if max_code_terms < 1 or max_code_terms > 60:
         raise ValueError("语义扩展词数量必须在 1 到 60 之间")
-    seed_texts: List[str] = []
-    for hit in seed_hits[:8]:
-        content = str(hit.get("content") or "").strip()
-        if content:
-            seed_texts.append(content)
-    concepts = detect_semantic_concepts(question, *seed_texts)
+    question_concepts = list(detect_semantic_concepts(question))
+    question_concept_names = {concept.name for concept in question_concepts}
+    concepts = list(question_concepts)
+    known_names = set(question_concept_names)
+
+    # 首轮命中只能补充与问题原件已有业务概念共同出现的近义词。过去把所有
+    # 首轮命中文本放进同一个概念池，会让“每日兑换”这类通用动作命中把无关的
+    # “主播、年度、结算”概念带入未知问题，随后再被当作业务支撑。这里逐条
+    # 校验命中与问题的概念交集，且复杂问题至少要有两个原件概念共同出现。
+    required_seed_overlap = min(2, len(question_concept_names))
+    if required_seed_overlap:
+        for hit in seed_hits[:8]:
+            content = str(hit.get("content") or "").strip()
+            if not content:
+                continue
+            seed_concepts = detect_semantic_concepts(content)
+            seed_names = {concept.name for concept in seed_concepts}
+            if len(seed_names.intersection(question_concept_names)) < required_seed_overlap:
+                continue
+            for concept in seed_concepts:
+                if concept.name in known_names:
+                    continue
+                known_names.add(concept.name)
+                concepts.append(concept)
     concept_code_terms: Dict[str, List[str]] = {}
     concept_match_terms: Dict[str, List[str]] = {}
     code_terms: List[str] = []

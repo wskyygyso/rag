@@ -43,6 +43,13 @@ def _result() -> dict:
     }
 
 
+def test_default_llm_timeout_allows_slow_reasoning_response() -> None:
+    """验证默认 AI 请求等待时间覆盖推理模型和跨境网络较慢的首包。"""
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_timeout_seconds == 90
+
+
 @pytest.mark.asyncio
 async def test_llm_structured_output_and_evidence_refs_are_validated() -> None:
     """验证 Responses API 请求使用 JSON Schema 并接受有效证据引用。"""

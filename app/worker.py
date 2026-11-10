@@ -1,12 +1,15 @@
 """Celery Worker、任务队列和诊断执行流程。"""
 
 import logging
+import re
+import time
+from typing import Optional
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from celery import Celery
 
 from app.task_store import clear_task_evidence, create_pool, get_task, insert_evidence, update_task
-from app.task_store import replace_symbol_index
+from app.task_store import replace_symbol_index_if_changed
 from app.business_analysis import build_deterministic_findings
 from app.document_index import run_document_index_chunks
 from app.settings import get_settings
@@ -15,10 +18,9 @@ from app.code_tools import (
     extract_generic_anchors,
     extract_search_queries,
     read_file,
-    search_code,
     search_code_terms,
 )
-from app.php_index import index_repository, trace_index_call_chain
+from app.php_index import trace_index_call_chain
 from app.query_understanding import (
     annotate_hits_with_concepts,
     build_semantic_query_plan,
@@ -31,6 +33,7 @@ from app.retrieval_planner import (
     rank_discovery_hits,
     select_semantic_hits,
 )
+from app.project_index_cache import load_project_symbol_index
 from app.llm_diagnosis import count_available_evidence, generate_ai_diagnosis_cached
 from app.reporting import build_assessment
 from app.symbol_tools import select_call_chain_entries, summarize_symbol_index
@@ -48,6 +51,314 @@ MAX_DIAGNOSTIC_EVIDENCE = 64
 # 为同类业务文件保留足够候选。最终进入证据表的仍会压缩到
 # `MAX_DIAGNOSTIC_EVIDENCE`，因此提高召回上限不会同比放大 LLM 上下文。
 MAX_GENERIC_HITS = 200
+
+# 精确检索在完成动态符号发现后一次批量执行。五百条只用于候选排序，最终仍会
+# 压缩到 `MAX_DIAGNOSTIC_EVIDENCE`；批量上限同时受底层代码工具约束，避免
+# 对挂载磁盘进行与检索词数量相同的重复全仓扫描。
+MAX_TERM_SEARCH_HITS = 500
+
+# 显式类问题经常把主流程留给父类实现。这里只读取 `extends` 声明的父类名，
+# 再回到现有符号索引定位定义文件，不保存任何项目类名或继承关系映射。
+_PARENT_CLASS_PATTERN = re.compile(
+    r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\s+extends\s+([A-Za-z_][A-Za-z0-9_\\]*)"
+)
+
+
+def _explicit_symbol_queries(queries: list[str]) -> list[str]:
+    """筛选问题中可用于源码验证的显式类、方法或配置标识。
+
+    参数:
+        - `queries`：`extract_search_queries` 从用户问题提取的英文标识和中文
+          业务词，类型为 `list[str]`。
+
+    Returns:
+        保持原顺序的显式符号候选。带 `::`、点号配置键、下划线或明显类名的
+        标识会进入首轮精确检索；`API`、`SQL`、`Redis` 等常见技术缩写不单独
+        作为业务类名，避免用户问 Redis key 时把整个缓存层当作目标入口。
+    """
+    common_tokens = {
+        "API", "HTTP", "HTTPS", "ID", "JSON", "PHP", "REDIS", "SQL", "URL",
+        "UUID", "YAML",
+    }
+    result = []
+    for value in queries:
+        query = str(value or "").strip()
+        if not query:
+            continue
+        if "::" in query or "." in query or "_" in query:
+            result.append(query)
+            continue
+        if (
+            query[0].isupper()
+            and len(query) >= 4
+            and query.upper() not in common_tokens
+            and not query.isupper()
+        ):
+            result.append(query)
+    return list(dict.fromkeys(result))
+
+
+def _tag_initial_retrieval_stage(
+    item: dict,
+    generic_anchors: list[str],
+    explicit_symbols: list[str],
+) -> str:
+    """根据首轮实际命中的词标记源码候选来源。
+
+    参数:
+        - `item`：`search_code_terms` 返回的单条源码命中，包含
+          `matched_queries`，类型为 `dict`。
+        - `generic_anchors`：问题生成的中文业务片段，类型为 `list[str]`。
+        - `explicit_symbols`：问题中提取的类、方法或配置标识，类型为
+          `list[str]`。
+
+    Returns:
+        `business_anchor`、`explicit_symbol` 或空字符串。中文业务锚点和显式
+        符号同时命中时优先标记业务锚点，以保留问题原句与源码注释之间的直接
+        联系；标记只描述检索来源，不代表业务结论。
+    """
+    matched = {str(value) for value in item.get("matched_queries") or []}
+    anchor_set = set(generic_anchors)
+    if any(len(value) >= 4 and value in anchor_set for value in matched):
+        return "business_anchor"
+    if matched.intersection(explicit_symbols):
+        return "explicit_symbol"
+    return ""
+
+
+def _path_scope_tokens(file_path: str) -> set[str]:
+    """提取源码路径中可用于消歧的业务目录词。
+
+    参数:
+        - `file_path`：项目内相对路径，类型为 `str`。
+
+    Returns:
+        长度至少为四的小写路径片段。`php`、`service`、`logic` 等通用目录不参与
+        同名类消歧，避免所有候选获得相同分值。
+    """
+    ignored = {
+        "action", "admin", "boot", "common", "config", "controller", "entity",
+        "logic", "miyouactivity", "miyouadmin", "miyouphp", "model", "service",
+        "services", "static", "utils",
+    }
+    return {
+        part.casefold()
+        for part in re.split(r"[/\\]", file_path)
+        if len(part) >= 4 and part.casefold() not in ignored
+    }
+
+
+def _select_explicit_target_files(
+    project_index: dict,
+    evidence: list[dict],
+    explicit_symbols: list[str],
+    question: str,
+) -> list[str]:
+    """在同名类或同名方法之间确定本次问题指向的真实文件。
+
+    参数:
+        - `project_index`：当前项目完整符号索引，包含类名、文件路径和定义行。
+        - `evidence`：首轮通用锚点、精确符号和语义扩展证据，类型为 `list[dict]`。
+        - `explicit_symbols`：问题中提取的类、方法或配置标识，类型为 `list[str]`。
+        - `question`：用户原始业务问题，类型为 `str`；其中的非类名英文目录词用于
+          直接消歧，例如 `PatronCharge` 可以排除另一个 `SettlementService`。
+
+    Returns:
+        按证据排序确定的目标类文件列表。问题给出目录词时优先匹配路径；没有目录
+        词时比较各候选与高排名精确符号命中的路径重合度。无法唯一判断时保留并列
+        候选，不凭空选择其中一个同名实现。
+    """
+    class_symbols = [
+        (str(symbol.get("symbol_name") or ""), str(symbol.get("file") or ""))
+        for symbol in project_index.get("symbols") or []
+        if str(symbol.get("symbol_type") or "") in {"class", "interface", "trait"}
+        and symbol.get("symbol_name")
+        and symbol.get("file")
+    ]
+    if not class_symbols or not explicit_symbols:
+        return []
+    requested_classes = {
+        name
+        for name, _ in class_symbols
+        if name in explicit_symbols
+        or any(symbol.startswith(f"{name}::") for symbol in explicit_symbols)
+    }
+    candidates = sorted({file_path for name, file_path in class_symbols if name in requested_classes})
+    if len(candidates) <= 1:
+        return candidates
+
+    common_tokens = {
+        "API", "HTTP", "HTTPS", "ID", "JSON", "PHP", "REDIS", "SQL", "URL",
+        "UUID", "YAML",
+    }
+    scope_terms = [
+        value
+        for value in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", question)
+        if value not in requested_classes and value.upper() not in common_tokens
+    ]
+    if scope_terms:
+        scoped = [
+            file_path
+            for file_path in candidates
+            if any(term.casefold() in file_path.casefold() for term in scope_terms)
+        ]
+        if scoped:
+            return scoped
+
+    candidate_tokens = {
+        file_path: _path_scope_tokens(file_path)
+        for file_path in candidates
+    }
+    scores = {file_path: 0 for file_path in candidates}
+    for order, item in enumerate(evidence):
+        file_path = str(item.get("file") or "")
+        is_explicit = item.get("retrieval_stage") == "explicit_symbol" or any(
+            str(item.get("query") or "").startswith(f"{name}::") or item.get("query") == name
+            for name in requested_classes
+        )
+        if not file_path or not is_explicit:
+            continue
+        try:
+            rank = int(item.get("generic_rank", order))
+        except (TypeError, ValueError):
+            rank = order
+        weight = max(1, 80 - rank)
+        hit_tokens = _path_scope_tokens(file_path)
+        for candidate in candidates:
+            if candidate == file_path:
+                scores[candidate] += weight * 8
+                continue
+            scores[candidate] += len(candidate_tokens[candidate].intersection(hit_tokens)) * weight
+    highest = max(scores.values(), default=0)
+    if highest <= 0:
+        return candidates
+    return [file_path for file_path in candidates if scores[file_path] == highest]
+
+
+def _focus_explicit_target_evidence(
+    evidence: list[dict],
+    target_files: list[str],
+    explicit_symbols: list[str],
+) -> list[dict]:
+    """移除其他模块中与目标类同名的证据，同时保留配置和调用链旁证。
+
+    参数:
+        - `evidence`：已排序的诊断证据，类型为 `list[dict]`。
+        - `target_files`：`_select_explicit_target_files` 确认的目标类文件。
+        - `explicit_symbols`：问题中的显式标识，用于识别需要消歧的类文件名。
+
+    Returns:
+        目标文件仍处于靠前位置，且其他模块同名类文件被排除的证据列表。不同文件名
+        的调用方、配置定义和辅助服务不会被删除。
+    """
+    if not target_files:
+        return evidence
+    target_set = set(target_files)
+    target_stems = {
+        file_path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0].casefold()
+        for file_path in target_files
+    }
+    requested_stems = {
+        value.split("::", 1)[0].casefold()
+        for value in explicit_symbols
+        if value
+    }
+    conflicting_stems = target_stems.intersection(requested_stems)
+    focused = []
+    for item in evidence:
+        file_path = str(item.get("file") or "")
+        normalized = file_path.replace("\\", "/")
+        stem = normalized.rsplit("/", 1)[-1].rsplit(".", 1)[0].casefold()
+        if stem in conflicting_stems and file_path not in target_set:
+            continue
+        focused.append(item)
+    focused.sort(key=lambda item: (0 if str(item.get("file") or "") in target_set else 1))
+    return focused
+
+
+def _inherited_class_evidence(
+    root: str,
+    project: str,
+    project_index: dict,
+    target_files: list[str],
+    limit: int = 1,
+) -> list[dict]:
+    """沿显式目标类的 `extends` 声明补充直接基类定义证据。
+
+    参数:
+        - `root`：所有项目仓库的白名单根目录，类型为 `str`。
+        - `project`：当前诊断项目标识，类型为 `str`。
+        - `project_index`：当前项目完整符号索引，包含类名、文件和定义行。
+        - `target_files`：问题显式指向的类文件，类型为 `list[str]`。
+        - `limit`：最多补充的基类层数和文件数，类型为 `int`；默认只补充直接
+          基类，避免通用基础设施父类把业务类事实挤出证据窗口。
+
+    Returns:
+        每个直接基类的一条类定义证据，并携带 `hierarchy_of` 和
+        `hierarchy_depth` 供最终证据预算识别。父类同名定义无法唯一判断或源文件
+        读取失败时停止该分支，不猜测同名类的模块归属。
+    """
+    if limit < 1 or limit > 12:
+        raise ValueError("继承层级证据数量必须在 1 到 12 之间")
+    class_symbols = [
+        symbol
+        for symbol in project_index.get("symbols") or []
+        if str(symbol.get("symbol_type") or "") in {"class", "interface", "trait"}
+        and symbol.get("symbol_name")
+        and symbol.get("file")
+    ]
+    by_name: dict[str, list[dict]] = {}
+    for symbol in class_symbols:
+        by_name.setdefault(str(symbol["symbol_name"]), []).append(symbol)
+
+    evidence = []
+    seen_files = set()
+    queue = [(file_name, 0, "") for file_name in target_files]
+    while queue and len(evidence) < limit:
+        current_file, depth, child_name = queue.pop(0)
+        if not current_file or depth >= limit or current_file in seen_files:
+            continue
+        seen_files.add(current_file)
+        try:
+            context = read_file(root, project, current_file, 1, 160)
+        except CodeToolError:
+            continue
+        parent_match = _PARENT_CLASS_PATTERN.search(str(context.get("content") or ""))
+        if parent_match is None:
+            continue
+        parent_name = parent_match.group(1).replace("\\", "/").rsplit("/", 1)[-1]
+        candidates = by_name.get(parent_name) or []
+        if not candidates:
+            continue
+        child_repository = current_file.replace("\\", "/").split("/", 1)[0]
+        same_repository = [
+            item
+            for item in candidates
+            if str(item.get("file") or "").replace("\\", "/").split("/", 1)[0]
+            == child_repository
+        ]
+        selected_pool = same_repository or candidates
+        selected_files = {str(item.get("file") or "") for item in selected_pool}
+        if len(selected_files) != 1:
+            continue
+        parent_symbol = selected_pool[0]
+        parent_file = str(parent_symbol.get("file") or "")
+        parent_line = int(parent_symbol.get("line") or 0)
+        if not parent_file or parent_line < 1:
+            continue
+        evidence.append(
+            {
+                "type": "symbol",
+                "query": parent_name,
+                "file": parent_file,
+                "line": parent_line,
+                "content": f"{parent_name} 父类定义",
+                "hierarchy_of": child_name or current_file,
+                "hierarchy_depth": depth + 1,
+            }
+        )
+        queue.append((parent_file, depth + 1, parent_name))
+    return evidence
 
 
 def _merge_semantic_hits(*groups: list[dict]) -> list[dict]:
@@ -281,6 +592,7 @@ def _select_diagnostic_evidence(
     evidence: list[dict],
     queries: list[str],
     limit: int = MAX_DIAGNOSTIC_EVIDENCE,
+    priority_files: Optional[list[str]] = None,
 ) -> list[dict]:
     """在证据总量上限内优先保留通用发现和每个检索词的确定性命中。
 
@@ -290,6 +602,8 @@ def _select_diagnostic_evidence(
         - `queries`：本次领域词、通用片段和符号规划器生成的检索词，类型为
           `list[str]`；用于保证关键方法不会因同一目录文件过多而被截断。
         - `limit`：最终进入上下文扩展的证据条数，类型为 `int`。
+        - `priority_files`：问题显式指向的类文件，类型为 `list[str] | None`；
+          这些文件中的类声明和规则实现会先进入证据窗口。
 
     Returns:
         保持原有相关度顺序的去重证据列表。先保留高可信通用片段以覆盖业务配置，
@@ -333,6 +647,30 @@ def _select_diagnostic_evidence(
         append(item)
         generic_count += 1
         return True
+
+    # 显式目标类文件是回答“这个类具体做什么”的主证据。先保留其中的类声明、
+    # 条件和业务动作，再由通用片段补充配置与跨文件旁证；同名类或泛化文案不会
+    # 再把真正实现挤出最终证据窗口。
+    priority_file_set = set(priority_files or [])
+    priority_count = 0
+    for item in evidence:
+        if str(item.get("file") or "") not in priority_file_set:
+            continue
+        append(item)
+        priority_count += 1
+        if priority_count >= 24 or len(selected) >= limit:
+            break
+
+    # 直接基类可能承载模板方法、保留期和实际删除/过期动作。它只占少量独立
+    # 预算，既不会替代显式目标类，也不会因为父类文件没有命中原始问题词而丢失。
+    hierarchy_count = 0
+    for item in evidence:
+        if not item.get("hierarchy_of"):
+            continue
+        append(item)
+        hierarchy_count += 1
+        if hierarchy_count >= 6 or len(selected) >= limit:
+            break
 
     # 第一层保留问题原句直接命中的四字以上业务锚点，最多十八条。等级配置、
     # 页面入口和业务注释往往都落在这里，优先级高于跨语言概念候选。
@@ -424,7 +762,10 @@ def _select_diagnostic_evidence(
             append(symbol_definition)
             continue
         for item in evidence:
-            if str(item.get("query") or "") == query:
+            if (
+                str(item.get("query") or "") == query
+                or query in (item.get("matched_queries") or [])
+            ):
                 append(item)
                 break
 
@@ -558,6 +899,145 @@ def _is_config_definition_match(query: str, match: dict) -> bool:
     if "=>" not in content:
         return False
     return f"'{term}'" in content or f'"{term}"' in content
+
+
+_CONFIG_ACCESS_PATTERN = re.compile(
+    r"\bConfig\s*::\s*get\s*\(\s*(['\"])(?P<key>[A-Za-z_][A-Za-z0-9_.]*)\1"
+)
+
+
+def _config_keys_from_hits(hits: list[dict], limit: int = 12) -> list[str]:
+    """从已召回源码及其上下文中提取真实读取的 PHP 配置键。
+
+    参数:
+        - `hits`：首轮通用检索和概念检索命中，类型为 `list[dict]`。每项可包含
+          命中行 `content` 与相邻源码 `context`；配置读取通常位于日志命中的前
+          一行，因此两者都必须扫描。
+        - `limit`：最多返回的配置键数量，类型为 `int`。限制用于避免大型仓库中
+          的配置读取占满后续精确检索预算。
+
+    Returns:
+        按源码出现顺序去重的完整点号配置键。这里只提取 `Config::get()` 的参数，
+        不会把同名数组字段或普通字符串当成配置，也不能证明配置最终值；调用方
+        仍需搜索定义文件并读取真实数字或布尔值。
+    """
+    if limit < 1 or limit > 40:
+        raise ValueError("配置键数量必须在 1 到 40 之间")
+    keys: list[str] = []
+    for hit in hits:
+        source = "\n".join(
+            str(hit.get(field) or "") for field in ("content", "context")
+        )
+        for match in _CONFIG_ACCESS_PATTERN.finditer(source):
+            key = match.group("key")
+            if key not in keys:
+                keys.append(key)
+            if len(keys) >= limit:
+                return keys
+    return keys
+
+
+def _nearby_hit_contexts(
+    root: str,
+    project: str,
+    hits: list[dict],
+    limit: int = 8,
+) -> list[dict]:
+    """为高排名命中读取命中行附近的只读源码窗口。
+
+    参数:
+        - `root`：被诊断仓库的白名单根目录，类型为 `str`。
+        - `project`：当前项目标识，类型为 `str`。
+        - `hits`：已经按业务相关度排序的首轮命中，类型为 `list[dict]`。
+        - `limit`：最多读取的不同命中数量，类型为 `int`。只读取优先候选，避免
+          为大型仓库的每条搜索结果额外做文件 I/O。
+
+    Returns:
+        命中对象副本列表，每项增加命中行前 4 行到后 12 行的 `context`。读取失败
+        的文件会保留原命中并跳过扩展，不能因为一个不可读文件中断整个诊断。
+    """
+    if limit < 1 or limit > 24:
+        raise ValueError("命中上下文数量必须在 1 到 24 之间")
+    enriched: list[dict] = []
+    for hit in hits[:limit]:
+        item = dict(hit)
+        file_name = str(item.get("file") or "")
+        line_number = int(item.get("line") or 0)
+        if file_name and line_number > 0:
+            try:
+                source = read_file(
+                    root,
+                    project,
+                    file_name,
+                    start_line=max(1, line_number - 4),
+                    end_line=line_number + 12,
+                )
+                item["context"] = source.get("content") or ""
+            except (CodeToolError, OSError, ValueError):
+                pass
+        enriched.append(item)
+    return enriched
+
+
+def _search_query_evidence(
+    root: str,
+    project: str,
+    queries: list[str],
+    config_definition_query_terms: list[str],
+) -> list[dict]:
+    """一次性检索全部规划词并转换为可审计的代码命中。
+
+    参数:
+        - `root`：所有项目仓库的白名单根目录，类型为 `str`。
+        - `project`：当前诊断项目标识，类型为 `str`。
+        - `queries`：动态发现和配置规划后的完整检索词，类型为 `list[str]`。
+        - `config_definition_query_terms`：需要优先识别配置定义行的末级字段名，
+          类型为 `list[str]`。
+
+    Returns:
+        与旧逐词搜索结构兼容的命中列表。每项保留所有实际命中的检索词，并以
+        规划顺序最早的一项作为 `query`；配置定义命中会显式标记类型。一次批量
+        扫描只改变 I/O 次数，不改变源码证据内容和最终候选上限。
+    """
+    ordered_queries = list(dict.fromkeys(str(query).strip() for query in queries if str(query).strip()))
+    if not ordered_queries:
+        return []
+    query_order = {query: index for index, query in enumerate(ordered_queries)}
+    config_query_set = set(config_definition_query_terms)
+    result = search_code_terms(
+        root,
+        project,
+        ordered_queries,
+        max_results=MAX_TERM_SEARCH_HITS,
+        # 精确符号和配置检索必须留在源码与配置范围内。业务文档只由前面的通用
+        # 发现阶段召回，不能让说明文档在这里替代真实实现证据。
+        extensions=[".php", ".inc", ".phtml", ".conf", ".ini", ".yaml", ".yml", ".json"],
+    )
+    evidence = []
+    for match in result.get("matches") or []:
+        matched_queries = [
+            str(value)
+            for value in match.get("matched_queries") or []
+            if str(value) in query_order
+        ]
+        matched_queries.sort(key=lambda value: query_order[value])
+        if not matched_queries:
+            continue
+        config_matches = [
+            query
+            for query in matched_queries
+            if query in config_query_set and _is_config_definition_match(query, match)
+        ]
+        evidence.append(
+            {
+                "type": "config_definition" if config_matches else "code",
+                "project": project,
+                "query": (config_matches or matched_queries)[0],
+                "matched_queries": matched_queries,
+                **{key: value for key, value in match.items() if key != "matched_queries"},
+            }
+        )
+    return evidence
 
 
 def _call_chain_evidence(call_chains: list[dict], limit: int = 48) -> list[dict]:
@@ -755,6 +1235,10 @@ async def _execute_diagnosis(task_id: str) -> None:
         # 项目名已由任务字段单独限定，继续把 waky6 当作代码关键词只会召回
         # 文档和部署文件；若问题只有项目名，则保留原词以维持可解释性。
         queries = [item for item in queries if item != current["project"]] or queries
+        explicit_symbols = _explicit_symbol_queries(queries)
+        verified_explicit_symbols: list[str] = []
+        explicit_target_files: list[str] = []
+        inherited_target_files: list[str] = []
         evidence = []
         warnings = []
         generic_anchors = extract_generic_anchors(current["question"])
@@ -771,23 +1255,53 @@ async def _execute_diagnosis(task_id: str) -> None:
         config_definition_query_terms: list[str] = []
         project_index = {"symbols": [], "references": [], "configs": [], "sql": []}
         index_ready = False
+        index_prepare_summary: dict = {
+            "cache_status": "not_requested",
+            "cache_wait_ms": 0.0,
+            "build_ms": 0.0,
+        }
+        term_search_summary: dict = {
+            "mode": "batch",
+            "query_count": 0,
+            "match_count": 0,
+            "elapsed_ms": 0.0,
+        }
+        symbol_sync_summary: dict = {"updated": False, "symbol_count": 0}
         try:
             initial_result = search_code_terms(
                 settings.code_repositories_root,
                 current["project"],
-                generic_anchors,
+                list(dict.fromkeys([*generic_anchors, *explicit_symbols])),
                 max_results=MAX_GENERIC_HITS,
             )
             initial_generic_hits = rank_discovery_hits(
                 [
-                    {**item, "retrieval_stage": "business_anchor"}
+                    {
+                        **item,
+                        "retrieval_stage": stage,
+                    }
                     for item in initial_result["matches"]
+                    if (
+                        stage := _tag_initial_retrieval_stage(
+                            item,
+                            generic_anchors,
+                            explicit_symbols,
+                        )
+                    )
                 ],
                 limit=MAX_GENERIC_HITS,
             )
+            verified_explicit_symbols = [
+                symbol
+                for symbol in explicit_symbols
+                if any(
+                    symbol in (item.get("matched_queries") or [])
+                    for item in initial_result["matches"]
+                )
+            ]
             preferred_repository = infer_preferred_repository(initial_generic_hits)
         except (CodeToolError, ValueError) as exc:
-            warnings.append(f"中文业务锚点检索降级: {exc}")
+            warnings.append(f"业务锚点和显式符号检索降级: {exc}")
 
         # 问题中的业务名词决定“要找什么”，首轮高质量命中补充代码实际使用的
         # 同义词。这里只生成可组合概念词，不再把完整问句绑定到某个项目符号。
@@ -827,18 +1341,26 @@ async def _execute_diagnosis(task_id: str) -> None:
             limit=MAX_GENERIC_HITS,
             preferred_repository=preferred_repository,
         )
-        explicit_symbols = [
-            query
-            for query in queries
-            if "::" in query or "_" in query or any(char.isupper() for char in query)
-        ]
         support = assess_retrieval_support(
             ranked_generic_hits,
             semantic_plan.get("concepts") or {},
-            explicit_symbols=explicit_symbols,
+            explicit_symbols=verified_explicit_symbols,
         )
         if support["grounded"]:
             generic_hits = select_semantic_hits(ranked_generic_hits, limit=36)
+            # 首轮命中可能只是“发送短信失败”日志，而真正的配置键在相邻的
+            # `Config::get()` 行。先从证据上下文提取真实配置读取，再交给索引
+            # 发现补充符号；这样配置值不会因为日志行不含键名而被漏掉。
+            config_definition_query_terms = config_definition_terms(
+                _config_keys_from_hits(
+                    _nearby_hit_contexts(
+                        settings.code_repositories_root,
+                        current["project"],
+                        generic_hits,
+                    )
+                ),
+                limit=8,
+            )
         else:
             # 没有可靠业务锚点时继续做符号发现，会把整个仓库的通用词、测试和
             # 后台页面连成一条虚假调用链。这里明确停止扩展，只保留后续的原始
@@ -858,10 +1380,17 @@ async def _execute_diagnosis(task_id: str) -> None:
 
         if support["grounded"]:
             try:
-                project_index = index_repository(
-                    settings.code_repositories_root,
-                    current["project"],
+                index_result = await load_project_symbol_index(
+                    root=settings.code_repositories_root,
+                    project=current["project"],
+                    redis_url=settings.redis_url,
+                    cache_enabled=settings.project_index_cache_enabled,
+                    cache_ttl_seconds=settings.project_index_cache_ttl_seconds,
+                    lock_ttl_seconds=settings.project_index_build_lock_seconds,
+                    wait_timeout_seconds=settings.project_index_wait_timeout_seconds,
                 )
+                project_index = index_result.index
+                index_prepare_summary = index_result.audit_dict()
                 index_ready = True
                 discovery_plan = discover_related_queries(
                     project_index,
@@ -872,10 +1401,17 @@ async def _execute_diagnosis(task_id: str) -> None:
                 )
                 discovery_plan["mode"] = "semantic_discovery"
                 discovered_query_set = set(discovery_plan["queries"])
-                config_definition_query_terms = config_definition_terms(
-                    str(item.get("key") or "")
-                    for item in project_index.get("configs") or []
-                    if str(item.get("key") or "") in discovered_query_set
+                config_definition_query_terms = list(
+                    dict.fromkeys(
+                        [
+                            *config_definition_query_terms,
+                            *config_definition_terms(
+                                str(item.get("key") or "")
+                                for item in project_index.get("configs") or []
+                                if str(item.get("key") or "") in discovered_query_set
+                            ),
+                        ]
+                    )
                 )
                 # 完整配置键负责证明“代码读取了该配置”，末级字段名负责回到配置
                 # 定义处读取真实值。两者都来自索引发现的配置键，不包含完整问题
@@ -889,7 +1425,7 @@ async def _execute_diagnosis(task_id: str) -> None:
                         ]
                     )
                 )[:36]
-            except (CodeToolError, ValueError) as exc:
+            except (CodeToolError, OSError, ValueError) as exc:
                 warnings.append(f"符号索引发现降级: {exc}")
         evidence.extend(
             {
@@ -902,25 +1438,28 @@ async def _execute_diagnosis(task_id: str) -> None:
             }
             for rank, item in enumerate(generic_hits)
         )
-        for query in queries:
-            try:
-                search_result = search_code(settings.code_repositories_root, current["project"], query)
-                evidence.extend(
-                    {
-                        "type": (
-                            "config_definition"
-                            if query in config_definition_query_terms
-                            and _is_config_definition_match(query, match)
-                            else "code"
-                        ),
-                        "project": current["project"],
-                        "query": query,
-                        **match,
-                    }
-                    for match in search_result["matches"]
-                )
-            except CodeToolError as exc:
-                warnings.append(str(exc))
+        term_search_started_at = time.perf_counter()
+        try:
+            query_evidence = _search_query_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                queries,
+                config_definition_query_terms,
+            )
+            evidence.extend(query_evidence)
+            term_search_summary.update(
+                {
+                    "query_count": len(list(dict.fromkeys(queries))),
+                    "match_count": len(query_evidence),
+                }
+            )
+        except CodeToolError as exc:
+            warnings.append(str(exc))
+        finally:
+            term_search_summary["elapsed_ms"] = round(
+                (time.perf_counter() - term_search_started_at) * 1000,
+                2,
+            )
         evidence.extend(
             {"project": current["project"], **item}
             for item in _symbol_evidence(project_index, queries)
@@ -946,12 +1485,39 @@ async def _execute_diagnosis(task_id: str) -> None:
                 warnings.append(f"调用链证据补全降级: {exc}")
         evidence = annotate_hits_with_concepts(evidence, concept_match_terms)
         deduplicated = _deduplicate_evidence(evidence)
+        explicit_target_files = _select_explicit_target_files(
+            project_index,
+            deduplicated,
+            explicit_symbols,
+            current["question"],
+        )
+        deduplicated = _focus_explicit_target_evidence(
+            deduplicated,
+            explicit_target_files,
+            explicit_symbols,
+        )
+        try:
+            inherited_evidence = _inherited_class_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                project_index,
+                explicit_target_files,
+            )
+            deduplicated.extend(inherited_evidence)
+            inherited_target_files = [
+                str(item.get("file") or "")
+                for item in inherited_evidence
+                if item.get("file")
+            ]
+        except (CodeToolError, ValueError) as exc:
+            warnings.append(f"继承层级证据补全降级: {exc}")
         deduplicated.sort(key=_evidence_relevance)
         if support["grounded"]:
             deduplicated = _select_diagnostic_evidence(
                 deduplicated,
                 queries,
                 MAX_DIAGNOSTIC_EVIDENCE,
+                explicit_target_files,
             )
         else:
             deduplicated = []
@@ -980,7 +1546,12 @@ async def _execute_diagnosis(task_id: str) -> None:
             try:
                 if not index_ready:
                     raise CodeToolError("PHP 符号索引未成功建立")
-                await replace_symbol_index(pool, current["project"], project_index)
+                symbol_sync_summary = await replace_symbol_index_if_changed(
+                    pool,
+                    current["project"],
+                    index_prepare_summary["fingerprint"],
+                    project_index,
+                )
                 symbol_summary = summarize_symbol_index(
                     project_index,
                     current["project"],
@@ -1027,11 +1598,18 @@ async def _execute_diagnosis(task_id: str) -> None:
                 "preferred_repository": preferred_repository,
                 "semantic_concepts": semantic_plan.get("concepts") or {},
                 "semantic_code_terms": semantic_plan.get("code_terms") or [],
+                "explicit_symbols": explicit_symbols,
+                "verified_explicit_symbols": verified_explicit_symbols,
+                "explicit_target_files": explicit_target_files,
+                "inherited_target_files": list(dict.fromkeys(inherited_target_files)),
                 "config_definition_queries": config_definition_query_terms,
                 "discovered_queries": discovery_plan.get("queries") or [],
                 "discovery_sources": discovery_plan.get("sources") or [],
                 "retrieval_mode": discovery_plan.get("mode") or "semantic_discovery",
                 "retrieval_support": support,
+                "project_index": index_prepare_summary,
+                "term_search": term_search_summary,
+                "symbol_persistence": symbol_sync_summary,
             },
             "evidence": deduplicated,
             "symbols": symbol_summary["symbols"],

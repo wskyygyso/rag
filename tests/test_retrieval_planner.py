@@ -46,6 +46,27 @@ def test_retrieval_support_accepts_direct_business_anchor() -> None:
     assert support["direct_anchor_count"] == 1
 
 
+def test_retrieval_support_rejects_generic_four_character_action_anchor() -> None:
+    """验证“每日兑换”等通用动作锚点不能证明未知业务实体存在。"""
+    support = assess_retrieval_support(
+        [
+            {
+                "file": "php/action/FamilyJourneyControl.php",
+                "line": 1039,
+                "content": "//每日兑换次数统计",
+                "matched_queries": ["每日兑换", "每日"],
+                "matched_concepts": ["daily", "exchange"],
+                "retrieval_stage": "business_anchor",
+            }
+        ],
+        {"daily", "limit", "exchange"},
+    )
+
+    assert support["grounded"] is False
+    assert support["direct_anchor_count"] == 0
+    assert support["rejected_generic_anchor_count"] == 1
+
+
 def test_retrieval_support_stops_when_only_generic_concepts_cooccur() -> None:
     """验证“用户 + 阈值”不能冒充风控冻结阈值并触发全仓扩展。"""
     support = assess_retrieval_support(
@@ -86,6 +107,46 @@ def test_retrieval_support_accepts_extensible_domain_concept_cooccurrence() -> N
 
     assert support["grounded"] is True
     assert support["level"] == "semantic_concepts"
+
+
+def test_retrieval_support_requires_registration_when_device_and_count_are_present() -> None:
+    """验证“同一设备 + 数量”不能替代设备注册业务对象。"""
+    support = assess_retrieval_support(
+        [
+            {
+                "file": "php/model/TaskModel.php",
+                "line": 574,
+                "content": "// 是否同一设备超过X个uid",
+                "matched_queries": ["同一设备", "设备"],
+                "matched_concepts": ["device", "limit", "user", "count"],
+                "retrieval_stage": "business_anchor",
+            }
+        ],
+        {"device", "registration", "count", "limit", "user"},
+    )
+
+    assert support["grounded"] is False
+    assert support["required_domain_coverage"] == 2
+
+
+def test_retrieval_support_accepts_device_registration_cooccurrence() -> None:
+    """验证设备与注册动作在同一源码窗口共现后可进入证据补全。"""
+    support = assess_retrieval_support(
+        [
+            {
+                "file": "php/api/sendCode.php",
+                "line": 52,
+                "content": "device registered users exceeds the limit",
+                "matched_queries": ["device", "register", "count", "limit"],
+                "matched_concepts": ["device", "registration", "count", "limit", "user"],
+                "retrieval_stage": "concept_expansion",
+            }
+        ],
+        {"device", "registration", "count", "limit", "user"},
+    )
+
+    assert support["grounded"] is True
+    assert support["best_domain_coverage"] == 2
 
 
 def test_rank_discovery_hits_prefers_business_source_over_language_pack() -> None:
@@ -238,6 +299,30 @@ def test_select_semantic_hits_keeps_each_concept_representative() -> None:
         "php/AnchorModel.php",
         "php/Page.php",
     }
+
+
+def test_select_semantic_hits_preserves_verified_explicit_symbol() -> None:
+    """验证没有中文注释的显式类声明不会被概念覆盖阈值挤出候选。"""
+    explicit = {
+        "file": "php/services/UserScoreService.php",
+        "line": 12,
+        "content": "class UserScoreService extends ServiceHelper",
+        "matched_queries": ["UserScoreService"],
+        "matched_concepts": [],
+        "retrieval_stage": "explicit_symbol",
+    }
+    generic = {
+        "file": "php/services/OtherService.php",
+        "line": 20,
+        "content": "user score limit",
+        "matched_queries": ["user", "score", "limit"],
+        "matched_concepts": ["user", "limit"],
+        "retrieval_stage": "concept_expansion",
+    }
+
+    selected = select_semantic_hits([explicit, generic], limit=1)
+
+    assert selected == [explicit]
 
 
 def test_select_semantic_hits_reserves_direct_business_anchor() -> None:

@@ -60,6 +60,18 @@ CREATE TABLE IF NOT EXISTS code_symbols (
 )
 """
 
+CREATE_PROJECT_SYMBOL_INDEXES_SQL = """
+CREATE TABLE IF NOT EXISTS project_symbol_indexes (
+    project VARCHAR(100) PRIMARY KEY,
+    repository_fingerprint CHAR(64) NOT NULL,
+    symbol_count INT NOT NULL CHECK (symbol_count >= 0),
+    reference_count INT NOT NULL CHECK (reference_count >= 0),
+    config_count INT NOT NULL CHECK (config_count >= 0),
+    sql_count INT NOT NULL CHECK (sql_count >= 0),
+    indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
 CREATE_VALIDATION_AUDIT_SQL = """
 CREATE TABLE IF NOT EXISTS validation_audit (
     id BIGSERIAL PRIMARY KEY,
@@ -244,6 +256,7 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         )
         await connection.execute(CREATE_EVIDENCE_SQL)
         await connection.execute(CREATE_SYMBOLS_SQL)
+        await connection.execute(CREATE_PROJECT_SYMBOL_INDEXES_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_SQL)
         await connection.execute(CREATE_VALIDATION_AUDIT_INDEX_SQL)
         await connection.execute(CREATE_FEEDBACK_SQL)
@@ -704,6 +717,69 @@ async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, 
     )
 
 
+async def _replace_symbol_index_in_transaction(
+    connection: Any,
+    project: str,
+    index: Dict[str, Any],
+) -> int:
+    """在调用方事务内批量替换项目符号，不自行提交或回滚。
+
+    参数:
+        - `connection`：已经进入事务的 asyncpg 连接或测试替身。
+        - `project`：项目标识，类型为 `str`。
+        - `index`：项目代码或符号索引，类型为 `Dict[str, Any]`。
+
+    Returns:
+        写入的符号数量。大型项目的索引通常包含数万符号和引用，逐条 `execute`
+        会产生数万次数据库往返；这里使用每批 1000 条 `executemany`，同时保持
+        单事务原子替换，失败时不会留下半份索引。
+    """
+    symbols = index.get("symbols", [])
+    references = index.get("references", [])
+    references_by_source: Dict[str, list] = {}
+    for reference in references:
+        source = reference.get("source")
+        if source:
+            references_by_source.setdefault(source, []).append(reference)
+    await connection.execute("DELETE FROM code_symbols WHERE project = $1", project)
+    batch = []
+    for symbol in symbols:
+        batch.append(
+            (
+                project,
+                symbol["symbol_type"],
+                symbol["symbol_name"],
+                symbol["file"],
+                symbol["line"],
+                symbol.get("signature"),
+                json.dumps(
+                    references_by_source.get(symbol["symbol_name"], []),
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        if len(batch) >= 1000:
+            await connection.executemany(
+                """
+                INSERT INTO code_symbols
+                    (project, symbol_type, symbol_name, file_path, line, signature, "references")
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                """,
+                batch,
+            )
+            batch.clear()
+    if batch:
+        await connection.executemany(
+            """
+            INSERT INTO code_symbols
+                (project, symbol_type, symbol_name, file_path, line, signature, "references")
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+            """,
+            batch,
+        )
+    return len(symbols)
+
+
 async def replace_symbol_index(
     pool: asyncpg.Pool, project: str, index: Dict[str, Any]
 ) -> int:
@@ -713,33 +789,97 @@ async def replace_symbol_index(
         - `pool`：数据库连接池或测试替身，类型为 `asyncpg.Pool`。
         - `project`：项目标识，类型为 `str`。
         - `index`：项目代码或符号索引，类型为 `Dict[str, Any]`。
+
+    该入口保留给显式重建索引的调用方；诊断链路使用
+    `replace_symbol_index_if_changed`，同一代码快照不会重复删除并写入。
     """
-    symbols = index.get("symbols", [])
-    references = index.get("references", [])
-    references_by_source: Dict[str, list] = {}
-    for reference in references:
-        source = reference.get("source")
-        if source:
-            references_by_source.setdefault(source, []).append(reference)
     async with pool.acquire() as connection:
         async with connection.transaction():
-            await connection.execute("DELETE FROM code_symbols WHERE project = $1", project)
-            for symbol in symbols:
-                await connection.execute(
-                    """
-                    INSERT INTO code_symbols
-                        (project, symbol_type, symbol_name, file_path, line, signature, "references")
-                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-                    """,
-                    project,
-                    symbol["symbol_type"],
-                    symbol["symbol_name"],
-                    symbol["file"],
-                    symbol["line"],
-                    symbol.get("signature"),
-                    json.dumps(references_by_source.get(symbol["symbol_name"], []), ensure_ascii=False),
+            return await _replace_symbol_index_in_transaction(connection, project, index)
+
+
+async def replace_symbol_index_if_changed(
+    pool: asyncpg.Pool,
+    project: str,
+    repository_fingerprint: str,
+    index: Dict[str, Any],
+) -> Dict[str, Any]:
+    """仅在代码快照或索引计数变化时重写项目符号表。
+
+    参数:
+        - `pool`：RAgent 元数据库连接池或测试替身，类型为 `asyncpg.Pool`。
+        - `project`：当前诊断项目，类型为 `str`；数据库咨询锁按项目隔离。
+        - `repository_fingerprint`：当前 PHP 文件快照 SHA-256，类型为 `str`。
+        - `index`：当前任务从缓存或仓库得到的完整符号索引。
+
+    Returns:
+        `updated`、`symbol_count` 和 `previous_symbol_count` 审计信息。代码指纹与
+        四类索引计数都相同时跳过删除和插入，多个并发任务不会争抢同一项目的
+        四万级写事务；任何计数变化都会完整替换，避免部分更新产生混合版本。
+    """
+    counts = {
+        "symbol_count": len(index.get("symbols") or []),
+        "reference_count": len(index.get("references") or []),
+        "config_count": len(index.get("configs") or []),
+        "sql_count": len(index.get("sql") or []),
+    }
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"project-symbol-index:{project}",
+            )
+            existing = await connection.fetchrow(
+                """
+                SELECT repository_fingerprint, symbol_count, reference_count,
+                       config_count, sql_count
+                FROM project_symbol_indexes
+                WHERE project = $1
+                """,
+                project,
+            )
+            if existing is not None and all(
+                (
+                    str(existing["repository_fingerprint"]) == repository_fingerprint,
+                    int(existing["symbol_count"]) == counts["symbol_count"],
+                    int(existing["reference_count"]) == counts["reference_count"],
+                    int(existing["config_count"]) == counts["config_count"],
+                    int(existing["sql_count"]) == counts["sql_count"],
                 )
-    return len(symbols)
+            ):
+                return {
+                    "updated": False,
+                    "symbol_count": counts["symbol_count"],
+                    "previous_symbol_count": int(existing["symbol_count"]),
+                }
+            previous_symbol_count = int(existing["symbol_count"]) if existing else 0
+            await _replace_symbol_index_in_transaction(connection, project, index)
+            await connection.execute(
+                """
+                INSERT INTO project_symbol_indexes
+                    (project, repository_fingerprint, symbol_count, reference_count,
+                     config_count, sql_count, indexed_at)
+                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                ON CONFLICT (project) DO UPDATE SET
+                    repository_fingerprint = EXCLUDED.repository_fingerprint,
+                    symbol_count = EXCLUDED.symbol_count,
+                    reference_count = EXCLUDED.reference_count,
+                    config_count = EXCLUDED.config_count,
+                    sql_count = EXCLUDED.sql_count,
+                    indexed_at = EXCLUDED.indexed_at
+                """,
+                project,
+                repository_fingerprint,
+                counts["symbol_count"],
+                counts["reference_count"],
+                counts["config_count"],
+                counts["sql_count"],
+            )
+            return {
+                "updated": True,
+                "symbol_count": counts["symbol_count"],
+                "previous_symbol_count": previous_symbol_count,
+            }
 
 
 async def insert_validation_audit(

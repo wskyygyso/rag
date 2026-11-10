@@ -16,6 +16,7 @@ REQUIRED_TABLES = {
     "diagnostic_tasks",
     "diagnostic_evidence",
     "code_symbols",
+    "project_symbol_indexes",
     "validation_audit",
     "diagnostic_feedback",
     "diagnostic_task_operations",

@@ -121,6 +121,7 @@ _COMMON_FILE_STEMS = {
 _GENERIC_SUPPORT_CONCEPTS = {
     "amount",
     "config",
+    "count",
     "daily",
     "display",
     "gift",
@@ -270,6 +271,7 @@ def rank_discovery_hits(
             # 否则“碎片 + 奖品”这类两个通用英文概念会压过真正的“商品碎片”
             # 配置块，使报告只看到方法调用而看不到逐级数值。
             anchor_bonus = 240
+        explicit_bonus = 260 if item.get("retrieval_stage") == "explicit_symbol" else 0
         repository_bonus = 0
         normalized_file = file_name.replace("\\", "/").strip("/")
         if preferred_repository and "/" in normalized_file:
@@ -283,6 +285,7 @@ def rank_discovery_hits(
             + directory_bonus
             + concept_bonus
             + anchor_bonus
+            + explicit_bonus
             + repository_bonus
         )
         scored.append((score, index, item))
@@ -325,6 +328,19 @@ def select_semantic_hits(
         if key not in seen and len(selected) < limit:
             seen.add(key)
             selected.append(item)
+
+    # 用户显式给出的类或方法命中优先级最高。显式符号可能只出现在类声明行，
+    # 没有中文业务注释，也不一定覆盖多个概念；若先按概念筛选，它会在进入索引
+    # 关联前被挤掉。这里仍只保留源码文件，文档和语言包中的同名文本不能冒充定义。
+    for item in ranked:
+        if item.get("retrieval_stage") != "explicit_symbol":
+            continue
+        lowered = f"/{str(item.get('file') or '').casefold()}"
+        if "/docs/" in lowered or lowered.endswith(".md") or "/lang/" in lowered:
+            continue
+        append(item)
+        if len(selected) >= min(6, limit):
+            break
 
     # 中文锚点是问题原句与源码之间最强的可审计联系。锚点先按业务词稀有度排序：
     # “商品碎片”只出现在目标活动配置中的次数，远少于“年度金主”这种活动标题，
@@ -710,6 +726,7 @@ def assess_retrieval_support(
     domain_concepts = concept_set - _GENERIC_SUPPORT_CONCEPTS
     hit_list = list(hits)
     direct_anchor_count = 0
+    rejected_generic_anchor_count = 0
     for item in hit_list:
         if item.get("retrieval_stage") != "business_anchor":
             continue
@@ -725,6 +742,17 @@ def assess_retrieval_support(
             default=0,
         )
         if longest_term >= 4:
+            item_concepts = {
+                str(value) for value in item.get("matched_concepts") or []
+            }
+            item_domain_concepts = item_concepts & domain_concepts
+            # 当业务概念目录能够解释该锚点时，“每日兑换”这类只含一个领域动作、
+            # 其余均为通用概念的组合不能单独证明问题涉及的未知业务对象存在。
+            # 若源码使用完全不在目录中的新业务词，item_concepts 为空，仍保留
+            # 原来的四字中文锚点路径，避免词表变成业务准入白名单。
+            if item_concepts and len(item_domain_concepts) < 2:
+                rejected_generic_anchor_count += 1
+                continue
             direct_anchor_count += 1
 
     best_concept_coverage = 0
@@ -736,13 +764,19 @@ def assess_retrieval_support(
         best_concept_coverage = max(best_concept_coverage, len(covered))
         best_domain_coverage = max(best_domain_coverage, len(covered & domain_concepts))
 
-    # 两个概念的问题要求两个概念同行；更复杂的问题只要求三个概念同行。
-    # 领域概念必须参与，从而排除“用户 + 阈值”“配置 + 状态”这类没有业务
-    # 对象的泛化组合。显式符号由用户直接指定，不受中文锚点限制。
+    # 两个概念的问题要求两个概念同行；更复杂的问题最多要求三个概念同行。
+    # 领域概念还必须覆盖至少两个，从而排除“设备 + 用户 + 阈值”这类只命中
+    # 一个业务对象、却遗漏“注册”动作的伪锚点。只有单个领域概念的问题仍按
+    # 一个领域概念判定，避免把未知领域的新名词拒之门外。显式符号由用户直接
+    # 指定，不受中文锚点限制。
     required_coverage = min(3, max(1, len(concept_set)))
+    required_domain_coverage = min(2, len(domain_concepts))
     semantic_grounded = (
         best_concept_coverage >= required_coverage
-        and (not domain_concepts or best_domain_coverage >= 1)
+        and (
+            not domain_concepts
+            or best_domain_coverage >= required_domain_coverage
+        )
     )
     if explicit_symbols:
         level = "explicit_symbol"
@@ -768,6 +802,8 @@ def assess_retrieval_support(
         "best_concept_coverage": best_concept_coverage,
         "best_domain_coverage": best_domain_coverage,
         "required_concept_coverage": required_coverage,
+        "required_domain_coverage": required_domain_coverage,
+        "rejected_generic_anchor_count": rejected_generic_anchor_count,
     }
 
 

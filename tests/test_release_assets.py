@@ -53,6 +53,13 @@ def test_local_workers_have_queue_specific_healthchecks() -> None:
         assert "celery@$$HOSTNAME" in command
 
 
+def test_local_worker_concurrency_is_bounded_by_capacity() -> None:
+    """验证本地诊断 Worker 不会按宿主机核数启动过多大仓库扫描进程。"""
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    assert "--concurrency=${DIAGNOSIS_WORKER_CONCURRENCY:-2}" in compose["services"]["worker"]["command"]
+    assert "--concurrency=${INDEX_WORKER_CONCURRENCY:-1}" in compose["services"]["index-worker"]["command"]
+
+
 def test_local_compose_mounts_supported_projects_read_only() -> None:
     """验证本地 API 和两个 Worker 挂载同一组 waky 项目且不可写。"""
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))

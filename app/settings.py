@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     document_index_soft_time_limit_seconds: int = 900
     document_index_time_limit_seconds: int = 960
 
+    # 项目符号索引缓存：同一代码快照只由一个 Worker 扫描，其他并发任务从 Redis
+    # 复用结果。指纹随文件路径、大小和修改时间变化，代码更新后自动换新缓存键。
+    project_index_cache_enabled: bool = True
+    project_index_cache_ttl_seconds: int = 604800
+    project_index_build_lock_seconds: int = 300
+    project_index_wait_timeout_seconds: int = 180
+
     # 历史数据保留天数，由 cleanup_retention 脚本按批次清理。
     diagnostic_task_retention_days: int = 90
     validation_audit_retention_days: int = 180
@@ -67,8 +74,9 @@ class Settings(BaseSettings):
     # 供应商模型标识或 Endpoint ID。
     llm_model: str = ""
 
-    # 单次 LLM 网络调用超时秒数。
-    llm_timeout_seconds: float = 30.0
+    # 单次 LLM 网络调用超时秒数。推理型模型和跨境网络首包可能较慢，默认保留
+    # 足够等待时间；仍必须低于诊断任务软超时，避免模型调用吞掉报告落库时间。
+    llm_timeout_seconds: float = 90.0
 
     # 调用 LLM 前要求的最小去重证据数，避免零证据付费调用。
     llm_min_evidence_items: int = 1

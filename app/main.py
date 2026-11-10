@@ -144,9 +144,3 @@ async def health_ready() -> Any:
     if result["status"] != "ok":
         return JSONResponse(status_code=503, content=result)
     return result
-
-
-@app.get("/")
-async def root() -> Dict[str, str]:
-    """返回服务名称和运行状态，用于快速确认 API 已启动。"""
-    return {"name": settings.app_name, "status": "running"}

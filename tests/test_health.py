@@ -6,11 +6,12 @@ from app import main
 from app.main import app
 
 
-def test_root_endpoint() -> None:
-    """验证服务根路径返回运行状态。"""
+def test_root_endpoint_serves_diagnostic_page() -> None:
+    """验证服务根路径直接返回可操作的诊断页面。"""
     response = TestClient(app).get("/")
     assert response.status_code == 200
-    assert response.json()["status"] == "running"
+    assert response.headers["content-type"].startswith("text/html")
+    assert "开始诊断" in response.text
 
 
 def test_liveness_endpoint_does_not_check_dependencies(monkeypatch) -> None:
