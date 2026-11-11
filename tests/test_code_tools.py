@@ -205,6 +205,38 @@ def test_search_code_terms_can_match_mixed_case_code_identifiers(tmp_path: Path)
     assert result["matches"][0]["matched_queries"] == ["diamond", "gear"]
 
 
+def test_search_code_terms_can_restrict_config_definition_searches(tmp_path: Path) -> None:
+    """验证配置定义补查可限定到 config/conf 目录，避免调用点挤占预算。
+
+    参数:
+        - `tmp_path`：pytest 临时目录，类型为 `Path`。
+    """
+    project = tmp_path / "waky6"
+    config_file = project / "php" / "config" / "diamonds.php"
+    service_file = project / "php" / "domain" / "WithdrawalService.php"
+    config_file.parent.mkdir(parents=True)
+    service_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        "<?php\n'min_diamonds' => getByTestMode(80000, 800000),\n",
+        encoding="utf-8",
+    )
+    service_file.write_text(
+        "<?php\n$min = 80000;\n'min_diamonds' => $min,\n",
+        encoding="utf-8",
+    )
+
+    result = search_code_terms(
+        str(tmp_path),
+        "waky6",
+        ["min_diamonds"],
+        include_globs=("**/config/**", "**/conf/**"),
+    )
+
+    assert [item["file"] for item in result["matches"]] == [
+        "php/config/diamonds.php"
+    ]
+
+
 def test_search_code_terms_ranks_all_matches_before_truncation(tmp_path: Path) -> None:
     """验证通用检索先汇总全部命中再排序，不会按扫描顺序丢失业务源码。
 

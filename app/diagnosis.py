@@ -19,6 +19,7 @@ from app.task_store import (
     prepare_task_retry,
     insert_task_operation,
     list_task_operations,
+    list_trace_spans,
     update_task,
 )
 from app.validation_plan import ValidationPlan, validation_plan_dict
@@ -394,6 +395,42 @@ async def get_report(
     return response
 
 
+@router.get("/{task_id}/trace")
+async def get_diagnosis_trace(
+    task_id: str,
+    request: Request,
+    limit: int = Query(default=200, ge=1, le=500),
+) -> Dict:
+    """返回任务阶段时间线、耗时和脱敏降级统计。
+
+    参数:
+        - `task_id`：需要读取轨迹的诊断任务 ID。
+        - `request`：携带认证身份和数据库连接池的 FastAPI 请求。
+        - `limit`：单次最多返回的轨迹数量；大任务可分页读取完整时间线。
+    """
+    pool = _pool(request)
+    await _authorized_task(pool, request, task_id)
+    spans = await list_trace_spans(pool, task_id, limit=limit)
+    elapsed_values = [
+        float(item["elapsed_ms"])
+        for item in spans
+        if item.get("elapsed_ms") is not None
+    ]
+    return {
+        "task_id": task_id,
+        "count": len(spans),
+        "summary": {
+            "failed_count": sum(item.get("status") == "failed" for item in spans),
+            "degraded_count": sum(
+                item.get("status") in {"degraded", "insufficient_support"}
+                for item in spans
+            ),
+            "max_elapsed_ms": round(max(elapsed_values), 3) if elapsed_values else 0,
+        },
+        "items": spans,
+    }
+
+
 async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
     """轮询任务状态并生成 SSE 格式的进度事件。
 
@@ -402,15 +439,31 @@ async def _events(request: Request, task_id: str) -> AsyncIterator[str]:
         - `task_id`：诊断任务 ID，类型为 `str`。
     """
     terminal_statuses = {"COMPLETED", "FAILED", "CANCELLED"}
+    last_trace_id = 0
     while True:
         if await request.is_disconnected():
             return
-        task = await get_task(_pool(request), task_id)
+        pool = _pool(request)
+        try:
+            traces = await list_trace_spans(
+                pool,
+                task_id,
+                after_id=last_trace_id,
+                limit=100,
+            )
+        except Exception:
+            # 轨迹只是可观测性增强；读取失败时继续发送任务状态，避免页面失联。
+            traces = []
+        for trace in traces:
+            last_trace_id = max(last_trace_id, int(trace["id"]))
+            payload = json.dumps(trace, ensure_ascii=False)
+            yield f"id: trace-{last_trace_id}\nevent: trace\ndata: {payload}\n\n"
+        task = await get_task(pool, task_id)
         if task is None:
             yield "event: error\ndata: {\"detail\":\"诊断任务不存在\"}\n\n"
             return
         payload = json.dumps(_task_response(task), ensure_ascii=False)
-        yield f"event: progress\ndata: {payload}\n\n"
+        yield f"id: task-{task.get('updated_at', '')}\nevent: progress\ndata: {payload}\n\n"
         if task["status"] in terminal_statuses:
             return
         await asyncio.sleep(0.5)

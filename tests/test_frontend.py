@@ -81,6 +81,12 @@ def test_ui_page_exposes_structured_evidence_workflow() -> None:
     assert "term_search" in response.text
     assert "result-empty" in response.text
     assert "result-view" in response.text
+    assert "诊断阶段时间线" in response.text
+    assert "/trace?limit=500" in response.text
+    assert "renderTraceEvent" in response.text
+    assert "traceSummary" in response.text
+    assert "eventName === \"trace\"" in response.text
+    assert "失败分类" in response.text
 
     root_response = client.get("/")
     assert root_response.status_code == 200

@@ -21,6 +21,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 统一容器工作目录。
 WORKDIR /app
 
+# Git 历史检索通过只读 `git log/show` 回答功能首次出现和起始版本问题。
+# 仅安装 git 运行包并删除 apt 缓存，不把构建工具或交互式命令行带入生产镜像。
+# 镜像源允许 CI 按部署网络覆盖；默认使用本地网络可访问的镜像，避免从海外源
+# 下载 Git 依赖时长时间停滞。apt 重试只影响构建阶段，不改变应用运行行为。
+ARG APT_MIRROR=https://mirrors.aliyun.com
+RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # 先复制锁定依赖，确保生产镜像不随时间解析出不同版本。
 COPY requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip==26.3 \

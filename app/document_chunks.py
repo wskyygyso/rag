@@ -8,17 +8,9 @@ import asyncpg
 
 from app.code_tools import CodeRepository, CodeToolError
 from app.embeddings import EMBEDDING_DIMENSION, EMBEDDING_MODEL, embed_text, cosine_similarity
+from app.repository_files import iter_repository_files
 
 TEXT_EXTENSIONS = {".php", ".inc", ".phtml", ".conf", ".ini", ".yaml", ".yml", ".json", ".md", ".txt"}
-IGNORED_DIRECTORIES = {
-    ".git",
-    ".gitnexus",
-    "vendor",
-    "node_modules",
-    "runtime",
-    "storage",
-    "cache",
-}
 
 
 def _append_long_line_chunks(
@@ -171,11 +163,7 @@ def build_repository_chunks(root: str, project: str, max_chars: int = 4000) -> L
     except CodeToolError as exc:
         raise ValueError(str(exc)) from exc
     chunks: List[Dict[str, Any]] = []
-    for path in sorted(repository.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in TEXT_EXTENSIONS:
-            continue
-        if any(part in IGNORED_DIRECTORIES for part in path.parts):
-            continue
+    for path in iter_repository_files(repository, TEXT_EXTENSIONS):
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

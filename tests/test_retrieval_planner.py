@@ -5,6 +5,7 @@ from app.retrieval_planner import (
     config_definition_terms,
     discover_related_queries,
     rank_discovery_hits,
+    select_question_config_keys,
     select_semantic_hits,
 )
 
@@ -23,6 +24,67 @@ def test_config_definition_terms_are_derived_from_discovered_keys() -> None:
     )
 
     assert terms == ["diamond_to_usd", "min_money"]
+
+
+def test_question_concepts_select_specific_config_keys_from_full_index() -> None:
+    """验证设备注册数量问题会从全量配置读取中选出组合覆盖最高的键。"""
+    index = {
+        "symbols": [],
+        "references": [],
+        "configs": [
+            {"key": "sms.countryList", "file": "php/action/Login.php", "line": 10},
+            {"key": "login.is_limit_cn_ip_register", "file": "php/action/Login.php", "line": 18},
+            {
+                "key": "device.device_user_count_limit",
+                "file": "php/model/UserModel.php",
+                "line": 31,
+            },
+        ],
+        "sql": [],
+    }
+
+    selected = select_question_config_keys(
+        index,
+        ["device", "registration", "account", "count", "limit"],
+        limit=2,
+    )
+
+    assert selected[0] == "device.device_user_count_limit"
+
+
+def test_question_config_selection_handles_english_word_forms() -> None:
+    """验证配置键的复数、名词化词形不会漏掉问题中的基础业务概念。"""
+    index = {
+        "symbols": [],
+        "references": [],
+        "configs": [
+            {
+                "key": "diamonds.diamond_exchange",
+                "file": "php/config/diamonds.php",
+                "line": 9,
+            },
+            {
+                "key": "anchor.joinBDUserRegTimeLimit",
+                "file": "php/action/BDCenterControl.php",
+                "line": 377,
+            },
+            {
+                "key": "diamonds.withdrawal_limits.official.daily_limit",
+                "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
+                "line": 336,
+            },
+        ],
+        "sql": [],
+    }
+
+    selected = select_question_config_keys(
+        index,
+        ["diamond", "withdraw", "official", "limit", "exchange"],
+        limit=3,
+    )
+
+    assert selected[0] == "diamonds.withdrawal_limits.official.daily_limit"
+    assert "diamonds.diamond_exchange" in selected
 
 
 def test_retrieval_support_accepts_direct_business_anchor() -> None:

@@ -52,7 +52,7 @@ def test_runtime_metrics_record_requests_and_normalize_dynamic_paths() -> None:
 
 
 class _Pool:
-    """返回固定任务、操作和安全拒绝聚合数据。"""
+    """返回固定任务、操作、安全拒绝和阶段轨迹聚合数据。"""
 
     async def fetch(self, query, *args):
         """按 SQL 来源返回不同指标行。
@@ -65,7 +65,17 @@ class _Pool:
             return [{"status": "COMPLETED", "count": 2}]
         if "FROM diagnostic_task_operations" in query:
             return [{"operation": "CREATE", "count": 3}]
-        return [{"event_type": "AUTHENTICATION", "status_code": 401, "count": 4}]
+        if "FROM security_audit" in query:
+            return [{"event_type": "AUTHENTICATION", "status_code": 401, "count": 4}]
+        return [
+            {
+                "stage": "retrieval",
+                "status": "succeeded",
+                "count": 5,
+                "average_elapsed_ms": 125.5,
+                "max_elapsed_ms": 230.0,
+            }
+        ]
 
 
 def test_metrics_endpoint_exposes_http_and_database_metrics() -> None:
@@ -82,6 +92,8 @@ def test_metrics_endpoint_exposes_http_and_database_metrics() -> None:
     assert 'ragent_diagnosis_tasks{status="COMPLETED"} 2' in response.text
     assert 'ragent_task_operations_total{operation="CREATE"} 3' in response.text
     assert 'ragent_security_denials_total{event_type="AUTHENTICATION",status_code="401"} 4' in response.text
+    assert 'ragent_diagnosis_stage_events{stage="retrieval",status="succeeded"} 5' in response.text
+    assert 'ragent_diagnosis_stage_duration_ms{stage="retrieval",status="succeeded"} 125.5' in response.text
     reset_metrics()
 
 

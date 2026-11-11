@@ -38,6 +38,18 @@ def test_semantic_plan_reuses_concepts_for_different_questions() -> None:
     assert "fee" in second["code_terms"]
 
 
+def test_frequency_question_uses_count_and_official_concepts_without_template() -> None:
+    """验证“多少次”和“官方”是可复用概念，而不是完整问句映射。"""
+    plan = build_semantic_query_plan("钻石提现官方最多能兑换多少次？")
+
+    assert {"diamond", "withdrawal", "official", "count", "limit"} <= set(
+        plan["concepts"]
+    )
+    assert {"diamond", "withdraw", "official", "count", "limit"} <= set(
+        plan["code_terms"]
+    )
+
+
 def test_semantic_terms_contain_only_reusable_words() -> None:
     """验证概念层不保存项目、类、方法、表名或完整问题答案。"""
     plan = build_semantic_query_plan(

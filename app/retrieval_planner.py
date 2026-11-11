@@ -844,10 +844,129 @@ def config_definition_terms(
     return terms
 
 
+def _concept_token_matches(question_term: str, key_term: str) -> bool:
+    """判断问题概念词与配置键片段是否属于同一英文词形。
+
+    参数:
+        - `question_term`：问题理解生成并已规范化为小写字母数字的英文概念，
+          例如 `withdraw`、`limit` 或 `diamond`。
+        - `key_term`：完整配置键拆分出的单个英文片段，例如 `withdrawal`、
+          `limits` 或 `diamonds`。
+
+    返回:
+        精确相同，或仅相差常见名词、形容词和动词后缀时返回 `True`。该规则只
+        处理 `withdraw/withdrawal`、`limit/limits`、`diamond/diamonds` 这类
+        通用词形变化，不把任意较长前缀都视为匹配，避免配置键候选被放大。
+    """
+    if question_term == key_term:
+        return True
+    shorter, longer = sorted(
+        (question_term, key_term),
+        key=len,
+    )
+    if len(shorter) < 4 or not longer.startswith(shorter):
+        return False
+    return longer[len(shorter):] in {
+        "s",
+        "es",
+        "ed",
+        "ing",
+        "al",
+        "tion",
+        "ation",
+    }
+
+
+def select_question_config_keys(
+    project_index: Dict[str, List[Dict[str, Any]]],
+    question_terms: Iterable[str],
+    *,
+    limit: int = 4,
+) -> List[str]:
+    """从完整项目索引中选择与问题概念组合最吻合的配置读取键。
+
+    参数:
+        - `project_index`：当前项目符号索引，必须包含 `configs`；每项至少提供
+          `key`、`file` 和 `line`，类型为 `Dict[str, List[Dict[str, Any]]]`。
+        - `question_terms`：问题理解生成的英文代码概念，例如设备注册问题中的
+          `device`、`registration`、`count`、`limit`，类型为 `Iterable[str]`。
+        - `limit`：最多返回的配置键数量，类型为 `int`。限制用于避免大量相邻
+          配置读取占满后续源码检索预算。
+
+    Returns:
+        按概念覆盖度和键名具体度排序的完整配置键。函数只做索引候选选择，不读取
+        配置值；调用方仍须通过源码证据解析 `getByTestMode` 等环境覆盖表达式。
+    """
+    if limit < 1 or limit > 12:
+        raise ValueError("问题配置键数量必须在 1 到 12 之间")
+    normalized_terms = {
+        re.sub(r"[^a-z0-9]", "", str(value).casefold())
+        for value in question_terms
+        if str(value).strip()
+    }
+    normalized_terms = {value for value in normalized_terms if len(value) >= 3}
+    if not normalized_terms:
+        return []
+
+    scores: Dict[str, Dict[str, Any]] = {}
+    for order, item in enumerate(project_index.get("configs") or []):
+        key = str(item.get("key") or "").strip()
+        if "." not in key:
+            continue
+        segments = re.split(r"[._:/-]+", key)
+        key_terms = set()
+        for segment in segments:
+            camel_parts = re.findall(
+                r"[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]?[a-z]+|\d+",
+                segment,
+            )
+            for part in camel_parts or [segment]:
+                normalized = re.sub(r"[^a-z0-9]", "", part.casefold())
+                if len(normalized) >= 3:
+                    key_terms.add(normalized)
+        matched = {
+            key_term
+            for key_term in key_terms
+            if any(_concept_token_matches(term, key_term) for term in normalized_terms)
+        }
+        if len(matched) < 2:
+            continue
+        current = scores.get(key)
+        candidate = {
+            "key": key,
+            "coverage": len(matched),
+            "specificity": sum(len(value) for value in matched),
+            "file": str(item.get("file") or ""),
+            "line": int(item.get("line") or 0),
+            "order": order,
+        }
+        if current is None or (
+            candidate["coverage"],
+            candidate["specificity"],
+            -candidate["order"],
+        ) > (
+            current["coverage"],
+            current["specificity"],
+            -current["order"],
+        ):
+            scores[key] = candidate
+    ranked = sorted(
+        scores.values(),
+        key=lambda item: (
+            -int(item["coverage"]),
+            -int(item["specificity"]),
+            str(item["file"]),
+            int(item["line"]),
+        ),
+    )
+    return [str(item["key"]) for item in ranked[:limit]]
+
+
 __all__ = [
     "assess_retrieval_support",
     "config_definition_terms",
     "discover_related_queries",
     "rank_discovery_hits",
+    "select_question_config_keys",
     "select_semantic_hits",
 ]

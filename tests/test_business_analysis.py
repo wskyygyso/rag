@@ -287,6 +287,62 @@ def _diamond_withdrawal_evidence() -> list[dict]:
         },
         {
             "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
+            "line": 125,
+            "context": _context(
+                121,
+                [
+                    "        // 8. 官方单自然日次数限制先于频率锁；达到上限时不占用 5 秒频控窗口。",
+                    "        $this->assertOfficialDailyLimit($uid, $orderType);",
+                    "",
+                    "        // 9. 继续校验余额和金额",
+                ],
+            ),
+        },
+        {
+            "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
+            "line": 311,
+            "context": _context(
+                305,
+                [
+                    "     * 校验自然日提现次数上限；limit<=0 表示不限。",
+                    "     */",
+                    "    public static function assertDailyLimitNotReached(int $existingCount, int $limit): void",
+                    "    {",
+                    "        if ($limit > 0 && $existingCount >= $limit) {",
+                    "            throw new WithdrawalException(WithdrawalException::FREQUENT_OPERATION);",
+                    "        }",
+                    "    }",
+                ],
+            ),
+        },
+        {
+            "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
+            "line": 335,
+            "context": _context(
+                321,
+                [
+                    "     * 官方提现单按用户手机时区统计自然日下单次数。",
+                    "     *",
+                    "     * 统计包含当天已创建的所有官方订单，不区分后续成功或失败，避免失败后反复下单绕过次数限制。",
+                    "     */",
+                    "    private function assertOfficialDailyLimit(int $uid, string $orderType): void",
+                    "    {",
+                    "        if ($orderType !== self::ORDER_TYPE_OFFICIAL) {",
+                    "            return;",
+                    "        }",
+                    "        $limit = max(0, intval(Config::get('diamonds.withdrawal_limits.official.daily_limit', 0)));",
+                    "        $existingCount = (new DiamondsWithdrawalOrderModel())->countUserWithdrawalOrders(",
+                    "            $uid,",
+                    "            1,",
+                    "            $stime,",
+                    "            $etime",
+                    "        );",
+                    "        self::assertDailyLimitNotReached($existingCount, $limit);",
+                ],
+            ),
+        },
+        {
+            "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
             "line": 423,
             "context": _context(
                 417,
@@ -822,6 +878,7 @@ def test_diamond_withdrawal_question_produces_amount_and_fee_answer() -> None:
         "业务入口",
         "提现粒度",
         "提现下限",
+        "官方美元最低兑换",
         "美元换算",
         "官方金额与频次",
         "手续费承担",
@@ -837,10 +894,72 @@ def test_diamond_withdrawal_question_produces_amount_and_fee_answer() -> None:
     assert "Epay 为 1% + 固定 0.5" in statements
     assert "币商订单的手续费字段默认为 0.00" in statements
     assert "不能与旧版主播工资提现混用" in statements
-    assert "币商最低 10,000 钻石" in findings["conclusion"]
-    assert "官方正式环境最低 800,000 钻石" in findings["conclusion"]
-    assert "USDT-TRC20 为 1%+2.5 USDT" in findings["conclusion"]
+    assert "币商渠道最低 10,000 钻石" in findings["conclusion"]
+    assert "正式环境 800,000 钻石" in findings["conclusion"]
+    assert "USDT-TRC20 为 1% + 固定 2.5" in findings["conclusion"]
     assert findings["uncertainties"]
+
+
+def test_official_diamond_to_usd_minimum_question_returns_direct_answer() -> None:
+    """验证“钻石兑换美元官方最低”会直接回答配置值，而不是引用评审文档。
+
+    原始问句没有“提现”二字，但“钻石 + 官方 + 美元”已经足以确定官方提现链路。
+    测试同时覆盖同义问法，要求结论中的钻石数、美元换算和提现粒度全部来自证据，
+    且不把 Markdown 架构评审表格当作业务事实。
+    """
+    questions = (
+        "waky6 钻石兑换美元官方渠道最低兑换数是多少？",
+        "waky6 钻石换美元官方最少多少钻？",
+    )
+    for question in questions:
+        findings = build_deterministic_findings(
+            question,
+            {"evidence": _diamond_withdrawal_evidence()},
+        )
+        category_names = {item["category"] for item in findings["facts"]}
+        minimum_fact = next(
+            item
+            for item in findings["facts"]
+            if item["category"] == "官方美元最低兑换"
+        )
+
+        assert "官方美元最低兑换" in category_names
+        assert "测试环境 80,000 钻石" in minimum_fact["statement"]
+        assert "约为 $2.00" in minimum_fact["statement"]
+        assert "正式环境 800,000 钻石" in minimum_fact["statement"]
+        assert "约为 $20.00" in minimum_fact["statement"]
+        assert "10,000 钻石的整数倍" in findings["conclusion"]
+        assert "测试环境 80,000 钻石" in findings["conclusion"]
+        assert "正式环境 800,000 钻石" in findings["conclusion"]
+        assert "review-2026-10-30" not in findings["conclusion"]
+        assert "手续费" not in findings["conclusion"]
+
+
+def test_official_diamond_withdrawal_frequency_question_answers_daily_limit() -> None:
+    """验证“官方兑换最多多少次”能从配置和下单守卫给出一致答案。
+
+    原始问句同时包含“提现”和“兑换”，源码中真正约束次数的是新版用户钻石提现
+    配置及官方订单守卫。测试要求结论、计数口径和拦截语义都由证据生成，避免把
+    币商兑换链路或 5 秒重复提交锁误认为每日次数上限。
+    """
+    result = {"evidence": _diamond_withdrawal_evidence()}
+    findings = build_deterministic_findings(
+        "waky6 提问钻石提现官方兑换最多能兑换多少次？",
+        result,
+    )
+    category_names = {item["category"] for item in findings["facts"]}
+    statements = " ".join(item["statement"] for item in findings["facts"])
+
+    assert {"官方金额与频次", "官方次数拦截", "官方次数计数口径"} <= category_names
+    assert "5 笔" in statements
+    assert "用户手机时区" in statements
+    assert "达到或超过上限" in statements
+    assert "失败订单同样占用当期名额" in statements
+    assert "5 笔" in findings["conclusion"]
+    assert "用户手机时区" in findings["conclusion"]
+    assert "失败订单" in findings["conclusion"]
+    assert "config/diamonds.php" in " ".join(findings["evidence_refs"])
+    assert "WithdrawalOrderCreateService.php" in " ".join(findings["evidence_refs"])
 
 
 def test_diamond_withdrawal_report_keeps_answer_without_ai() -> None:
@@ -1567,3 +1686,60 @@ def test_device_registration_question_does_not_guess_limit_without_config() -> N
 
     assert findings["facts"] == []
     assert "3" not in findings["conclusion"]
+
+
+def test_device_registration_limit_resolves_test_mode_override() -> None:
+    """验证 getByTestMode 配置会解析测试和正式两套设备注册上限。"""
+    result = {
+        "evidence": [
+            {
+                "file": "service/php/config/device.php",
+                "line": 7,
+                "context": _context(
+                    5,
+                    [
+                        "return [",
+                        "    // 单个设备注册用户数限制",
+                        "    'device_user_count_limit' => getByTestMode(10, 3),",
+                        "];",
+                    ],
+                ),
+            },
+            {
+                "file": "service/php/conf/SysEnv.php",
+                "line": 122,
+                "context": _context(
+                    120,
+                    [
+                        "function getByTestMode($testModeVal, $noTestModeVal)",
+                        "{",
+                        "    return env('TEST_MODE', 0) ? $testModeVal : $noTestModeVal;",
+                        "}",
+                    ],
+                ),
+            },
+            {
+                "file": "service/php/model/usermodel.php",
+                "line": 1721,
+                "context": _context(
+                    1719,
+                    [
+                        "$regCount = $this->getDeviceRegCount($device_id);",
+                        "if ($regCount >= Config::get('device.device_user_count_limit')) {",
+                        "    return false;",
+                        "}",
+                    ],
+                ),
+            },
+        ]
+    }
+
+    findings = build_deterministic_findings("测试环境同一设备号最多能注册多少个账号？", result)
+
+    categories = {item["category"] for item in findings["facts"]}
+    statements = " ".join(item["statement"] for item in findings["facts"])
+    assert "测试环境设备注册上限" in categories
+    assert "正式环境设备注册上限" in categories
+    assert "测试环境允许单个设备" in statements
+    assert "测试环境中，同一设备最多可注册 10 个用户" in findings["conclusion"]
+    assert "正式环境相应用户数量上限为 3 个" in findings["conclusion"]

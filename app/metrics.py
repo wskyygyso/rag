@@ -26,6 +26,7 @@ _DYNAMIC_PATH_PATTERNS = (
     (re.compile(r"^/api/diagnoses/[^/]+/feedback/summary$"), "/api/diagnoses/{task_id}/feedback/summary"),
     (re.compile(r"^/api/diagnoses/[^/]+/feedback$"), "/api/diagnoses/{task_id}/feedback"),
     (re.compile(r"^/api/diagnoses/[^/]+/report$"), "/api/diagnoses/{task_id}/report"),
+    (re.compile(r"^/api/diagnoses/[^/]+/trace$"), "/api/diagnoses/{task_id}/trace"),
     (re.compile(r"^/api/diagnoses/[^/]+/events$"), "/api/diagnoses/{task_id}/events"),
     (re.compile(r"^/api/diagnoses/[^/]+/cancel$"), "/api/diagnoses/{task_id}/cancel"),
     (re.compile(r"^/api/diagnoses/[^/]+/retry$"), "/api/diagnoses/{task_id}/retry"),
@@ -192,7 +193,7 @@ async def render_database_metrics(pool) -> str:
     """
     global _DATABASE_COLLECTION_ERRORS
     try:
-        task_rows, operation_rows, security_rows = await asyncio.wait_for(
+        task_rows, operation_rows, security_rows, trace_rows = await asyncio.wait_for(
             asyncio.gather(
                 pool.fetch(
                     "SELECT status, COUNT(*) AS count FROM diagnostic_tasks GROUP BY status"
@@ -202,6 +203,12 @@ async def render_database_metrics(pool) -> str:
                 ),
                 pool.fetch(
                     "SELECT event_type, status_code, COUNT(*) AS count FROM security_audit GROUP BY event_type, status_code"
+                ),
+                pool.fetch(
+                    "SELECT stage, status, COUNT(*) AS count, "
+                    "COALESCE(AVG(elapsed_ms), 0) AS average_elapsed_ms, "
+                    "COALESCE(MAX(elapsed_ms), 0) AS max_elapsed_ms "
+                    "FROM diagnosis_trace_spans GROUP BY stage, status"
                 ),
             ),
             timeout=_DATABASE_TIMEOUT_SECONDS,
@@ -247,6 +254,30 @@ async def render_database_metrics(pool) -> str:
             event_type=str(row["event_type"]), status_code=str(row["status_code"])
         )
         lines.append(f"ragent_security_denials_total{labels} {int(row['count'])}")
+    lines.extend(
+        [
+            "# HELP ragent_diagnosis_stage_events 各诊断阶段和结果状态的轨迹数量。",
+            "# TYPE ragent_diagnosis_stage_events gauge",
+            "# HELP ragent_diagnosis_stage_duration_ms 各诊断阶段平均耗时毫秒数。",
+            "# TYPE ragent_diagnosis_stage_duration_ms gauge",
+            "# HELP ragent_diagnosis_stage_max_duration_ms 各诊断阶段最大耗时毫秒数。",
+            "# TYPE ragent_diagnosis_stage_max_duration_ms gauge",
+        ]
+    )
+    for row in trace_rows:
+        stage = str(row.get("stage") or "unknown")
+        status = str(row.get("status") or "unknown")
+        labels = _labels(stage=stage, status=status)
+        lines.append(f"ragent_diagnosis_stage_events{labels} {int(row.get('count') or 0)}")
+        duration_labels = _labels(stage=stage, status=status)
+        lines.append(
+            f"ragent_diagnosis_stage_duration_ms{duration_labels} "
+            f"{float(row.get('average_elapsed_ms') or 0):.9g}"
+        )
+        lines.append(
+            f"ragent_diagnosis_stage_max_duration_ms{duration_labels} "
+            f"{float(row.get('max_elapsed_ms') or 0):.9g}"
+        )
     return "\n".join(lines) + "\n"
 
 

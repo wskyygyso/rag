@@ -10,23 +10,11 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from app.repository_files import IGNORED_REPOSITORY_PARTS, iter_repository_files
 
-# 生成缓存、依赖和运行态目录不属于业务源码。GitNexus 的 `.gitnexus` 中会保存
-# 大量重复文本，若不排除，精确字符串搜索会在真正调用点之前返回缓存命中。
-IGNORED_REPOSITORY_PARTS = frozenset(
-    {
-        ".git",
-        ".gitnexus",
-        ".idea",
-        ".vscode",
-        "__pycache__",
-        "vendor",
-        "node_modules",
-        "runtime",
-        "storage",
-        "cache",
-    }
-)
+
+# `IGNORED_REPOSITORY_PARTS` 仍从本模块导出，兼容已有调用方；实际定义和安全
+# 遍历实现位于 `app.repository_files`，避免各扫描入口各自维护排除规则。
 
 # 中文问句里常见的提问外壳不应成为代码检索词。按长度从长到短替换，避免
 # “哪些”先被“些”截断后留下不能表达业务含义的残余字符。
@@ -182,12 +170,7 @@ def _iter_text_files(repository: Path, extensions: Iterable[str]) -> Iterable[Pa
         - `extensions`：允许检索的文件扩展名，类型为 `Iterable[str]`。
     """
     allowed = set(extensions)
-    for path in repository.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in allowed:
-            continue
-        if any(part in IGNORED_REPOSITORY_PARTS for part in path.parts):
-            continue
-        yield path
+    yield from iter_repository_files(repository, allowed)
 
 
 def _python_search(repository: Path, query: str, max_results: int, extensions: List[str]) -> List[Dict]:
@@ -246,6 +229,7 @@ def search_code(
         globs = [item if item.startswith("*") else f"*{item}" for item in extensions]
         command = [
             rg,
+            "--no-follow",
             "--line-number",
             "--no-heading",
             "--color=never",
@@ -516,6 +500,7 @@ def search_code_terms(
     max_results: int = 120,
     extensions: Optional[Iterable[str]] = None,
     case_insensitive: bool = False,
+    include_globs: Optional[Iterable[str]] = None,
 ) -> Dict:
     """一次检索多个通用业务片段并返回去重后的代码和文档命中。
 
@@ -529,6 +514,10 @@ def search_code_terms(
         - `case_insensitive`：是否忽略英文大小写，类型为 `bool`。中文通用锚点使用
           默认精确匹配；跨语言概念词需要忽略大小写，才能让 `diamond` 命中
           `DiamondControl` 和 `getDiamondGears()`。
+        - `include_globs`：可选的仓库相对路径白名单，例如
+          `("**/config/**", "**/conf/**")`，类型为 `Optional[Iterable[str]]`。
+          该参数用于从配置调用点返回定义文件读取真实值，防止大量业务代码命中
+          占满全局结果预算；传入空值时保持全仓检索行为。
 
     Returns:
         包含 `matches` 的字典；每项附带实际命中的通用片段，供后续排序和审计。
@@ -546,6 +535,15 @@ def search_code_terms(
         return {"project": project, "queries": [], "matches": [], "total": 0}
     if len(terms) > 50:
         raise CodeToolError("单次通用检索片段不能超过 50 个")
+    path_globs: List[str] = []
+    for value in include_globs or []:
+        pattern = str(value).strip().replace("\\", "/")
+        if not pattern or len(pattern) > 200 or "\x00" in pattern or "\n" in pattern:
+            raise CodeToolError("检索路径白名单格式无效")
+        if pattern not in path_globs:
+            path_globs.append(pattern)
+    if len(path_globs) > 8:
+        raise CodeToolError("检索路径白名单不能超过 8 项")
 
     repository = CodeRepository(root, project)
     allowed_extensions = list(
@@ -571,6 +569,7 @@ def search_code_terms(
         # 防止超大脚本垄断结果；统一解析后再按片段长度和源码目录排序。
         command = [
             rg,
+            "--no-follow",
             "--line-number",
             "--no-heading",
             "--color=never",
@@ -584,6 +583,20 @@ def search_code_terms(
             command.extend(["--glob", pattern])
         for directory in sorted(IGNORED_REPOSITORY_PARTS):
             command.extend(["--glob", f"!**/{directory}/**"])
+        # 配置定义补查只允许查看调用方指定的目录范围。rg 的 glob 后出现者优先，
+        # 先用全部允许扩展名排除，再追加目录白名单，才能形成真正的交集而不是
+        # 让 `--glob` 白名单与扩展名白名单按并集匹配全部源码。最后仍保留生成目录
+        # 排除规则，避免缓存文件通过白名单再次混入。
+        if path_globs:
+            for extension in allowed_extensions:
+                negative_pattern = (
+                    f"!**/*{extension}"
+                    if extension.startswith(".")
+                    else f"!**/{extension}"
+                )
+                command.extend(["--glob", negative_pattern])
+        for pattern in path_globs:
+            command.extend(["--glob", pattern])
         command.append("-F")
         for term in terms:
             command.extend(["-e", term])
@@ -631,6 +644,11 @@ def search_code_terms(
         # 文档垄断结果，同时保证不同目录都有机会进入最终排序。
         folded_terms = [(term, term.casefold()) for term in terms]
         for path in _iter_text_files(repository.path, allowed_extensions):
+            relative_file = path.relative_to(repository.path).as_posix()
+            if path_globs and not any(
+                Path(relative_file).match(pattern) for pattern in path_globs
+            ):
+                continue
             try:
                 if path.stat().st_size > 5_000_000:
                     continue

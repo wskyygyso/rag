@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     # 供应商模型标识或 Endpoint ID。
     llm_model: str = ""
 
+    # 备用模型按逗号分隔、从左到右尝试。主模型 `llm_model` 总是排在首位；
+    # 候选只改变叙写模型，不改变检索、确定性事实或证据引用校验。
+    llm_candidate_models: str = ""
+
+    # 单次诊断最多发起的模型请求数，包含主模型和备用模型。该值乘单请求超时
+    # 必须低于任务软超时，避免外部模型故障吞掉报告保存时间。
+    llm_max_attempts: int = 2
+
+    # 同一 Endpoint 与模型连续瞬时失败的熔断阈值和熔断持续秒数。熔断状态存
+    # Redis，防止多 Worker 对已经持续失败的供应商重复制造长尾请求。
+    llm_circuit_failure_threshold: int = 3
+    llm_circuit_open_seconds: int = 60
+
     # 单次 LLM 网络调用超时秒数。推理型模型和跨境网络首包可能较慢，默认保留
     # 足够等待时间；仍必须低于诊断任务软超时，避免模型调用吞掉报告落库时间。
     llm_timeout_seconds: float = 90.0

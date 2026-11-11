@@ -231,6 +231,26 @@ CREATE INDEX IF NOT EXISTS idx_document_index_runs_project_started
     ON document_index_runs (project, started_at DESC)
 """
 
+# 诊断阶段轨迹只保存可审计的阶段、状态、耗时和脱敏统计。问题原文、源码正文、
+# 模型请求体、API Key 和数据库连接信息仍保存在各自受控位置，不能写入这里。
+CREATE_DIAGNOSIS_TRACE_SPANS_SQL = """
+CREATE TABLE IF NOT EXISTS diagnosis_trace_spans (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(64) NOT NULL REFERENCES diagnostic_tasks(id) ON DELETE CASCADE,
+    event_type VARCHAR(64) NOT NULL,
+    stage VARCHAR(64) NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    elapsed_ms DOUBLE PRECISION,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+CREATE_DIAGNOSIS_TRACE_SPANS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_diagnosis_trace_task_created
+    ON diagnosis_trace_spans (task_id, id)
+"""
+
 
 async def create_pool(settings: Settings) -> asyncpg.Pool:
     """创建数据库连接池，并确保任务和证据表存在。
@@ -254,6 +274,8 @@ async def create_pool(settings: Settings) -> asyncpg.Pool:
         await connection.execute(
             "ALTER TABLE diagnostic_tasks ADD COLUMN IF NOT EXISTS request_id VARCHAR(128)"
         )
+        await connection.execute(CREATE_DIAGNOSIS_TRACE_SPANS_SQL)
+        await connection.execute(CREATE_DIAGNOSIS_TRACE_SPANS_INDEX_SQL)
         await connection.execute(CREATE_EVIDENCE_SQL)
         await connection.execute(CREATE_SYMBOLS_SQL)
         await connection.execute(CREATE_PROJECT_SYMBOL_INDEXES_SQL)
@@ -689,6 +711,107 @@ async def list_task_operations(
             item["detail"] = json.loads(item["detail"])
         operations.append(item)
     return operations
+
+
+def _decode_trace_row(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
+    """把诊断轨迹记录转换为可 JSON 序列化的字典。
+
+    参数:
+        - `row`：`diagnosis_trace_spans` 表记录或测试替身返回值。
+
+    Returns:
+        负载已解析且时间为 ISO 8601 的轨迹字典；空记录返回 `None`。
+    """
+    if row is None:
+        return None
+    item = dict(row)
+    if isinstance(item.get("payload"), str):
+        try:
+            item["payload"] = json.loads(item["payload"])
+        except (TypeError, ValueError):
+            item["payload"] = {}
+    if isinstance(item.get("created_at"), datetime):
+        item["created_at"] = item["created_at"].isoformat()
+    if item.get("elapsed_ms") is not None:
+        item["elapsed_ms"] = round(float(item["elapsed_ms"]), 3)
+    return item
+
+
+async def record_trace_span(
+    pool: asyncpg.Pool,
+    task_id: str,
+    event_type: str,
+    stage: str,
+    status: str,
+    *,
+    elapsed_ms: Optional[float] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """写入一条脱敏诊断阶段轨迹，轨迹故障不阻断主诊断流程。
+
+    参数:
+        - `pool`：RAgent 元数据库连接池或测试替身。
+        - `task_id`：已经存在的诊断任务 ID；外键保证轨迹可追溯到任务。
+        - `event_type`：稳定的阶段事件类型，例如 `stage.completed`。
+        - `stage`：面向用户的阶段标识，例如 `retrieval` 或 `ai_narration`。
+        - `status`：阶段结果状态，例如 `started`、`succeeded`、`failed` 或 `degraded`。
+        - `elapsed_ms`：该阶段耗时毫秒数；未知时为空。
+        - `payload`：仅含计数、模型名和降级原因等脱敏摘要。
+
+    Returns:
+        已写入轨迹的字典；数据库或测试替身异常时返回 `None`，调用方继续诊断。
+    """
+    try:
+        row = await pool.fetchrow(
+            """
+            INSERT INTO diagnosis_trace_spans
+                (task_id, event_type, stage, status, elapsed_ms, payload)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            RETURNING id, task_id, event_type, stage, status, elapsed_ms, payload, created_at
+            """,
+            task_id,
+            event_type[:64],
+            stage[:64],
+            status[:24],
+            elapsed_ms,
+            json.dumps(payload or {}, ensure_ascii=False),
+        )
+    except Exception:
+        return None
+    return _decode_trace_row(row)
+
+
+async def list_trace_spans(
+    pool: asyncpg.Pool,
+    task_id: str,
+    *,
+    after_id: int = 0,
+    limit: int = 200,
+) -> list[Dict[str, Any]]:
+    """按写入顺序返回任务诊断阶段的脱敏轨迹。
+
+    参数:
+        - `pool`：RAgent 元数据库连接池或测试替身。
+        - `task_id`：需要读取轨迹的诊断任务 ID。
+        - `after_id`：SSE 已消费的最后轨迹 ID；首次读取传 0。
+        - `limit`：单次最多返回的轨迹数量，API 层限制在 1 到 500。
+
+    Returns:
+        按自增 ID 升序排列的轨迹列表；不存在轨迹时返回空列表。
+    """
+    rows = await pool.fetch(
+        """
+        SELECT id, task_id, event_type, stage, status, elapsed_ms, payload, created_at
+        FROM diagnosis_trace_spans
+        WHERE task_id = $1 AND id > $2
+        ORDER BY id ASC
+        LIMIT $3
+        """,
+        task_id,
+        after_id,
+        limit,
+    )
+    return [item for row in rows if (item := _decode_trace_row(row)) is not None]
 
 
 async def insert_evidence(pool: asyncpg.Pool, task_id: str, evidence: Dict[str, Any]) -> None:

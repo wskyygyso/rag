@@ -10,6 +10,15 @@ import asyncpg
 from app.code_tools import CodeToolError, search_code
 from app.document_chunks import search_document_chunks
 from app.php_index import index_repository
+from app.retrieval.channels import (
+    CodeTextChannel,
+    DocumentChunkChannel,
+    HistoryChannel,
+    SymbolChannel,
+)
+from app.retrieval.contracts import RetrievalRequest
+from app.retrieval.engine import RetrievalEngine
+from app.retrieval.postprocessors import SourceFilterPostProcessor, WeightedDeduplicationPostProcessor
 from app.validation_tools import redact_sensitive
 
 SOURCE_WEIGHTS = {"code": 1.0, "symbol": 0.9, "chunk": 0.85, "history": 0.6}
@@ -112,38 +121,35 @@ async def search_hybrid(
         source_types = list(dict.fromkeys(source_types))
         if not source_types or any(item not in SOURCE_WEIGHTS for item in source_types):
             raise CodeToolError("来源类型只能是 code、symbol、chunk 或 history")
-    tokens = _tokens(query) or [query.lower()]
-    results: List[Dict[str, Any]] = []
-    lexical = await asyncio.to_thread(search_code, root, project, query, max_results=limit)
-    for item in lexical["matches"]:
-        results.append({
-            "source_type": "code",
-            "source_id": f"{item['file']}:{item['line']}",
-            "score": 1.0,
-            "project": project,
-            **item,
-        })
-    index = await asyncio.to_thread(index_repository, root, project)
-    for symbol in index["symbols"]:
-        name = symbol["symbol_name"].lower()
-        if any(token in name for token in tokens):
-            results.append({
-                "source_type": "symbol",
-                "source_id": f"{symbol['file']}:{symbol['line']}:{symbol['symbol_name']}",
-                "score": 0.9,
-                "project": project,
-                **symbol,
-            })
-    results.extend(await _search_history(pool, project, query, limit, history_offset, history_days))
-    for item in await search_document_chunks(pool, project, query, limit):
-        item["score"] = min(0.85, max(0.1, item["score"]))
-        results.append(item)
-    if source_types is not None:
-        results = [item for item in results if item["source_type"] in source_types]
-    unique: Dict[str, Dict[str, Any]] = {}
-    for item in results:
-        item["raw_score"] = item["score"]
-        item["score"] = round(item["score"] * SOURCE_WEIGHTS[item["source_type"]], 6)
-        unique.setdefault(f"{item['source_type']}:{item['source_id']}", item)
-    ranked = sorted(unique.values(), key=lambda item: (-item["score"], item["source_id"]))[:limit]
-    return {"project": project, "query": query, "results": ranked, "total": len(ranked)}
+    request = RetrievalRequest(
+        root=root,
+        project=project,
+        query=query,
+        limit=limit,
+        options={
+            "pool": pool,
+            "history_offset": history_offset,
+            "history_days": history_days,
+        },
+    )
+    engine = RetrievalEngine(
+        [
+            CodeTextChannel(search_code),
+            SymbolChannel(index_repository),
+            HistoryChannel(_search_history),
+            DocumentChunkChannel(search_document_chunks),
+        ],
+        [
+            SourceFilterPostProcessor(source_types),
+            WeightedDeduplicationPostProcessor(SOURCE_WEIGHTS),
+        ],
+    )
+    outcome = await engine.run(request)
+    return {
+        "project": project,
+        "query": query,
+        "results": outcome.hits,
+        "total": len(outcome.hits),
+        "channels": outcome.channels,
+        "postprocessors": outcome.postprocessors,
+    }

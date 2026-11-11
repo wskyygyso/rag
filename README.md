@@ -107,7 +107,7 @@ docker compose --profile maintenance run --rm backup
 对象存储，按周期执行隔离数据库恢复演练。详细步骤和禁止事项见 `BACKUP_RESTORE.md`。
 
 启动后访问 `http://127.0.0.1:8000/` 可直接打开诊断工作台，`http://127.0.0.1:8000/ui` 保留为
-兼容入口。页面支持创建诊断任务、查看 SSE 进度、预览或下载 Markdown 报告，以及提交人工反馈。
+兼容入口。页面支持创建诊断任务、查看 SSE 进度和阶段时间线、预览或下载 Markdown 报告，以及提交人工反馈。
 该页面使用原生 HTML、CSS 和 JavaScript，不需要额外的前端构建工具；服务状态请访问 `/health`。
 
 ## API 访问控制
@@ -249,14 +249,35 @@ python3 scripts/check_comment_coverage.py
 
 ## 当前阶段说明
 
+Agentic RAG 内部重构的目标架构、边界和分阶段实施方案见：
+
+- [`docs/refactor-architecture.md`](docs/refactor-architecture.md)
+- [`docs/refactor-implementation-plan.md`](docs/refactor-implementation-plan.md)
+
+重构采用光滑迁移策略，保持现有 API、Celery 任务名、任务状态和报告字段兼容。内部重构已完成
+行为基线、诊断编排、检索通道、后处理链、确定性分析器插件、模型网关和阶段 Trace 的闭环。
+
 当前已支持：
 
 - 创建、查询、取消诊断任务；
 - Celery/Redis 异步执行；
-- SSE 进度推送；
+- SSE 进度推送与可恢复阶段时间线；
+- 候选模型、有限重试、Redis 熔断和证据引用校验；
 - 代码关键词检索；
 - PHP/配置文件按行读取；
 - 代码仓库和目录白名单校验。
+
+诊断阶段轨迹接口：
+
+```text
+GET /api/diagnoses/{task_id}/trace?limit=200
+GET /api/diagnoses/{task_id}/events
+```
+
+Trace 只保存阶段、状态、耗时、检索计数、模型名和降级原因等脱敏摘要，不保存完整源码、
+模型请求体、Cookie 或 API Key。阶段指标同时输出到 `/api/metrics` 的
+`ragent_diagnosis_stage_events`、`ragent_diagnosis_stage_duration_ms` 和
+`ragent_diagnosis_stage_max_duration_ms`。
 
 代码分析只读接口：
 

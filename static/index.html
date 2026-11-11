@@ -286,6 +286,18 @@
       .evidence-ref { min-height: 28px; padding: 4px 8px; color: #315344; background: #fff; border-color: var(--line-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 600; }
       .evidence-ref:hover { color: var(--accent-strong); background: var(--accent-soft); border-color: #98c2ad; }
 
+      .trace-list { display: grid; gap: 0; }
+      .trace-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+      .trace-row:last-child { border-bottom: 0; }
+      .trace-marker { width: 9px; height: 9px; margin-top: 5px; border: 2px solid #8cb8a4; border-radius: 50%; background: #fff; }
+      .trace-row[data-status="failed"] .trace-marker { border-color: var(--danger); background: #fff1ed; }
+      .trace-row[data-status="degraded"] .trace-marker,
+      .trace-row[data-status="insufficient_support"] .trace-marker { border-color: #bf8733; background: #fff7e7; }
+      .trace-row[data-status="succeeded"] .trace-marker { border-color: var(--accent); background: var(--accent); }
+      .trace-copy strong { display: block; color: #26342d; font-size: 12px; }
+      .trace-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+      .trace-time { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
       .callout { padding: 13px 14px; border: 1px solid #efd9a9; border-radius: 10px; color: #674715; background: var(--amber-soft); font-size: 12px; line-height: 1.65; }
       .callout.neutral { color: #425047; background: var(--paper-soft); border-color: var(--line); }
       .ai-summary { margin: 0; color: #29372f; font-size: 14px; line-height: 1.75; }
@@ -538,6 +550,15 @@
             </div>
           </section>
 
+          <section class="panel" aria-labelledby="trace-heading">
+            <details class="subsection" open>
+              <summary><span><strong id="trace-heading">诊断阶段时间线</strong><span>实时显示检索、验证、分析和 AI 降级节点</span></span></summary>
+              <div class="subsection-body">
+                <div id="diagnosis-trace" class="trace-list"><div class="empty-copy">任务开始后显示阶段时间线。</div></div>
+              </div>
+            </details>
+          </section>
+
           <section class="conclusion-card" aria-labelledby="conclusion-heading">
             <div class="conclusion-head">
               <div>
@@ -666,6 +687,7 @@
         boardRetryIds: new Set(),
         indexPollToken: 0,
         evidenceElements: new Map(),
+        traceItems: new Map(),
       };
       const $ = (id) => document.getElementById(id);
       const nativeFetch = window.fetch.bind(window);
@@ -1321,8 +1343,12 @@
         const diagnosis = result.ai_diagnosis;
         if (!diagnosis) {
           const hasAiWarning = (result.warnings || []).some((item) => /AI|模型|timeout|超时/i.test(String(item)));
+          const aiMetadata = result.ai_metadata || {};
+          const failureDetail = aiMetadata.error_message
+            ? `失败分类：${aiMetadata.error_type || "unknown"}；${aiMetadata.error_message}`
+            : "";
           const message = hasAiWarning
-            ? "本次 AI 补充未完成，但上方确定性结论由源码检索直接生成，仍可继续审阅证据。"
+            ? `本次 AI 补充未完成，但上方确定性结论由源码检索直接生成，仍可继续审阅证据。${failureDetail}`
             : "本次未生成 AI 补充；这不影响上方源码确定性结论。";
           container.appendChild(createElement("div", "callout neutral", message));
           return;
@@ -1644,6 +1670,100 @@
       }
 
       /**
+       * 将后端阶段标识转换为审阅人可理解的时间线标题。
+       * @param {string} stage 后端稳定的阶段标识。
+       * @returns {string} 页面展示的中文阶段名。
+       */
+      function traceStageLabel(stage) {
+        const labels = {
+          worker: "任务调度",
+          retrieval: "源码检索",
+          validation: "只读验证",
+          analysis: "确定性分析",
+          deterministic_analysis: "业务事实提取",
+          ai_narration: "AI 叙写",
+          reporting: "报告保存",
+          timeout: "任务超时",
+        };
+        return labels[stage] || stage || "诊断阶段";
+      }
+
+      /**
+       * 从脱敏轨迹负载提取适合时间线展示的一行摘要。
+       * @param {Object} trace 后端返回的阶段轨迹。
+       * @returns {string} 证据数量、耗时、模型降级或跳过原因摘要。
+       */
+      function traceSummary(trace) {
+        const payload = trace.payload || {};
+        const parts = [];
+        if (payload.evidence_count !== undefined) parts.push(`证据 ${payload.evidence_count} 条`);
+        if (payload.fact_count !== undefined) parts.push(`事实 ${payload.fact_count} 条`);
+        if (payload.symbol_count !== undefined) parts.push(`符号 ${payload.symbol_count} 个`);
+        if (payload.model) parts.push(`模型 ${payload.model}`);
+        if (payload.attempt_count && Number(payload.attempt_count) > 1) parts.push(`${payload.attempt_count} 次尝试`);
+        if (payload.fallback_reason) parts.push(`降级 ${payload.fallback_reason}`);
+        if (payload.error_type) parts.push(`错误 ${payload.error_type}`);
+        if (payload.reason) parts.push(String(payload.reason));
+        if (payload.database_status) parts.push(`数据库 ${payload.database_status}`);
+        if (!parts.length) parts.push(trace.event_type === "stage.started" ? "阶段已开始" : `状态 ${trace.status}`);
+        return parts.join(" · ");
+      }
+
+      /**
+       * 按轨迹 ID 顺序重绘诊断阶段时间线。
+       * @returns {void}
+       */
+      function renderTraceTimeline() {
+        const container = $("diagnosis-trace");
+        const items = [...state.traceItems.values()].sort((left, right) => Number(left.id) - Number(right.id));
+        container.replaceChildren();
+        if (!items.length) {
+          container.appendChild(createElement("div", "empty-copy", "任务开始后显示阶段时间线。"));
+          return;
+        }
+        items.forEach((trace) => {
+          const row = createElement("div", "trace-row");
+          row.dataset.status = trace.status || "";
+          row.append(createElement("span", "trace-marker"));
+          const copy = createElement("div", "trace-copy");
+          copy.append(
+            createElement("strong", "", traceStageLabel(trace.stage)),
+            createElement("span", "", traceSummary(trace)),
+          );
+          const elapsed = trace.elapsed_ms === null || trace.elapsed_ms === undefined
+            ? formatDateTime(trace.created_at)
+            : `${Number(trace.elapsed_ms).toLocaleString()} ms`;
+          row.append(copy, createElement("span", "trace-time", elapsed));
+          container.appendChild(row);
+        });
+      }
+
+      /**
+       * 合并一条 SSE 阶段事件并立即更新时间线。
+       * @param {Object} trace 已解析的阶段轨迹。
+       * @returns {void}
+       */
+      function renderTraceEvent(trace) {
+        if (!trace || trace.id === undefined) return;
+        state.traceItems.set(String(trace.id), trace);
+        renderTraceTimeline();
+      }
+
+      /**
+       * 从 Trace API 恢复完整阶段时间线，供历史任务和 SSE 断线后的页面使用。
+       * @param {string} taskId 诊断任务 ID。
+       * @returns {Promise<void>} 时间线渲染完成后结束。
+       */
+      async function loadTrace(taskId) {
+        const response = await apiFetch(`/api/diagnoses/${encodeURIComponent(taskId)}/trace?limit=500`);
+        if (!response.ok) throw new Error(await readApiError(response, `阶段时间线获取失败（${response.status}）`));
+        const data = await response.json();
+        state.traceItems.clear();
+        (data.items || []).forEach((trace) => state.traceItems.set(String(trace.id), trace));
+        renderTraceTimeline();
+      }
+
+      /**
        * 在任务进入终态后停止订阅并并行刷新报告、反馈和操作轨迹。
        * @param {string} taskId 当前诊断任务 ID。
        * @param {Object} task 已完成、失败或取消的任务响应。
@@ -1651,7 +1771,7 @@
        */
       async function finishWatchedTask(taskId, task) {
         stopWatching();
-        await Promise.allSettled([loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
+        await Promise.allSettled([loadTrace(taskId), loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
         $("message").textContent = task.status === "COMPLETED"
           ? "诊断完成，结论和证据已加载"
           : `任务${statusLabel(task.status)}`;
@@ -1682,6 +1802,8 @@
        */
       async function watchTask(taskId) {
         stopWatching();
+        state.traceItems.clear();
+        renderTraceTimeline();
         const controller = new AbortController();
         state.eventController = controller;
         try {
@@ -1699,12 +1821,23 @@
             const blocks = buffer.split("\n\n");
             buffer = blocks.pop();
             for (const block of blocks) {
-              const data = block.split("\n")
+              const lines = block.split("\n");
+              const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
+              const data = lines
                 .filter((line) => line.startsWith("data:"))
                 .map((line) => line.slice(5).trim())
                 .join("\n");
               if (!data) continue;
-              const task = JSON.parse(data);
+              const payload = JSON.parse(data);
+              if (eventName === "trace") {
+                renderTraceEvent(payload);
+                continue;
+              }
+              if (eventName === "error") {
+                $("message").textContent = payload.detail || "诊断进度流返回错误";
+                continue;
+              }
+              const task = payload;
               renderTask(task);
               if (isTerminalTask(task)) {
                 await finishWatchedTask(taskId, task);
@@ -1741,7 +1874,7 @@
         $("task-question").textContent = "正在加载诊断报告…";
         $("task-id").textContent = taskId;
         $("message").textContent = "正在加载报告与证据…";
-        const results = await Promise.allSettled([loadReport(taskId), loadFeedback(taskId), loadOperations(taskId)]);
+        const results = await Promise.allSettled([loadReport(taskId), loadTrace(taskId), loadFeedback(taskId), loadOperations(taskId)]);
         const reportResult = results[0];
         if (reportResult.status === "rejected") {
           $("message").textContent = friendlyError(reportResult.reason, "诊断报告加载失败");

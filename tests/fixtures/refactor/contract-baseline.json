@@ -1,0 +1,33 @@
+{
+  "worker_contract": {
+    "diagnosis_queue": "diagnosis",
+    "index_queue": "index",
+    "explicit_symbols": ["FuseRecoveryService", "GuildController::inviteGuild"],
+    "anchor_stage": "business_anchor",
+    "symbol_stage": "explicit_symbol"
+  },
+  "retrieval_support": {
+    "device_registration": {
+      "grounded": true,
+      "level": "semantic_concepts",
+      "required_concept_coverage": 3,
+      "required_domain_coverage": 2
+    },
+    "generic_only": {
+      "grounded": false,
+      "level": "insufficient"
+    }
+  },
+  "device_registration": {
+    "conclusion": "已从源码确认同一设备最多可注册 3 个用户。设备注册计数达到或超过该上限后，注册校验会拒绝继续创建账号。发送注册短信前也会执行同类数量校验。",
+    "required_categories": [
+      "设备注册上限",
+      "注册拦截条件",
+      "注册计数来源",
+      "注册入口校验",
+      "短信注册前置校验"
+    ],
+    "config_statement_fragment": "device_user_count_limit = 3",
+    "evidence_ref_suffix": "device.php:4"
+  }
+}

@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from app.code_tools import CodeRepository, IGNORED_REPOSITORY_PARTS
+from app.code_tools import CodeRepository
+from app.repository_files import iter_repository_files
 
 CLASS_PATTERN = re.compile(r"\b(class|interface|trait)\s+([A-Za-z_][A-Za-z0-9_]*)")
 METHOD_PATTERN = re.compile(
@@ -142,16 +143,17 @@ def parse_php_source(source: str, file_path: str) -> Dict[str, List[Dict]]:
 
 
 def iter_php_files(repository: CodeRepository) -> Iterable[Path]:
-    """遍历项目中的 PHP 文件，并跳过依赖和缓存目录。
+    """遍历项目中可安全读取的 PHP 文件。
 
     参数:
-        - `repository`：已验证的仓库对象，类型为 `CodeRepository`。
+        - `repository`：已验证的仓库对象，类型为 `CodeRepository`。扫描只读取
+          项目白名单内的普通文件，不跟随符号链接。
+
+    生成:
+        PHP 文件路径。依赖、缓存、坏链和单个不可读目录会被跳过，不能中断其余
+        源码的符号索引。
     """
-    for path in repository.path.rglob("*.php"):
-        if path.is_file() and not any(
-            part in IGNORED_REPOSITORY_PARTS for part in path.parts
-        ):
-            yield path
+    yield from iter_repository_files(repository.path, {".php"})
 
 
 def index_repository(root: str, project: str) -> Dict[str, List[Dict]]:
@@ -170,7 +172,10 @@ def index_repository(root: str, project: str) -> Dict[str, List[Dict]]:
     }
     for path in iter_php_files(repository):
         relative_path = str(path.relative_to(repository.path))
-        source = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
         parsed = parse_php_source(source, relative_path)
         for key in result:
             result[key].extend(parsed[key])

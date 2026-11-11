@@ -3,7 +3,7 @@
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
 
-from app import worker
+from app import diagnosis_workflow, worker
 from app.settings import Settings
 from app.task_store import recover_stale_diagnosis_tasks
 
@@ -100,8 +100,8 @@ def test_initial_hit_tagging_distinguishes_anchor_and_explicit_symbol() -> None:
     assert symbol_stage == "explicit_symbol"
 
 
-def test_query_evidence_uses_one_batch_search_and_keeps_config_definition(monkeypatch) -> None:
-    """验证全部规划词只触发一次扫描，并保留配置定义与全部命中词。
+def test_query_evidence_batches_and_backfills_config_definition(monkeypatch) -> None:
+    """验证全仓检索与配置定向补查分批执行，并保留配置定义与全部命中词。
 
     参数:
         - `monkeypatch`：pytest 运行期替换工具，用于记录底层检索调用。
@@ -129,7 +129,7 @@ def test_query_evidence_uses_one_batch_search_and_keeps_config_definition(monkey
             ]
         }
 
-    monkeypatch.setattr(worker, "search_code_terms", fake_search)
+    monkeypatch.setattr(diagnosis_workflow, "search_code_terms", fake_search)
 
     evidence = worker._search_query_evidence(
         "repositories",
@@ -138,8 +138,10 @@ def test_query_evidence_uses_one_batch_search_and_keeps_config_definition(monkey
         ["daily_limit"],
     )
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0][2] == ["SettlementService", "daily_limit"]
+    assert calls[1][2] == ["daily_limit", "function getByTestMode"]
+    assert calls[1][3]["include_globs"] == ("**/config/**", "**/conf/**")
     assert evidence[0]["type"] == "config_definition"
     assert evidence[0]["query"] == "daily_limit"
     assert evidence[0]["matched_queries"] == ["SettlementService", "daily_limit"]
@@ -332,7 +334,7 @@ def test_inherited_class_evidence_follows_extends_declaration(monkeypatch) -> No
         }[relative_path]
         return {"content": content, "start_line": start_line, "end_line": end_line}
 
-    monkeypatch.setattr(worker, "read_file", fake_read_file)
+    monkeypatch.setattr(diagnosis_workflow, "read_file", fake_read_file)
 
     evidence = worker._inherited_class_evidence(
         "repositories",
@@ -471,6 +473,67 @@ def test_diagnostic_evidence_reserves_config_definition_values() -> None:
     )
 
     assert config_definition in selected
+
+
+def test_diagnostic_evidence_prioritizes_requested_config_leaves() -> None:
+    """验证点号配置键的末级字段优先于无关配置定义进入证据窗口。
+
+    大型项目常包含大量同名 `coin_price` 配置。如果只按通用相关度保留配置定义，
+    真正回答美元最低兑换数的 `min_diamonds` 和 `dollar_to_diamond` 会被挤出
+    上下文。测试不绑定具体项目路径，只验证查询键决定配置定义优先级。
+    """
+    unrelated = [
+        {
+            "type": "config_definition",
+            "query": "coin_price",
+            "matched_queries": ["coin_price"],
+            "file": f"module/config/coin_{index}.php",
+            "line": 10,
+            "content": "'coin_price' => 1,",
+        }
+        for index in range(20)
+    ]
+    minimum = {
+        "type": "config_definition",
+        "query": "min_diamonds",
+        "matched_queries": ["min_diamonds"],
+        "file": "module/config/diamonds.php",
+        "line": 87,
+        "content": "'min_diamonds' => getByTestMode(80000, 800000),",
+    }
+    ratio = {
+        "type": "config_definition",
+        "query": "dollar_to_diamond",
+        "matched_queries": ["dollar_to_diamond"],
+        "file": "module/config/diamonds.php",
+        "line": 32,
+        "content": "'dollar_to_diamond' => 40000,",
+    }
+    test_mode_helper = {
+        "type": "code",
+        "query": "function getByTestMode",
+        "matched_queries": ["function getByTestMode"],
+        "file": "module/conf/SysEnv.php",
+        "line": 122,
+        "content": "function getByTestMode($testModeVal, $noTestModeVal)",
+    }
+    queries = [
+        "diamonds.withdrawal_limits.official.min_diamonds",
+        "diamonds.readonly_ratios.dollar_to_diamond",
+        "coin_price",
+        "min_diamonds",
+        "dollar_to_diamond",
+    ]
+
+    selected = worker._select_diagnostic_evidence(
+        [*unrelated, minimum, ratio, test_mode_helper],
+        queries,
+        limit=40,
+    )
+
+    assert minimum in selected
+    assert ratio in selected
+    assert test_mode_helper in selected
 
 
 def test_diagnostic_evidence_keeps_nearest_callees_for_top_chains() -> None:
@@ -732,6 +795,74 @@ def test_evidence_range_expands_complete_method_body() -> None:
     assert (start_line, end_line) == (157, 171)
 
 
+def test_history_version_parser_keeps_complete_decoding_window() -> None:
+    """验证历史版本解析证据不会在 Android 分支前被下一个方法截断。"""
+    start_line, end_line = worker._method_evidence_range(
+        {
+            "symbols": [
+                {
+                    "symbol_name": "ClientProfile::getAppVersion",
+                    "symbol_type": "method",
+                    "file": "php/conf/client.php",
+                    "line": 622,
+                },
+                {
+                    "symbol_name": "ClientProfile::normalize",
+                    "symbol_type": "method",
+                    "file": "php/conf/client.php",
+                    "line": 635,
+                },
+            ]
+        },
+        {
+            "type": "version_parser_code",
+            "query": "getAppVersion 版本编码规则",
+            "file": "php/conf/client.php",
+            "line": 622,
+        },
+    )
+
+    assert (start_line, end_line) == (618, 802)
+
+
+def test_config_access_evidence_includes_method_comment_and_count_rule() -> None:
+    """验证配置读取命中会带回同一方法内的注释和紧随其后的计数动作。"""
+    start_line, end_line = worker._method_evidence_range(
+        {"symbols": []},
+        {
+            "type": "code",
+            "query": "diamonds.withdrawal_limits.official.daily_limit",
+            "file": "php/domain/Withdrawal/Service/WithdrawalOrderCreateService.php",
+            "line": 336,
+        },
+    )
+
+    assert (start_line, end_line) == (312, 360)
+
+
+def test_diagnostic_evidence_reserves_history_version_parser() -> None:
+    """验证大量通用命中不会把唯一的版本解析函数挤出最终证据窗口。"""
+    evidence = [
+        {
+            "type": "generic_code",
+            "file": f"php/Config{i}.php",
+            "line": i + 1,
+            "content": "多开配置",
+        }
+        for i in range(80)
+    ]
+    version_parser = {
+        "type": "version_parser_code",
+        "file": "php/conf/client.php",
+        "line": 622,
+        "content": "public static function getAppVersion($ua)",
+    }
+
+    selected = worker._select_diagnostic_evidence([*evidence, version_parser], [], limit=48)
+
+    assert version_parser in selected
+
+
 def test_evidence_relevance_uses_concept_coverage_instead_of_project_symbols() -> None:
     """验证证据排序依靠通用概念覆盖和结构信号，而不是项目专属方法名。"""
     relevant = {
@@ -852,9 +983,9 @@ async def test_soft_timeout_marks_diagnosis_failed(monkeypatch) -> None:
             raise SoftTimeLimitExceeded("soft timeout")
         return {}
 
-    monkeypatch.setattr(worker, "create_pool", fake_create_pool)
-    monkeypatch.setattr(worker, "update_task", fake_update_task)
+    monkeypatch.setattr(diagnosis_workflow, "create_pool", fake_create_pool)
+    monkeypatch.setattr(diagnosis_workflow, "update_task", fake_update_task)
     with pytest.raises(SoftTimeLimitExceeded):
-        await worker._execute_diagnosis("diag_timeout")
+        await diagnosis_workflow.execute_diagnosis("diag_timeout")
     assert updates[-1][1]["status"] == "FAILED"
     assert updates[-1][1]["current_step"] == "任务执行超时"

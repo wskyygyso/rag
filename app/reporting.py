@@ -133,6 +133,7 @@ def build_markdown_report(task: Dict[str, Any]) -> str:
     validation = result.get("validation") or {}
     warnings = result.get("warnings") or []
     evidence = result.get("evidence") or []
+    history_events = result.get("history_events") or []
     assessment = build_assessment(result)
     return "\n".join(
         [
@@ -193,6 +194,10 @@ def build_markdown_report(task: Dict[str, Any]) -> str:
             "",
             _lines(result.get("call_chains") or []),
             "",
+            "## Git 历史证据",
+            "",
+            _history_lines(history_events),
+            "",
             "## 配置线索",
             "",
             _lines(
@@ -235,8 +240,10 @@ def build_evidence_markdown(task: Dict[str, Any]) -> str:
     facts = findings.get("facts") or []
     assessment = task.get("assessment") or build_assessment(result)
     evidence = result.get("evidence") or []
+    history_events = result.get("history_events") or []
     retrieval_plan = result.get("retrieval_plan") or {}
     evidence_by_ref = _evidence_index(evidence)
+    history_by_ref = _history_evidence_index(history_events)
     lines = [
         f"# 诊断证据：{task.get('task_id', task.get('id', 'unknown'))}",
         "",
@@ -275,7 +282,7 @@ def build_evidence_markdown(task: Dict[str, Any]) -> str:
                 ]
             )
             for ref in refs:
-                item = evidence_by_ref.get(ref)
+                item = evidence_by_ref.get(ref) or history_by_ref.get(ref)
                 if item is None:
                     lines.append(f"- `{ref}`：本次证据快照中未包含该行上下文。")
                     continue
@@ -354,6 +361,10 @@ def build_evidence_markdown(task: Dict[str, Any]) -> str:
                 for item in result.get("sql") or []
             ),
             "",
+            "### Git 历史提交",
+            "",
+            _history_lines(history_events),
+            "",
             "## 未验证项与警告",
             "",
             _lines(
@@ -367,6 +378,74 @@ def build_evidence_markdown(task: Dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines).strip() + "\n"
+
+
+def _history_lines(history_events: Iterable[Dict[str, Any]]) -> str:
+    """把 Git 历史事件格式化为可审阅的提交与快照摘要。
+
+    参数:
+        - `history_events`：历史通道返回的提交事件，包含仓库、提交哈希、作者
+          时间、提交说明、变更文件和可选源码快照。
+
+    Returns:
+        Markdown 无序列表。没有历史事件时明确输出“未采集”，避免读者把缺失的
+        发布记录误认为功能从未引入。
+    """
+    lines = []
+    for event in history_events:
+        repository = event.get("repository") or "."
+        short_commit = event.get("short_commit") or str(event.get("commit") or "")[:12]
+        lines.append(
+            f"- `{repository}` `{short_commit}` {event.get('authored_at') or '时间未知'}："
+            f"{event.get('subject') or '未填写提交说明'}"
+        )
+        files = [str(value) for value in event.get("files") or []]
+        if files:
+            lines.append(f"  - 变更文件：{'、'.join(files[:12])}")
+        matching = [
+            item
+            for item in event.get("snapshot_lines") or []
+            if item.get("is_match") and item.get("content")
+        ]
+        for item in matching[:5]:
+            lines.append(
+                f"  - `{item.get('file')}:{item.get('line')}` "
+                f"{str(item.get('content') or '').strip()}"
+            )
+    return "\n".join(lines) or "- 本次未采集到 Git 历史事件。"
+
+
+def _history_evidence_index(
+    history_events: Iterable[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """建立历史源码快照的“文件:行号”索引，供事实引用回查。
+
+    参数:
+        - `history_events`：Git 历史通道事件，每个事件可能包含提交时源码快照。
+
+    Returns:
+        当前源码证据不存在时使用的历史快照索引。提交哈希保留在条目中，审阅人
+        可以据此确认该行来自历史版本而不是当前工作区。
+    """
+    index: Dict[str, Dict[str, Any]] = {}
+    for event in history_events:
+        for item in event.get("snapshot_lines") or []:
+            file_name = str(item.get("file") or "")
+            line = item.get("line")
+            if not file_name or line is None:
+                continue
+            index.setdefault(
+                f"{file_name}:{line}",
+                {
+                    "file": file_name,
+                    "line": line,
+                    "content": str(item.get("content") or ""),
+                    "commit": event.get("commit"),
+                    "short_commit": event.get("short_commit"),
+                    "repository": event.get("repository"),
+                },
+            )
+    return index
 
 
 def _evidence_index(evidence: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
