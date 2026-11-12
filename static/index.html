@@ -501,6 +501,19 @@
                 <ul id="board-operation-result" class="status-text" aria-live="polite" hidden></ul>
               </div>
             </details>
+            <details class="subsection">
+              <summary><span><strong>项目知识库</strong><span>术语、配置结构和历史结论候选</span></span></summary>
+              <div class="subsection-body">
+                <p id="knowledge-summary" class="quality-copy">知识库摘要：正在加载…</p>
+                <div class="actions compact">
+                  <input id="knowledge-term" type="text" maxlength="40" placeholder="输入中文业务词查询术语" />
+                  <button id="knowledge-search" class="secondary" type="button">查询术语</button>
+                  <button id="knowledge-rebuild" class="secondary" type="button">重新校验知识库</button>
+                </div>
+                <span id="knowledge-message" class="status-text" role="status">知识库随诊断自动更新</span>
+                <div id="knowledge-glossary" class="history-list"><div class="empty-copy">输入中文词查看对应代码标识。</div></div>
+              </div>
+            </details>
             <p id="project-summary" class="quality-copy">项目反馈摘要：暂无数据</p>
             <p id="ai-quality" class="quality-copy">AI 质量摘要：暂无数据</p>
           </div>
@@ -927,6 +940,92 @@
           ? `${statusLabel(index.status)}，${index.chunk_count} 个分块，版本 ${index.repository_revision || "未知"}`
           : "暂无索引运行";
         $("project-overview").textContent = `项目概览：${data.tasks_total} 个任务；最近索引 ${indexText}`;
+      }
+
+      /**
+       * 加载项目知识库三类条目计数与代码指纹一致状态。
+       * @returns {Promise<void>} 摘要写入页面后完成。
+       */
+      async function loadKnowledgeSummary() {
+        const project = encodeURIComponent($("project").value.trim());
+        try {
+          const response = await apiFetch(`/api/knowledge/${project}/summary`);
+          if (!response.ok) throw new Error(await readApiError(response, `知识库摘要获取失败（${response.status}）`));
+          const data = await response.json();
+          const fingerprintText = data.fingerprint_matched
+            ? "与代码快照一致"
+            : data.glossary_fingerprint
+              ? "代码已变化，待重新校验"
+              : "尚未生成术语";
+          $("knowledge-summary").textContent =
+            `知识库摘要：术语 ${data.glossary_count} 条，配置结构 ${data.config_structure_count} 条，历史结论 ${data.conclusion_count} 条；指纹${fingerprintText}`;
+        } catch (error) {
+          $("knowledge-summary").textContent = friendlyError(error, "知识库摘要获取失败");
+        }
+      }
+
+      /**
+       * 按中文业务词查询知识库术语并渲染“中文词 → 代码标识”列表。
+       * @returns {Promise<void>} 查询结果写入页面后完成。
+       */
+      async function searchKnowledgeGlossary() {
+        const project = encodeURIComponent($("project").value.trim());
+        const term = $("knowledge-term").value.trim();
+        const container = $("knowledge-glossary");
+        container.replaceChildren();
+        $("knowledge-message").textContent = "正在查询术语…";
+        try {
+          const response = await apiFetch(
+            `/api/knowledge/${project}/glossary?term=${encodeURIComponent(term)}&limit=20`,
+          );
+          if (!response.ok) throw new Error(await readApiError(response, `术语查询失败（${response.status}）`));
+          const data = await response.json();
+          if (!data.terms.length) {
+            container.appendChild(
+              createElement("div", "empty-copy", "没有匹配术语；新业务名会在下次诊断索引后自动补齐。"),
+            );
+            $("knowledge-message").textContent = "未命中知识库";
+            return;
+          }
+          data.terms.forEach((item) => {
+            const row = createElement("div", "list-row main");
+            row.appendChild(createElement("strong", "", `${item.term} → ${item.code_term}`));
+            row.appendChild(
+              createElement(
+                "small",
+                "",
+                `${item.term_kind} · ${item.source} · 置信度 ${Number(item.confidence).toFixed(3)}`,
+              ),
+            );
+            container.appendChild(row);
+          });
+          $("knowledge-message").textContent = `命中 ${data.terms.length} 条术语`;
+        } catch (error) {
+          $("knowledge-message").textContent = friendlyError(error, "术语查询失败");
+        }
+      }
+
+      /**
+       * 只读项目符号表重新校验术语表，并刷新知识库摘要。
+       * @returns {Promise<void>} 重建请求和摘要刷新完成后结束。
+       */
+      async function rebuildKnowledge() {
+        const project = encodeURIComponent($("project").value.trim());
+        if (!project) return;
+        $("knowledge-rebuild").disabled = true;
+        $("knowledge-message").textContent = "正在重新校验知识库…";
+        try {
+          const response = await apiFetch(`/api/knowledge/${project}/rebuild`, { method: "POST" });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `知识库重建失败（${response.status}）`);
+          $("knowledge-message").textContent =
+            `知识库已校验：保留 ${body.entry_count} 条，移除 ${body.removed_count} 条失效术语`;
+          await loadKnowledgeSummary();
+        } catch (error) {
+          $("knowledge-message").textContent = friendlyError(error, "知识库重建失败");
+        } finally {
+          $("knowledge-rebuild").disabled = false;
+        }
       }
 
       /**
@@ -2045,6 +2144,7 @@
         const operations = [
           loadProjectOverview(),
           loadIndexHistory(),
+          loadKnowledgeSummary(),
           loadTaskBoard(),
           loadHistory(false),
         ];
@@ -2246,6 +2346,16 @@
           $("rebuild-index").disabled = false;
         }
       });
+
+      // 查询知识库中文术语，并支持回车触发。
+      $("knowledge-search").addEventListener("click", () => searchKnowledgeGlossary());
+      $("knowledge-term").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          searchKnowledgeGlossary();
+        }
+      });
+      $("knowledge-rebuild").addEventListener("click", () => rebuildKnowledge());
 
       // 批量取消看板中选中的运行任务。
       $("cancel-selected").addEventListener("click", async () => {

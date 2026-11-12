@@ -32,12 +32,12 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 | 项目 | 状态 |
 |---|---|
-| 当前阶段 | 阶段 34：通用 PHP 配置问答引擎与问题类型路由已完成 |
-| 总体进度 | 99%（阶段 0 至 34 已完成；正式生产上线和满足生产时限的 embedding 容量待补齐） |
+| 当前阶段 | 阶段 35：自动派生的项目知识库已完成 |
+| 总体进度 | 99%（阶段 0 至 35 已完成；正式生产上线和 embedding 容量待补齐） |
 | 最近更新 | 2026-11-12 |
 | 当前负责人 | Codex |
-| 当前阻塞 | 当前 coding embedding 套餐能以单并发完成 waky3 全量索引，但耗时 41,068 秒，远高于生产索引软超时 900 秒；生产交付需要更高吞吐配额或本地/专用 embedding 服务 |
-| 下一步 | 用户审阅阶段 34 工作区改动，确认后使用中文 commit 提交；继续按 `tests/diagnosis-test-questions.md` 执行 A/D 类剩余问题 |
+| 当前阻塞 | 生产 embedding 吞吐仍需更高配额或本地/专用服务；知识库长尾术语质量可在后续阶段继续优化 |
+| 下一步 | 用户审阅阶段 35 工作区改动，确认后使用中文 commit 提交 |
 
 ## 阶段进度
 
@@ -78,10 +78,72 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 | 32 | waky3 配置类问题检索与兜底结论修复 | 已完成 | 100% |
 | 33 | VIP 等级奖品枚举问答闭环 | 已完成 | 100% |
 | 34 | 通用 PHP 配置问答引擎与问题类型路由 | 已完成 | 100% |
+| 35 | 自动派生的项目知识库 | 已完成（含真实 E2E） | 100% |
 
 ---
 
 ## 阶段性提交记录
+
+### 2026-11-12：阶段 35 自动派生的项目知识库
+
+#### 本次推进
+
+- 新增 `migrations/025_create_project_knowledge.sql`：`project_glossary`、
+  `project_config_structure`、`project_verified_conclusions` 三表，包含项目隔离、
+  唯一键、查询索引、有效期字段和逐字段中文备注。
+- 新增 `app/project_knowledge.py`：术语抽取、按代码指纹整体替换、问题术语查询、
+  运行时模型词沉淀、配置结构脱敏落库、结论候选保存/查询和反馈状态流转；所有
+  数据库异常静默降级，不阻断诊断。
+- `app/php_index.py` 增加中文注释术语抽取：类/方法声明前 3 行注释、配置键同行
+  注释、目录名/文件名干配对，单文件上限 200 条；`index_repository` 输出新增
+  `glossary` 分组。
+- `app/project_index_cache.py` 兼容旧缓存：缺少 `glossary` 时按空列表处理，其余
+  四类索引保持严格校验。
+- `app/term_expansion.py` 新增 `glossary_terms` 参数：知识库词先经索引真实性
+  校验，命中后返回 `glossary_hit` 并跳过模型调用；未命中时保持原有缓存/模型/
+  降级语义。
+- `app/diagnosis_workflow.py` 接入知识库：术语查询结果参与扩展、模型扩展词
+  自动沉淀、符号索引落库后同步术语表、证据配置写入结构摘要、确定性结论保存为
+  候选，并把知识库元数据和 `candidate_conclusions` 写入 `retrieval_plan`
+  （显式标注 `not_used_in_conclusion=true`）。
+- `app/feedback_api.py` 在反馈成功后更新历史结论状态：`correct` 升级
+  `verified`，`inaccurate` 标记 `rejected`。
+- 新增 `app/knowledge_api.py` 与路由注册：摘要、术语查询、配置结构查询、结论
+  查询和“只读符号表重新校验”重建接口，数据库不可用时返回 503。
+- 新增配置项 `project_knowledge_enabled`（`.env.example` 同步说明），关闭后知识库
+  查询返回 `disabled`，不影响检索主流程。
+- 前端“项目与运维”新增项目知识库卡片：三类条目计数、指纹一致状态、中文术语
+  查询和重新校验按钮。
+- 新增 `tests/test_project_knowledge.py`（12 个用例），覆盖注释术语抽取、指纹
+  失效、数据库降级、敏感值脱敏、结论候选过滤、反馈状态流转、术语扩展
+  `glossary_hit` 和知识库接口。
+
+#### 本次验证
+
+- `.venv/bin/python -m pytest -q`：`376 passed`；
+- `python3 scripts/check_comment_coverage.py`：通过；
+- `node scripts/check_frontend_syntax.js`：通过；
+- `tests/test_migrations.py` 同步断言迁移版本到 `025`。
+- 真实 E2E（重建 api/worker 镜像并应用 024/025 迁移后，`use_ai=false`）：
+  - 游戏榜前 10 名：23.1 秒，1-4 名金额 `100/60/40/20` 美元正确；
+  - VIP 1-12 奖品：74.2 秒，逐级贵族卡和道具正确；
+  - FIFA2026 奖池：15.2 秒，`pool.base=900000`、`pool.rate=0.05`，并提示注释与代码不一致；
+  - fupay 商户号：15.1 秒，测试为空、正式 `alvV4011fAdY`；
+  - 四条结论与阶段 34 一致，`retrieval_plan.knowledge` 均出现，历史结论候选各 1 条；
+  - 索引缓存升级到 `v2` 后术语表自动派生 500 条，配置结构累计写入 1211 条，
+    知识库摘要 `fingerprint_matched=true`。
+
+#### 当前状态
+
+- 三块知识全部自动派生，无人工业务文档或映射表；
+- 候选结论只进入 `retrieval_plan.candidate_conclusions`，未改变既有 `conclusion`；
+- 知识库术语目前按注释整句派生，长尾中文短语覆盖仍可继续优化；
+- 尚未提交 Git。
+
+#### 下一步
+
+- 用户审阅阶段 35 工作区改动；
+- 确认后使用中文 commit 提交并推送。
 
 ### 2026-11-12：阶段 34 通用 PHP 配置问答引擎与问题类型路由
 

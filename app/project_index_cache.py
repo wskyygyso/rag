@@ -17,7 +17,9 @@ from app.php_index import index_repository, iter_php_files
 
 logger = logging.getLogger(__name__)
 
-_INDEX_KEY_PREFIX = "ragent:project-symbol-index:v1"
+# 缓存版本随索引结构变化。v2 增加中文注释术语分组 glossary；旧版本缓存虽然
+# 仍可解码，但缺少术语会导致知识库为空，因此升级前缀强制重建一次。
+_INDEX_KEY_PREFIX = "ragent:project-symbol-index:v2"
 _RELEASE_LOCK_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -107,7 +109,8 @@ def decode_index(payload: Any) -> Dict[str, list]:
 
     Returns:
         可直接供检索链路使用的项目索引；载荷损坏或结构缺失时抛出
-        `ValueError`，调用方会删除坏缓存并重新构建。
+        `ValueError`，调用方会删除坏缓存并重新构建。`glossary` 是后加的派生
+        知识字段，旧版本缓存缺少该字段时按空列表处理，不影响既有索引复用。
     """
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
@@ -122,6 +125,11 @@ def decode_index(payload: Any) -> Dict[str, list]:
         if not isinstance(value, list):
             raise ValueError(f"项目符号索引缓存缺少列表字段：{key}")
         result[key] = value
+    # 只有缓存中真实存在列表型 glossary 时才补齐字段；测试和旧缓存可能没有
+    # 该键，保持原样可避免把“缺失字段”误判为知识库为空并破坏索引结构比较。
+    glossary = decoded.get("glossary")
+    if isinstance(glossary, list):
+        result["glossary"] = glossary
     return result
 
 

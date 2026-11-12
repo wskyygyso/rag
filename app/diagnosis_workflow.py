@@ -52,7 +52,17 @@ from app.repository_history import (
     select_history_terms_from_current_hits,
     search_repository_history,
 )
+from app.domain.diagnosis.config_graph import parse_config_graph
+from app.domain.diagnosis.analyzers.common import _evidence_lines
 from app.project_index_cache import load_project_symbol_index
+from app.project_knowledge import (
+    load_conclusion_candidates,
+    load_glossary_terms,
+    record_config_structure,
+    record_runtime_glossary,
+    replace_project_glossary_if_changed,
+    save_candidate_conclusion,
+)
 from app.llm_diagnosis import count_available_evidence, generate_ai_diagnosis_cached
 from app.reporting import build_assessment
 from app.retrieval.channels import SearchTermsChannel
@@ -1657,6 +1667,13 @@ async def execute_diagnosis(task_id: str) -> None:
         expanded_terms: list[str] = []
         retrieval_channel_summaries: list[dict] = []
         symbol_sync_summary: dict = {"updated": False, "symbol_count": 0}
+        # 知识库同步结果只用于审计和前端展示，不参与结论生成。
+        knowledge_sync_summary: dict = {
+            "glossary": {"updated": False, "entry_count": 0},
+            "config_node_count": 0,
+            "conclusion_candidate": False,
+            "candidate_count": 0,
+        }
         try:
             initial_terms = list(dict.fromkeys([*generic_anchors, *explicit_symbols]))
             initial_outcome = await RetrievalEngine(
@@ -1948,6 +1965,23 @@ async def execute_diagnosis(task_id: str) -> None:
                 project_index = index_result.index
                 index_prepare_summary = index_result.audit_dict()
                 index_ready = True
+                # 先查自动派生知识库：中文术语命中的代码词仍需通过索引真实性
+                # 校验；查询失败只降级为空词表，不影响后续模型扩展。
+                glossary_result = await load_glossary_terms(
+                    pool,
+                    current["project"],
+                    current["question"],
+                    limit=8,
+                    enabled=settings.project_knowledge_enabled,
+                )
+                expanded_term_summary["glossary"] = {
+                    "status": glossary_result.get("status") or "not_requested",
+                    "term_count": len(glossary_result.get("terms") or []),
+                    "terms": [
+                        str(item) for item in (glossary_result.get("terms") or [])
+                    ],
+                    "reason": str(glossary_result.get("reason") or ""),
+                }
                 # 静态概念词无法覆盖新活动、新道具等未知业务命名。这里先做一次
                 # 运行时术语扩展，并用真实符号、文件名干、目录名和配置键校验
                 # 候选词；扩展结果参与后续配置键选择，模型不可用时为空词表。
@@ -1970,6 +2004,7 @@ async def execute_diagnosis(task_id: str) -> None:
                             project=current["project"],
                             project_index=project_index,
                             settings=settings,
+                            glossary_terms=glossary_result.get("terms") or [],
                         )
                     )
                 else:
@@ -1978,10 +2013,24 @@ async def execute_diagnosis(task_id: str) -> None:
                             "status": "skipped",
                             "terms": [],
                             "rejected_terms": [],
+                            "glossary_term_count": 0,
                             "reason": "已命中专用分析器或历史问题",
                         }
                     )
                 expanded_terms = list(expanded_term_summary.get("terms") or [])
+                if (
+                    expanded_term_summary.get("status") == "succeeded"
+                    and expanded_terms
+                ):
+                    # 模型扩展词已经通过真实索引校验，可沉淀为低置信术语，
+                    # 下次同一中文业务名可直接命中知识库，减少模型调用。
+                    await record_runtime_glossary(
+                        pool,
+                        current["project"],
+                        index_prepare_summary.get("fingerprint") or "",
+                        current["question"],
+                        expanded_terms,
+                    )
                 if expanded_terms:
                     # 扩展词同样参与“概念词是否等于配置文件名干/活动目录名”的
                     # 补证，避免新业务配置因全文检索截断而无法进入证据窗口。
@@ -2212,6 +2261,16 @@ async def execute_diagnosis(task_id: str) -> None:
                     index_prepare_summary["fingerprint"],
                     project_index,
                 )
+                # 符号索引落库后，同一指纹下派生术语表；失败只记录审计状态，
+                # 不阻断报告生成。
+                knowledge_sync_summary["glossary"] = (
+                    await replace_project_glossary_if_changed(
+                        pool,
+                        current["project"],
+                        index_prepare_summary["fingerprint"],
+                        project_index,
+                    )
+                )
                 symbol_summary = summarize_symbol_index(
                     project_index,
                     current["project"],
@@ -2338,6 +2397,59 @@ async def execute_diagnosis(task_id: str) -> None:
             current["question"], report_result
         )
         deterministic_findings = report_result["deterministic_findings"]
+        fingerprint = str(index_prepare_summary.get("fingerprint") or "")
+        if fingerprint:
+            try:
+                # 配置结构来自当前证据窗口，只记录已解析的安全值和路径；不会
+                # 为了知识库重新扫描仓库。
+                config_graph = parse_config_graph(_evidence_lines(deduplicated))
+                knowledge_sync_summary["config_node_count"] = (
+                    await record_config_structure(
+                        pool,
+                        current["project"],
+                        fingerprint,
+                        config_graph.entries,
+                        config_graph.env_values,
+                    )
+                )
+                knowledge_sync_summary["conclusion_candidate"] = (
+                    await save_candidate_conclusion(
+                        pool,
+                        current["project"],
+                        fingerprint,
+                        task_id,
+                        current["question"],
+                        str(deterministic_findings.get("conclusion") or ""),
+                        deterministic_findings.get("facts") or [],
+                        deterministic_findings.get("evidence_refs") or [],
+                    )
+                )
+                candidates = await load_conclusion_candidates(
+                    pool,
+                    current["project"],
+                    current["question"],
+                    fingerprint,
+                    limit=3,
+                )
+            except Exception as exc:
+                candidates = []
+                warnings.append(f"知识库写入降级: {type(exc).__name__}")
+        else:
+            candidates = []
+        knowledge_sync_summary["candidate_count"] = len(candidates)
+        report_result["retrieval_plan"]["knowledge"] = dict(knowledge_sync_summary)
+        # 历史结论只作为检索候选提示；显式标注不参与结论，避免调用方误用。
+        report_result["retrieval_plan"]["candidate_conclusions"] = [
+            {
+                "question": str(item.get("question") or ""),
+                "conclusion": str(item.get("conclusion") or ""),
+                "status": str(item.get("status") or ""),
+                "evidence_refs": item.get("evidence_refs") or [],
+                "expires_at": item.get("expires_at"),
+                "not_used_in_conclusion": True,
+            }
+            for item in candidates
+        ]
         await record_trace_span(
             pool,
             task_id,

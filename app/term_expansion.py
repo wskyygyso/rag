@@ -388,6 +388,7 @@ async def expand_question_terms(
     redis_client: Any = None,
     limit: int = 8,
     timeout_seconds: float = 40.0,
+    glossary_terms: Iterable[str] = (),
 ) -> Dict[str, Any]:
     """为问题生成并校验少量真实存在的英文代码词。
 
@@ -402,17 +403,43 @@ async def expand_question_terms(
           自行创建并关闭。
         - `limit`：最多保留的扩展词数，类型为 `int`。
         - `timeout_seconds`：扩展模型调用超时秒数，类型为 `float`。
+        - `glossary_terms`：项目知识库给出的中文术语对应代码词，类型为
+          `Iterable[str]`；先经过项目索引真实性校验，命中后不再调用模型。
 
     Returns:
-        包含 `status`、`terms`、`rejected_terms` 和 `reason` 的审计字典。可能状态：
-        `disabled`（未启用）、`cache_hit`（命中缓存）、`succeeded`（模型+校验成功）
-        和 `degraded`（模型或解析失败，返回空词表）。任何失败都不会中断诊断。
+        包含 `status`、`terms`、`rejected_terms`、`glossary_term_count` 和
+        `reason` 的审计字典。可能状态：`disabled`（未启用）、`glossary_hit`
+        （知识库命中且校验通过）、`cache_hit`（命中模型缓存）、`succeeded`
+        （模型+校验成功）和 `degraded`（模型或解析失败，返回空词表）。任何失败
+        都不会中断诊断。
     """
+    # 知识库词来自真实索引派生，不依赖模型是否启用；先校验再决定是否跳过
+    # 模型调用，既减少一次请求，也保证知识库在纯本地模式仍然有效。
+    glossary_candidates = [
+        str(item).strip() for item in glossary_terms if str(item).strip()
+    ][: max(1, limit) * 2]
+    validation_tokens = _validation_tokens(project_index)
+    validated_glossary = (
+        _validated_terms(glossary_candidates, validation_tokens, limit)
+        if validation_tokens
+        else []
+    )
+    if validated_glossary:
+        return {
+            "status": "glossary_hit",
+            "terms": validated_glossary,
+            "rejected_terms": [
+                item for item in glossary_candidates if item not in validated_glossary
+            ],
+            "glossary_term_count": len(validated_glossary),
+            "reason": "知识库命中，已跳过模型扩展",
+        }
     if not settings.llm_enabled or not settings.llm_term_expansion_enabled:
         return {
             "status": "disabled",
             "terms": [],
             "rejected_terms": [],
+            "glossary_term_count": 0,
             "reason": "LLM 术语扩展未启用",
         }
     cache_material = f"{_TERM_CACHE_VERSION}\n{project}\n{question.strip()}".encode("utf-8")
@@ -428,13 +455,15 @@ async def expand_question_terms(
                 "status": "cache_hit",
                 "terms": cached_terms,
                 "rejected_terms": [],
+                "glossary_term_count": 0,
                 "reason": "",
             }
-        validation_tokens = _validation_tokens(project_index)
-        if not validation_tokens:            return {
+        if not validation_tokens:
+            return {
                 "status": "degraded",
                 "terms": [],
                 "rejected_terms": [],
+                "glossary_term_count": 0,
                 "reason": "项目符号索引为空，无法校验候选词",
             }
         excluded = set(re.findall(r"[A-Za-z][A-Za-z0-9_]{2,39}", question))
@@ -458,6 +487,7 @@ async def expand_question_terms(
             "status": "succeeded",
             "terms": terms,
             "rejected_terms": rejected,
+            "glossary_term_count": 0,
             "reason": "",
         }
     except Exception as exc:
@@ -465,6 +495,7 @@ async def expand_question_terms(
             "status": "degraded",
             "terms": [],
             "rejected_terms": [],
+            "glossary_term_count": 0,
             "reason": f"术语扩展降级: {type(exc).__name__}",
         }
     finally:

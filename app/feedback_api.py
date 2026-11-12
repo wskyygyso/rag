@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.auth import operation_actor, require_project_access
+from app.project_knowledge import apply_feedback_to_conclusion
 from app.task_store import (
     get_task,
     insert_feedback,
@@ -64,14 +65,23 @@ async def create_feedback(
         - `request`：FastAPI 请求上下文，类型为 `Request`。
     """
     pool = _pool(request)
-    await _authorized_task(pool, request, task_id)
-    return await insert_feedback(
+    task = await _authorized_task(pool, request, task_id)
+    result = await insert_feedback(
         pool,
         task_id,
         payload.rating,
         payload.comment,
         operation_actor(request, payload.submitted_by),
     )
+    # 反馈直接决定历史结论是否可继续作为检索候选；知识库更新失败不能影响
+    # 反馈保存结果，因此函数内部自行降级。
+    await apply_feedback_to_conclusion(
+        pool,
+        str(task.get("project") or ""),
+        str(task.get("question") or ""),
+        payload.rating,
+    )
+    return result
 
 
 @router.get("/{task_id}/feedback")

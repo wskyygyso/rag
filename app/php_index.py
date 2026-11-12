@@ -24,6 +24,23 @@ CONFIG_PATTERN = re.compile(
 SQL_PATTERN = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE)\s+.+?\b(FROM|INTO|SET)\b", re.I)
 IGNORED_CALLS = {"if", "for", "foreach", "while", "switch", "catch", "function", "echo"}
 
+# 中文注释术语抽取：只识别包含汉字的注释，用于自动派生“中文业务词 → 代码标识”。
+# 抽取结果只进入项目知识库，不参与调用链和诊断结论。
+_CHINESE_PATTERN = re.compile(r"[\u4e00-\u9fff]")
+_COMMENT_PATTERN = re.compile(r"(?:\/\/|#|\/\*|\*\/|\*)\s*(.*)")
+_GLOSSARY_TERM_SPLITTER = re.compile(r"[，。；：、,;:()（）\[\]【】\"'`|]+")
+_ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_\\]+")
+_CONFIG_ARRAY_KEY_PATTERN = re.compile(
+    r"^['\"](?P<key>[A-Za-z_][A-Za-z0-9_.:-]*)['\"]\s*=>"
+)
+# 单文件术语上限，避免超大注释文件把符号索引和知识库写入放大。
+MAX_GLOSSARY_TERMS_PER_FILE = 200
+# 中文术语长度范围：过短无法区分业务，过长无法作为检索词。
+MIN_GLOSSARY_TERM_LENGTH = 2
+MAX_GLOSSARY_TERM_LENGTH = 40
+# 声明前允许回看的注释行数，覆盖常见的单行和多行文档注释。
+GLOSSARY_COMMENT_LOOKBACK = 3
+
 
 def _line_number(source: str, position: int) -> int:
     """根据字符串偏移量计算从 1 开始的源代码行号。
@@ -65,6 +82,160 @@ def _enclosing_method(methods: List[Tuple[int, str]], position: int) -> Optional
     return current
 
 
+def _clean_glossary_term(value: str) -> str:
+    """把注释片段清理为可检索的中文业务词。
+
+    参数:
+        - `value`：从注释中切分出的文本片段，类型为 `str`；可能包含英文、
+          数字、标点或空白。
+
+    Returns:
+        只保留汉字和少量中文连接词后的文本，并截断到最大长度。空字符串表示
+        该片段不足以构成业务术语，调用方应跳过。
+    """
+    text = str(value or "").strip(" \t*/-#")
+    if not text or not _CHINESE_PATTERN.search(text):
+        return ""
+    # 注释里的英文标识符和数字会干扰术语匹配，直接移除；业务名称通常是连续
+    # 汉字，移除后仍保持可读。
+    text = _ASCII_TOKEN_PATTERN.sub("", text).strip()
+    text = re.sub(r"\s+", "", text)
+    if not (MIN_GLOSSARY_TERM_LENGTH <= len(text) <= MAX_GLOSSARY_TERM_LENGTH):
+        return ""
+    return text
+
+
+def _comment_terms(raw_line: str) -> List[str]:
+    """从一行 PHP 源码中提取中文注释术语。
+
+    参数:
+        - `raw_line`：PHP 源码单行，类型为 `str`。
+
+    Returns:
+        去重后的中文术语列表。注释内容按常见中文标点切分，只保留长度 2 到 40
+        的片段；没有注释或注释不含汉字时返回空列表。
+    """
+    match = _COMMENT_PATTERN.search(raw_line)
+    if match is None:
+        return []
+    comment = match.group(1)
+    if not _CHINESE_PATTERN.search(comment):
+        return []
+    terms: List[str] = []
+    for part in _GLOSSARY_TERM_SPLITTER.split(comment):
+        cleaned = _clean_glossary_term(part)
+        if cleaned and cleaned not in terms:
+            terms.append(cleaned)
+    return terms
+
+
+def _extract_glossary(source: str, file_path: str) -> List[Dict]:
+    """从单个 PHP 文件抽取中文术语与真实代码标识的对应关系。
+
+    参数:
+        - `source`：PHP 文件全文，类型为 `str`。
+        - `file_path`：项目内相对路径，类型为 `str`；用于生成证据引用和目录词。
+
+    Returns:
+        术语条目列表，字段包括 `term`、`code_term`、`term_kind`、`source`、
+        `file`、`line` 和 `confidence`。只配对同一文件内真实出现的类名、方法名、
+        配置键、目录名或文件名干，不猜测其他业务名；单文件最多返回
+        `MAX_GLOSSARY_TERMS_PER_FILE` 条。
+    """
+    lines = source.splitlines()
+    comment_terms: List[Tuple[int, str, str]] = []
+    for index, raw_line in enumerate(lines):
+        for term in _comment_terms(raw_line):
+            comment_terms.append((index + 1, term, raw_line))
+    if not comment_terms:
+        return []
+
+    entries: List[Dict] = []
+    seen = set()
+
+    def add(term: str, code_term: str, term_kind: str, line: int) -> None:
+        """登记一条术语映射，并跳过重复或非法标识。
+
+        参数:
+            - `term`：中文业务词，类型为 `str`。
+            - `code_term`：真实代码标识，类型为 `str`。
+            - `term_kind`：代码词类型，类型为 `str`。
+            - `line`：证据行号，类型为 `int`。
+
+        Returns:
+            无返回值；结果直接写入外层 `entries`。
+        """
+        code = str(code_term or "").strip()
+        if not code or not term:
+            return
+        signature = (term, code)
+        if signature in seen:
+            return
+        seen.add(signature)
+        entries.append(
+            {
+                "term": term,
+                "code_term": code,
+                "term_kind": term_kind,
+                "source": "comment" if term_kind != "runtime" else "llm",
+                "file": file_path,
+                "line": line,
+                "confidence": 0.8,
+            }
+        )
+
+    # 声明同行或前 3 行的中文注释与类名、方法名、函数名配对。
+    declarations: List[Tuple[int, str]] = []
+    for match in CLASS_PATTERN.finditer(source):
+        declarations.append((_line_number(source, match.start()), match.group(2)))
+    for match in METHOD_PATTERN.finditer(source):
+        declarations.append((_line_number(source, match.start()), match.group(1)))
+    for line_number, code_term in declarations:
+        nearby = [
+            (comment_line, term)
+            for comment_line, term, _ in comment_terms
+            if line_number - GLOSSARY_COMMENT_LOOKBACK <= comment_line <= line_number
+        ]
+        if nearby:
+            # 只取离声明最近的一条中文注释，避免把文件头说明套到每个方法上。
+            _, term = max(nearby, key=lambda item: item[0])
+            add(term, code_term, "symbol", line_number)
+        if len(entries) >= MAX_GLOSSARY_TERMS_PER_FILE:
+            break
+
+    # 配置键同行中文注释，例如 `'poolBase' => 900000, // 奖池基础值`。
+    if len(entries) < MAX_GLOSSARY_TERMS_PER_FILE:
+        for index, raw_line in enumerate(lines):
+            key_match = _CONFIG_ARRAY_KEY_PATTERN.match(raw_line.strip())
+            if key_match is None:
+                continue
+            terms = _comment_terms(raw_line)
+            for term in terms:
+                add(term, key_match.group("key"), "config_key", index + 1)
+                if len(entries) >= MAX_GLOSSARY_TERMS_PER_FILE:
+                    break
+            if len(entries) >= MAX_GLOSSARY_TERMS_PER_FILE:
+                break
+
+    # 中文注释中直接提到目录名或文件名干时，建立路径级术语；目录名比通用
+    # `config.php` 更能说明业务归属，所以目录词优先登记。
+    if len(entries) < MAX_GLOSSARY_TERMS_PER_FILE:
+        normalized_path = file_path.replace("\\", "/")
+        directory_parts = normalized_path.split("/")[:-1]
+        file_stem = normalized_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        for comment_line, term, raw_line in comment_terms:
+            folded_raw = raw_line.casefold()
+            for part in directory_parts:
+                if part and part.casefold() in folded_raw:
+                    add(term, part, "directory", comment_line)
+            if file_stem and file_stem.casefold() in folded_raw:
+                add(term, file_stem, "file", comment_line)
+            if len(entries) >= MAX_GLOSSARY_TERMS_PER_FILE:
+                break
+
+    return entries[:MAX_GLOSSARY_TERMS_PER_FILE]
+
+
 def parse_php_source(source: str, file_path: str) -> Dict[str, List[Dict]]:
     """解析 PHP 源码中的符号、调用关系、配置读取和 SQL 片段。
 
@@ -73,7 +244,9 @@ def parse_php_source(source: str, file_path: str) -> Dict[str, List[Dict]]:
         - `file_path`：源码在项目中的相对路径，用于写入证据来源，类型为 `str`。
 
     Returns:
-        包含 `symbols`、`references`、`configs` 和 `sql` 四类结果的字典。
+        包含 `symbols`、`references`、`configs`、`sql` 和 `glossary` 五类结果的
+        字典。`glossary` 只保存中文注释派生的术语，供项目知识库使用，不参与
+        调用链和诊断结论。
     """
     classes = [
         (match.start(), match.group(2))
@@ -139,7 +312,14 @@ def parse_php_source(source: str, file_path: str) -> Dict[str, List[Dict]]:
         }
         for match in SQL_PATTERN.finditer(source)
     ]
-    return {"symbols": symbols, "references": references, "configs": configs, "sql": sql}
+    glossary = _extract_glossary(source, file_path)
+    return {
+        "symbols": symbols,
+        "references": references,
+        "configs": configs,
+        "sql": sql,
+        "glossary": glossary,
+    }
 
 
 def iter_php_files(repository: CodeRepository) -> Iterable[Path]:
@@ -169,6 +349,7 @@ def index_repository(root: str, project: str) -> Dict[str, List[Dict]]:
         "references": [],
         "configs": [],
         "sql": [],
+        "glossary": [],
     }
     for path in iter_php_files(repository):
         relative_path = str(path.relative_to(repository.path))

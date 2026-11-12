@@ -28,6 +28,7 @@ from app.frontend import router as frontend_router
 from app.validation_api import router as validation_router
 from app.hybrid_api import router as hybrid_router
 from app.index_api import router as index_router
+from app.knowledge_api import router as knowledge_router
 from app.task_store import create_pool
 
 settings = get_settings()
@@ -120,6 +121,7 @@ app.include_router(code_router)
 app.include_router(validation_router)
 app.include_router(hybrid_router)
 app.include_router(index_router)
+app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(ai_quality_router)
 app.include_router(projects_router)

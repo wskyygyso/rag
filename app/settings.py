@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     project_index_build_lock_seconds: int = 300
     project_index_wait_timeout_seconds: int = 180
 
+    # 自动派生项目知识库开关：开启后术语表、配置结构摘要和历史结论候选会随
+    # 诊断自动写入；关闭时知识库查询返回 disabled，不影响既有检索流程。
+    project_knowledge_enabled: bool = True
+
     # 历史数据保留天数，由 cleanup_retention 脚本按批次清理。
     diagnostic_task_retention_days: int = 90
     validation_audit_retention_days: int = 180
