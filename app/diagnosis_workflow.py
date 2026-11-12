@@ -22,6 +22,7 @@ from app.task_store import (
 )
 from app.task_store import replace_symbol_index_if_changed
 from app.business_analysis import build_deterministic_findings
+from app.domain.diagnosis.analyzers.registry import ANALYZER_REGISTRY
 from app.settings import get_settings
 from app.code_tools import (
     CodeToolError,
@@ -34,6 +35,7 @@ from app.php_index import trace_index_call_chain
 from app.query_understanding import (
     annotate_hits_with_concepts,
     build_semantic_query_plan,
+    detect_semantic_concepts,
     infer_preferred_repository,
 )
 from app.retrieval_planner import (
@@ -58,6 +60,7 @@ from app.retrieval.contracts import RetrievalRequest
 from app.retrieval.engine import RetrievalEngine
 from app.retrieval.semantic_vectors import search_semantic_vector_candidates
 from app.symbol_tools import select_call_chain_entries, summarize_symbol_index
+from app.term_expansion import expand_question_terms
 from app.validation_runner import execute_validation_plan
 
 settings = get_settings()
@@ -142,15 +145,20 @@ def _concept_config_file_evidence(
           同名配置塞入证据预算。
 
     Returns:
-        配置文件首行证据列表。只在目录名为 `config`/`conf` 下做词干全等匹配，
-        不读取业务数据库，也不根据文件名直接生成结论；值仍由确定性分析器从
-        完整配置窗口中解析。
+        配置文件首行证据列表。匹配范围包括配置文件名干和配置文件的父目录名：
+        例如 `newNobleLv.php` 由文件名干命中，`crontab/gameRanking/config.php`
+        由活动目录名命中。目录名比通用 `config.php` 更能说明业务归属，因此优先
+        保留。该函数只补充证据位置，不读取业务数据库，也不根据文件名生成结论。
     """
-    normalized = {
-        re.sub(r"[^a-z0-9]", "", str(term).casefold())
+    # `config`、`conf` 本身是所有配置文件共有的目录/文件名，不能作为命中词，
+    # 否则会把任意前三个配置误塞进证据窗口。
+    ignored_terms = {"config", "conf", "php"}
+    original_terms = {
+        re.sub(r"[^a-z0-9]", "", str(term).casefold()): str(term).strip()
         for term in terms
         if len(str(term).strip()) >= 6
     }
+    normalized = set(original_terms) - ignored_terms
     normalized.discard("")
     if not normalized:
         return []
@@ -165,32 +173,48 @@ def _concept_config_file_evidence(
         "tmp",
         "vendor",
     }
-    results: list[dict] = []
+    candidates: list[tuple[int, str, str]] = []
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames[:] = [name for name in dirnames if name not in skipped]
-        if os.path.basename(dirpath).casefold() not in {"config", "conf"}:
-            continue
+        dir_name = os.path.basename(dirpath).casefold()
+        is_config_dir = dir_name in {"config", "conf"}
         for name in filenames:
             if not name.endswith(".php"):
-                continue
-            stem = re.sub(r"[^a-z0-9]", "", name[:-4].casefold())
-            if stem not in normalized:
                 continue
             file_name = os.path.relpath(
                 os.path.join(dirpath, name), base
             ).replace(os.sep, "/")
-            results.append(
-                {
-                    "type": "concept_config",
-                    "query": stem,
-                    "file": file_name,
-                    "line": 1,
-                    "content": "<?php",
-                }
-            )
-            if len(results) >= limit:
-                return results
-    return results
+            if is_config_dir:
+                # 传统配置目录：`config/newNobleLv.php` 由文件名干命中。
+                stem = re.sub(r"[^a-z0-9]", "", name[:-4].casefold())
+                if stem in normalized:
+                    candidates.append((1, file_name, stem))
+                continue
+            if name.casefold() not in {"config.php", "conf.php"}:
+                continue
+            # 活动目录布局：`crontab/gameRanking/config.php` 的文件名固定，
+            # 真正的业务标识在父目录上，因此匹配路径中的活动目录词。
+            components = {
+                re.sub(r"[^a-z0-9]", "", part.casefold())
+                for part in file_name.split("/")[:-1]
+            }
+            matched = components.intersection(normalized)
+            if matched:
+                best_term = max(matched, key=len)
+                candidates.append(
+                    (2, file_name, original_terms.get(best_term, best_term))
+                )
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return [
+        {
+            "type": "concept_config",
+            "query": stem,
+            "file": file_name,
+            "line": 1,
+            "content": "<?php",
+        }
+        for _, file_name, stem in candidates[:limit]
+    ]
 
 
 def _tag_initial_retrieval_stage(
@@ -1622,6 +1646,15 @@ async def execute_diagnosis(task_id: str) -> None:
             "match_count": 0,
             "elapsed_ms": 0.0,
         }
+        # 运行时术语扩展只生成候选检索词，必须经过项目符号索引真实性校验才会
+        # 进入查询；状态和拒绝词用于审计，不参与业务结论。
+        expanded_term_summary: dict = {
+            "status": "not_requested",
+            "terms": [],
+            "rejected_terms": [],
+            "reason": "",
+        }
+        expanded_terms: list[str] = []
         retrieval_channel_summaries: list[dict] = []
         symbol_sync_summary: dict = {"updated": False, "symbol_count": 0}
         try:
@@ -1915,9 +1948,53 @@ async def execute_diagnosis(task_id: str) -> None:
                 project_index = index_result.index
                 index_prepare_summary = index_result.audit_dict()
                 index_ready = True
+                # 静态概念词无法覆盖新活动、新道具等未知业务命名。这里先做一次
+                # 运行时术语扩展，并用真实符号、文件名干、目录名和配置键校验
+                # 候选词；扩展结果参与后续配置键选择，模型不可用时为空词表。
+                # 已命中专用分析器或历史问题时，检索词已由分析器/提交历史决定，
+                # 不再消耗一次模型调用，避免无收益的等待。
+                question_concepts = {
+                    concept.name
+                    for concept in detect_semantic_concepts(current["question"])
+                }
+                if (
+                    ANALYZER_REGISTRY.select(
+                        current["question"].casefold(), question_concepts
+                    )
+                    is None
+                    and not is_history_question(current["question"])
+                ):
+                    expanded_term_summary.update(
+                        await expand_question_terms(
+                            current["question"],
+                            project=current["project"],
+                            project_index=project_index,
+                            settings=settings,
+                        )
+                    )
+                else:
+                    expanded_term_summary.update(
+                        {
+                            "status": "skipped",
+                            "terms": [],
+                            "rejected_terms": [],
+                            "reason": "已命中专用分析器或历史问题",
+                        }
+                    )
+                expanded_terms = list(expanded_term_summary.get("terms") or [])
+                if expanded_terms:
+                    # 扩展词同样参与“概念词是否等于配置文件名干/活动目录名”的
+                    # 补证，避免新业务配置因全文检索截断而无法进入证据窗口。
+                    semantic_terms = list(
+                        dict.fromkeys([*semantic_terms, *expanded_terms])
+                    )
                 selected_config_keys = select_question_config_keys(
                     project_index,
-                    semantic_plan.get("code_terms") or [],
+                    [
+                        *(semantic_plan.get("code_terms") or []),
+                        *explicit_symbols,
+                        *expanded_terms,
+                    ],
                     # 金额问题通常同时涉及最低值、最高值、次数、渠道和换算比例。
                     # 配置索引的顺序会随大仓库扫描顺序变化，只取少量键可能丢掉
                     # 比例定义；八个仍受后续总证据预算约束，不会无限扩张。
@@ -1945,6 +2022,8 @@ async def execute_diagnosis(task_id: str) -> None:
                         ]
                     )
                 )
+                # 环境覆盖问题需要补查 `getByTestMode` 的实现，才能确认测试值
+                # 和正式值的参数顺序；该词只由问题的环境语义触发。
                 environment_queries = []
                 if re.search(
                     r"(?:测试|正式|生产)(?:环境)?|\b(?:test|production)\s+environment\b",
@@ -1963,6 +2042,7 @@ async def execute_diagnosis(task_id: str) -> None:
                             *config_definition_query_terms,
                             *discovery_plan["queries"],
                             *environment_queries,
+                            *expanded_terms,
                         ]
                     )
                 )[:40]
@@ -2227,6 +2307,8 @@ async def execute_diagnosis(task_id: str) -> None:
                 "preferred_repository": preferred_repository,
                 "semantic_concepts": semantic_plan.get("concepts") or {},
                 "semantic_code_terms": semantic_plan.get("code_terms") or [],
+                "expanded_code_terms": expanded_terms,
+                "term_expansion": expanded_term_summary,
                 "explicit_symbols": explicit_symbols,
                 "verified_explicit_symbols": verified_explicit_symbols,
                 "explicit_target_files": explicit_target_files,

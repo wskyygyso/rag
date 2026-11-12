@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     llm_cache_enabled: bool = True
     llm_cache_ttl_seconds: int = 3600
 
+    # 运行时术语扩展开关。开启后，检索阶段会用问题文本生成少量候选英文标识符，
+    # 并只保留能在项目符号索引中真实命中的词。它不参与 AI 叙写，模型不可用时
+    # 静默降级为静态概念检索，因此与 `llm_enabled` 同时生效。
+    llm_term_expansion_enabled: bool = True
+
     # 真实语义向量检索开关。关闭时仅保留离线哈希向量用于测试；生产诊断必须
     # 开启，否则中文问题无法跨语言映射到英文代码标识符。
     embedding_enabled: bool = False

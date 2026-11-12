@@ -35,7 +35,14 @@ from app.domain.diagnosis.analyzers.withdrawal import (
     _analyze_anchor_withdrawal,
     _analyze_diamond_withdrawal,
 )
+from app.domain.diagnosis.config_graph import (
+    configuration_enumeration_conclusion,
+    configuration_enumeration_facts,
+    configuration_env_value_conclusion,
+    configuration_env_value_facts,
+)
 from app.query_understanding import detect_semantic_concepts
+from app.question_type import QuestionType, classify_question
 
 
 def build_deterministic_findings(
@@ -85,12 +92,49 @@ def build_deterministic_findings(
         explicit_classes = _explicit_class_names(question)
         explicit_topic = False
         analyzer = ANALYZER_REGISTRY.select(normalized_question, question_concepts)
-        configuration_facts = (
-            _configuration_literal_facts(lines, question)
-            if analyzer is None
+        # 领域分析器只覆盖高风险、强业务语义的问题。其余问题先按通用问题类型
+        # 路由：配置枚举走配置图，配置取值走现有配置解析，流程和调用链继续使用
+        # 显式符号与通用控制点。新增活动或业务名不再需要新增映射。
+        question_type = classify_question(question, question_concepts)
+        expanded_scope_terms = [
+            str(value)
+            for value in (retrieval_plan.get("expanded_code_terms") or [])
+        ]
+        enumeration_facts = (
+            configuration_enumeration_facts(
+                lines,
+                question,
+                expanded_scope_terms,
+            )
+            if analyzer is None and question_type == QuestionType.CONFIG_ENUMERATION
             else []
         )
-        if configuration_facts:
+        configuration_facts = (
+            _configuration_literal_facts(lines, question)
+            if analyzer is None and not enumeration_facts
+            else []
+        )
+        # `getByTestMode` 的字符串分支（商户号、开关、默认地址等）不属于
+        # 数字/布尔字面量。没有专用分析器时先按通用配置图读取环境分支，避免
+        # 每新增一个支付渠道就要补一套取值代码。
+        env_value_facts = (
+            configuration_env_value_facts(
+                lines,
+                question,
+                expanded_scope_terms,
+            )
+            if analyzer is None and not enumeration_facts and not configuration_facts
+            else []
+        )
+        if enumeration_facts:
+            facts = enumeration_facts
+            topic = "配置枚举"
+            explicit_topic = True
+        elif env_value_facts:
+            facts = env_value_facts
+            topic = "环境配置值"
+            explicit_topic = True
+        elif configuration_facts:
             facts = configuration_facts
             topic = "活动配置值"
             explicit_topic = True
@@ -159,7 +203,7 @@ def build_deterministic_findings(
     if len(facts) < 6:
         uncertainties.append("部分业务分支未在本次检索证据中完整出现，建议沿已引用文件继续核对。")
     if explicit_topic:
-        if topic == "活动配置值":
+        if topic in {"活动配置值", "配置枚举", "环境配置值"}:
             uncertainties.append(
                 "上述事实来自问题指定的活动配置及其当前证据窗口；数据库覆盖值、"
                 "运行环境切换和未进入证据窗口的配置分支仍需继续核对。"
@@ -177,7 +221,13 @@ def build_deterministic_findings(
                 inherited_files=inherited_target_files,
             )
         )
-    if topic == "活动配置值":
+    if topic == "配置枚举":
+        # 通用配置图已按等级/档位逐条解析，直接拼接已验证的配置行，不推断
+        # 证据之外的奖励名称或业务标签。
+        conclusion = configuration_enumeration_conclusion(facts)
+    elif topic == "环境配置值":
+        conclusion = configuration_env_value_conclusion(facts)
+    elif topic == "活动配置值":
         conclusion = _configuration_fact_conclusion(facts)
     elif topic == "VIP等级附赠奖品":
         # 枚举型问题必须逐级回答，不能只取最高分的一条配置。事实本身来自
