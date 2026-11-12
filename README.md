@@ -21,11 +21,9 @@ PostgreSQL/Redis、只读业务库、监控告警、镜像仓库和上线责任�
 
 API 默认运行在 http://127.0.0.1:8000，Worker 使用 Celery 连接 Redis。
 
-本地 Compose 默认以只读方式挂载 `waky3`、`waky4`、`waky6`，容器内对应路径为
-`/repositories/waky3`、`/repositories/waky4`、`/repositories/waky6`。目录不在默认位置时，
-在 `.env` 中设置 `WAKY3_REPOSITORY_PATH`、`WAKY4_REPOSITORY_PATH` 和
-`WAKY6_REPOSITORY_PATH` 后重新执行 `docker compose up -d`。挂载路径不存在时 Compose 会直接失败，
-不会创建空目录冒充项目仓库。
+本地 Compose 默认只以只读方式挂载 `waky3`，容器内对应路径为 `/repositories/waky3`。
+目录不在默认位置时，在 `.env` 中设置 `WAKY3_REPOSITORY_PATH` 后重新执行
+`docker compose up -d`。挂载路径不存在时 Compose 会直接失败，不会创建空目录冒充项目仓库。
 
 生产环境使用 `docker-compose.production.yml` 和 `RELEASE.md`，不要直接复用本地 Compose 的开发数据库密码。
 生产镜像使用 `requirements.lock` 固定 Python 依赖、以 UID/GID `10001` 非 root 运行，并要求不可变镜像地址。
@@ -87,12 +85,13 @@ RAGENT_SMOKE_PROJECT=waky3 \
 python scripts/smoke_test.py --base-url https://ragent.example.com --require-api --json
 ```
 
-预检会检查生产环境、API Key 认证、任务超时、数据保留策略、独立只读数据库、代码仓库目录、
-RAgent 元数据库核心表和 Redis。`--strict` 模式下任何 `WARN` 或 `FAIL` 都返回非零状态。
+预检会检查生产环境、API Key 认证、真实 embedding 配置与一次实际 embedding 调用、任务超时、数据保留策略、
+独立只读数据库、代码仓库目录、RAgent 元数据库核心表和 Redis。`--strict` 模式下任何 `WARN` 或 `FAIL`
+都返回非零状态。
 完整部署、告警、备份和回滚要求见 `PRODUCTION_CHECKLIST.md`。
 
-`APP_ENV=production` 时，API 启动阶段也会执行关键静态配置门禁；认证、目标只读库、超时、保留策略
-或仓库目录不合格时直接拒绝启动，避免服务带病接收流量。
+`APP_ENV=production` 时，API 启动阶段也会执行关键静态配置门禁；认证、真实 embedding、目标只读库、
+超时、保留策略或仓库目录不合格时直接拒绝启动，避免服务带病接收流量。
 
 ## 备份和恢复
 
@@ -306,13 +305,22 @@ GET /api/search/{project}/hybrid?query=关键词&limit=20&history_offset=0&histo
 历史结果只返回脱敏摘要，不能直接替代当前代码和事实证据。
 
 阶段 5 已建立 `document_chunks` 统一分块表，保存来源类型、稳定来源标识、文件行号、
-内容哈希、MVP 文本向量和 PostgreSQL `tsvector` 全文索引，为后续替换真实 embedding
-服务提供基础。当前向量由确定性哈希特征生成，不依赖外部模型；每个分块同时记录
-embedding 模型标识和维度，生产环境替换向量提供商时可避免新旧向量混用。
-召回时如果发现模型或维度不兼容，会自动关闭向量分数并降级使用全文分数，同时在结果
-中标记 `vector_compatible=false`。
-向量生成通过 `EmbeddingProvider` 契约隔离，当前默认实现为 `DeterministicEmbeddingProvider`；
-接入真实模型时只需实现同一 `embed(text)` 接口并更新模型标识。
+内容哈希、向量、embedding 模型/维度和 PostgreSQL `tsvector` 全文索引。开发测试可关闭
+`EMBEDDING_ENABLED` 使用 `hash-v1` 离线向量，但它只验证存储和兼容逻辑，不参与真实语义
+门禁；生产诊断应开启 OpenAI-compatible `/embeddings`，让中文问题可以召回使用英文标识符
+编写的源码。每个分块记录模型标识和维度，召回时只有两者都与查询模型一致才计算余弦，
+否则标记 `vector_compatible=false` 并仅保留全文召回。真实语义查询会在 SQL 中同时限定当前
+模型、当前维度和 `source_type=code`，并由 `idx_document_chunks_semantic_scan` 支持，避免旧向量、
+文档分块或未完成重建的数据占满候选窗口。
+
+代码分块在生成 embedding 前会把驼峰、蛇形和缩写标识符拆成英文业务词，例如
+`maxUsersPerDevice` 会补充为 `max users per device`，并保留源码中真实存在的中文注释。
+该过程只依据命名形式，不包含业务词表，也不把完整问题映射到代码符号。
+
+真实向量候选会进入诊断首轮源码发现：最高保留 12 条候选参与符号、配置键和调用链扩展，
+最终证据窗口最多单独预留 10 条。强相似候选可以触发源码验证，但相似度本身不能生成业务
+结论；确定性分析和 AI 叙写仍只能引用实际读取到的源码行。模型或维度变化会生成新的索引
+版本，必须使用相同 embedding 配置重建索引。
 
 建立项目分块索引：
 
@@ -328,6 +336,38 @@ embedding 模型标识和维度，生产环境替换向量提供商时可避免�
 分块数量、仓库提交 SHA、索引版本和错误信息，便于排查失败并重新执行。
 开始新索引前会自动恢复同项目超过 60 分钟仍处于 `RUNNING` 的历史记录，标记为失败并
 保留超时原因，避免悬挂运行长期占用状态。
+
+真实 embedding 示例配置：
+
+```env
+EMBEDDING_ENABLED=true
+EMBEDDING_API_URL=https://api.example.com/v1/embeddings
+EMBEDDING_API_KEY=<embedding-secret>
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSION=512
+EMBEDDING_SEND_DIMENSIONS=true
+EMBEDDING_BATCH_SIZE=8
+EMBEDDING_CONCURRENCY=2
+EMBEDDING_MAX_RETRIES=3
+SEMANTIC_VECTOR_MIN_SIMILARITY=0.30
+SEMANTIC_VECTOR_STRONG_SIMILARITY=0.40
+```
+
+`EMBEDDING_API_URL` 留空时从 `LLM_API_URL` 派生 `/embeddings`，`EMBEDDING_API_KEY` 留空时
+复用 `LLM_API_KEY`。派生规则只适用于同一服务真正提供 OpenAI-compatible `/embeddings` 的情况；
+不提供该接口的 LLM 编程地址必须在生产预检时失败。固定维度供应商应设置
+`EMBEDDING_SEND_DIMENSIONS=false`，并保证 `EMBEDDING_DIMENSION` 与接口返回完全一致。切换模型后
+应按实际中英文问题样本校准相似度门槛，并重建所有项目索引。
+
+当前默认门槛 `0.30/0.40` 已用不含中文注释的英文 PHP 探针项目校准：相关问题最高相似度
+位于 `0.400` 至 `0.488`，无关问题最高相似度位于 `0.068` 至 `0.154`。门槛不是业务答案，
+只决定哪些真实源码文件进入后续符号发现和源码读取；更换 embedding 模型后必须重新采样。
+`asyncpg` 默认可能把 JSONB 向量读取为字符串，检索层会统一解码并拒绝损坏、非数值或非有限向量。
+
+`EMBEDDING_BATCH_SIZE` 和 `EMBEDDING_CONCURRENCY` 必须服从供应商限制。当前火山方舟
+`doubao-embedding-vision-251215` 对长代码分块最多接受 8 条/请求，较高并发会返回 429；
+`EMBEDDING_MAX_RETRIES` 只对超时、429 和 5xx 做指数退避。生产重建前必须确认套餐限流能在
+文档索引超时内完成全量仓库，否则应使用更高配额 endpoint 或本地 embedding 服务。
 
 查询索引运行记录：
 

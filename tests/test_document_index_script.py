@@ -62,14 +62,16 @@ async def test_document_index_script_records_success(monkeypatch) -> None:
         """
         return 7
 
-    async def index(root, project, current_pool):
+    async def index(root, project, current_pool, **kwargs):
         """返回模拟分块数量。
 
         参数:
             - `root`：仓库根目录。
             - `project`：项目标识。
             - `current_pool`：当前步骤使用的数据库连接池。
+            - `**kwargs`：索引调用传入的 embedding 提供方等关键字配置。
         """
+        assert kwargs["embedding_provider"].model_name == "hash-v1"
         return 12
 
     async def finish(current_pool, run_id, status, count=0, error=None):
@@ -126,13 +128,14 @@ async def test_document_index_script_records_failure(monkeypatch) -> None:
         """
         return 8
 
-    async def index(root, project, current_pool):
+    async def index(root, project, current_pool, **kwargs):
         """模拟索引异常。
 
         参数:
             - `root`：仓库根目录。
             - `project`：项目标识。
             - `current_pool`：当前步骤使用的数据库连接池。
+            - `**kwargs`：索引调用传入的 embedding 提供方等关键字配置。
         """
         raise RuntimeError("index failed")
 

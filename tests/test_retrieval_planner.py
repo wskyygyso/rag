@@ -613,3 +613,110 @@ def test_discovery_filters_real_but_generic_symbols_and_dynamic_config_prefixes(
     plan = discover_related_queries(index, hits, limit=8)
     assert "User" not in plan["queries"]
     assert "user_service." not in plan["queries"]
+
+
+def test_retrieval_support_accepts_strong_real_semantic_vector() -> None:
+    """验证真实强向量候选可以触发源码发现和调用链验证。"""
+    support = assess_retrieval_support(
+        [
+            {
+                "file": "php/service/RegistrationService.php",
+                "line": 20,
+                "line_start": 20,
+                "line_end": 90,
+                "content": "if ($deviceUserCount >= $limit) { throw new Exception(); }",
+                "retrieval_stage": "semantic_vector",
+                "semantic_vector": True,
+                "semantic_vector_strong": True,
+                "vector_compatible": True,
+                "vector_score": 0.61,
+                "embedding_provider": "openai_compatible",
+                "embedding_model": "multilingual-semantic-v2",
+                "matched_queries": [],
+                "matched_concepts": [],
+            }
+        ],
+        set(),
+    )
+
+    assert support["grounded"] is True
+    assert support["level"] == "semantic_vector"
+    assert support["semantic_vector_count"] == 1
+    assert support["strong_semantic_vector_count"] == 1
+    assert "不代表" not in support["reason"]
+
+
+def test_retrieval_support_rejects_hash_and_weak_semantic_vectors() -> None:
+    """验证离线 hash 或未标记强相似的向量不能绕过业务锚点门禁。"""
+    hits = [
+        {
+            "file": "php/service/RegistrationService.php",
+            "line": 20,
+            "retrieval_stage": "semantic_vector",
+            "semantic_vector": True,
+            "semantic_vector_strong": True,
+            "vector_compatible": True,
+            "vector_score": 0.9,
+            "embedding_provider": "openai_compatible",
+            "embedding_model": "hash-v1",
+            "matched_queries": [],
+            "matched_concepts": [],
+        },
+        {
+            "file": "php/service/OtherService.php",
+            "line": 30,
+            "retrieval_stage": "semantic_vector",
+            "semantic_vector": True,
+            "semantic_vector_strong": False,
+            "vector_compatible": True,
+            "vector_score": 0.35,
+            "embedding_provider": "openai_compatible",
+            "embedding_model": "multilingual-semantic-v2",
+            "matched_queries": [],
+            "matched_concepts": [],
+        },
+        {
+            "file": "phpunit/RegistrationServiceTest.php",
+            "line": 40,
+            "retrieval_stage": "semantic_vector",
+            "semantic_vector": True,
+            "semantic_vector_strong": True,
+            "vector_compatible": True,
+            "vector_score": 0.8,
+            "embedding_provider": "openai_compatible",
+            "embedding_model": "multilingual-semantic-v2",
+            "matched_queries": [],
+            "matched_concepts": [],
+        },
+    ]
+
+    support = assess_retrieval_support(hits, set())
+
+    assert support["grounded"] is False
+    assert support["level"] == "insufficient"
+    assert support["strong_semantic_vector_count"] == 0
+
+
+def test_select_semantic_hits_caps_vector_candidates_before_symbol_discovery() -> None:
+    """验证真实向量候选最多保留十二只，避免占满符号发现和最终证据预算。"""
+    hits = [
+        {
+            "file": f"php/service/Service{index}.php",
+            "line": index + 1,
+            "retrieval_stage": "semantic_vector",
+            "semantic_vector": True,
+            "semantic_vector_strong": True,
+            "vector_compatible": True,
+            "vector_score": 0.7 - index * 0.01,
+            "embedding_provider": "openai_compatible",
+            "embedding_model": "multilingual-semantic-v2",
+            "matched_queries": [],
+            "matched_concepts": [],
+        }
+        for index in range(20)
+    ]
+
+    selected = select_semantic_hits(hits, limit=36)
+
+    assert len(selected) == 12
+    assert all(item["retrieval_stage"] == "semantic_vector" for item in selected)

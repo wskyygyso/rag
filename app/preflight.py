@@ -1,5 +1,6 @@
 """生产上线前的配置、依赖和数据库只读边界预检。"""
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,7 @@ import asyncpg
 from redis import asyncio as redis_asyncio
 
 from app.auth import validate_auth_settings
+from app.embeddings import EMBEDDING_MODEL, EmbeddingProviderError, get_configured_embedding_provider
 from app.llm_diagnosis import validate_llm_settings
 from app.settings import Settings
 
@@ -178,6 +180,25 @@ def static_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
     except ValueError as exc:
         results.append(_result("llm", "FAIL", str(exc)))
 
+    if not settings.embedding_enabled:
+        status = "FAIL" if strict else "WARN"
+        results.append(_result("embedding", status, "真实语义向量检索未启用"))
+    else:
+        try:
+            provider = get_configured_embedding_provider(settings)
+            valid_provider = provider.model_name != EMBEDDING_MODEL
+            results.append(
+                _result(
+                    "embedding",
+                    "PASS" if valid_provider else "FAIL",
+                    "真实 embedding 配置有效" if valid_provider else "embedding 模型不能使用离线哈希 provider",
+                    model=provider.model_name,
+                    dimension=provider.dimension,
+                )
+            )
+        except (EmbeddingProviderError, TypeError, ValueError) as exc:
+            results.append(_result("embedding", "FAIL", str(exc)))
+
     metadata_url = (settings.database_url or "").strip()
     validation_url = (settings.validation_database_url or "").strip()
     metadata_endpoint = _database_endpoint(metadata_url)
@@ -308,6 +329,53 @@ async def check_redis(settings: Settings) -> CheckResult:
         await client.aclose()
 
 
+async def check_embedding_service(settings: Settings) -> Optional[CheckResult]:
+    """调用一次真实 embedding 接口，验证地址、模型、维度和鉴权实际可用。
+
+    参数:
+        - `settings`：应用运行配置，类型为 `Settings`；只有启用真实 embedding
+          时才发起探测，关闭状态由静态预检给出明确警告。
+
+    Returns:
+        启用时返回真实接口检查结果；关闭时返回 `None`，避免重复报告同一配置项。
+        探测只发送固定短文本，不包含业务问题、源码、数据库信息或密钥。
+    """
+    if not settings.embedding_enabled:
+        return None
+    try:
+        provider = get_configured_embedding_provider(settings)
+        vector = await asyncio.to_thread(
+            provider.embed,
+            "RAgent semantic embedding connectivity probe",
+        )
+        if len(vector) != provider.dimension:
+            return _result(
+                "embedding_service",
+                "FAIL",
+                "真实 embedding 返回维度与配置不一致",
+            )
+        return _result(
+            "embedding_service",
+            "PASS",
+            "真实 embedding 接口、模型和鉴权检查通过",
+            model=provider.model_name,
+            dimension=provider.dimension,
+        )
+    except (EmbeddingProviderError, TypeError, ValueError) as exc:
+        return _result(
+            "embedding_service",
+            "FAIL",
+            f"真实 embedding 接口检查失败: {exc}",
+        )
+    except Exception as exc:
+        return _result(
+            "embedding_service",
+            "FAIL",
+            "真实 embedding 接口检查失败",
+            error_type=type(exc).__name__,
+        )
+
+
 async def check_validation_database(settings: Settings) -> Optional[CheckResult]:
     """连接目标数据库并验证 READ ONLY 事务实际生效。
 
@@ -355,6 +423,9 @@ async def run_preflight(settings: Settings, strict: bool) -> List[CheckResult]:
         - `strict`：是否启用严格生产门禁，类型为 `bool`。
     """
     results = static_preflight(settings, strict)
+    embedding_result = await check_embedding_service(settings)
+    if embedding_result is not None:
+        results.append(embedding_result)
     results.append(await check_metadata_database(settings))
     results.append(await check_redis(settings))
     validation_result = await check_validation_database(settings)

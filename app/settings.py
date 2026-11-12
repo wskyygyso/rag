@@ -98,6 +98,38 @@ class Settings(BaseSettings):
     llm_cache_enabled: bool = True
     llm_cache_ttl_seconds: int = 3600
 
+    # 真实语义向量检索开关。关闭时仅保留离线哈希向量用于测试；生产诊断必须
+    # 开启，否则中文问题无法跨语言映射到英文代码标识符。
+    embedding_enabled: bool = False
+
+    # OpenAI-compatible embedding 接口地址；留空时从 LLM_API_URL 自动派生
+    # `/embeddings`。接口密钥留空时复用 LLM_API_KEY，避免重复保存凭据。
+    embedding_api_url: str = ""
+    embedding_api_key: str = ""
+
+    # 向量模型、维度和批量大小必须与已建索引一致。模型或维度变化会生成新的
+    # 索引版本，防止查询向量与旧分块向量混算。
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimension: int = 512
+    embedding_batch_size: int = 8
+    # 长代码分块会增加单次请求体积。按批次并行调用可以在供应商限流允许的
+    # 范围内缩短全量索引时间，该值只影响索引、不改变查询语义。
+    embedding_concurrency: int = 2
+    # 429、超时和供应商 5xx 的指数退避次数。配置错误和模型不存在不重试，
+    # 防止用无效请求放大费用。
+    embedding_max_retries: int = 3
+    embedding_timeout_seconds: float = 60.0
+    # OpenAI text-embedding-3 等模型支持请求时指定维度；固定维度供应商可关闭，
+    # 但返回值维度仍必须与 `embedding_dimension` 完全一致。
+    embedding_send_dimensions: bool = True
+
+    # 向量候选进入源码调用链扩展的最低相似度、强相似度、候选数和扫描上限。
+    # 相似度门槛可在更换向量模型后调整，不绑定任何业务领域或问题模板。
+    semantic_vector_min_similarity: float = 0.30
+    semantic_vector_strong_similarity: float = 0.40
+    semantic_vector_candidate_limit: int = 40
+    semantic_vector_scan_limit: int = 20000
+
     # RAgent 自身 Redis：健康检查、验证限流和 LLM 缓存。
     redis_url: str = "redis://localhost:6379/0"
 

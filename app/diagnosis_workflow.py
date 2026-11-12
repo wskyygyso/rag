@@ -55,6 +55,7 @@ from app.reporting import build_assessment
 from app.retrieval.channels import SearchTermsChannel
 from app.retrieval.contracts import RetrievalRequest
 from app.retrieval.engine import RetrievalEngine
+from app.retrieval.semantic_vectors import search_semantic_vector_candidates
 from app.symbol_tools import select_call_chain_entries, summarize_symbol_index
 from app.validation_runner import execute_validation_plan
 
@@ -107,12 +108,17 @@ def _explicit_symbol_queries(queries: list[str]) -> list[str]:
         if "::" in query or "." in query or "_" in query:
             result.append(query)
             continue
-        if (
-            query[0].isupper()
-            and len(query) >= 4
-            and query.upper() not in common_tokens
-            and not query.isupper()
+        if query.upper() in common_tokens:
+            continue
+        # 纯大写的技术缩写（API、SQL）不当作业务类名，但带数字的活动标识
+        # （FIFA2026）和小写业务标识（fupay）必须保留，否则问题中的确定性
+        # 入口会被长度和大小写规则误删，检索只能退回泛化中文锚点。
+        if query[0].isupper() and len(query) >= 4 and (
+            any(char.isdigit() for char in query) or not query.isupper()
         ):
+            result.append(query)
+            continue
+        if query[0].islower() and len(query) >= 4 and query.isalpha():
             result.append(query)
     return list(dict.fromkeys(result))
 
@@ -473,6 +479,16 @@ def _evidence_relevance(item: dict) -> tuple:
     elif retrieval_stage == "business_anchor":
         # “用户”“页面”等两字锚点过于宽泛，只保留为低优先级候选。
         score -= 6
+    if retrieval_stage == "semantic_vector" and item.get("semantic_vector") is True:
+        # 真实向量候选没有中文字面重合，不能套用通用词命中惩罚。强相似度候选
+        # 获得更高预留权重，弱候选仍只作为符号发现的辅助线索。
+        try:
+            vector_score = max(0.0, min(1.0, float(item.get("vector_score") or 0.0)))
+        except (TypeError, ValueError):
+            vector_score = 0.0
+        score += 38 + int(vector_score * 30)
+        if item.get("semantic_vector_strong") is True:
+            score += 18
     if item.get("type") == "config_definition":
         # 配置定义行给出调用点无法提供的真实数值。动态发现配置键后必须优先回到
         # 定义处读取，否则报告只能证明“某段代码读取了阈值”，不能回答阈值是多少。
@@ -566,6 +582,12 @@ def _method_evidence_range(
         # Android/iOS 分支后半段。固定前向窗口按历史助手采集范围读取，避免
         # 紧邻的下一个方法声明把实际 `intval($parts[0] . $parts[1])` 截掉。
         return max(1, hit_line - 4), hit_line + 180
+    if item.get("retrieval_stage") == "semantic_vector":
+        # 向量索引以最多四千字符为一块，业务方法可能位于分块中段。读取完整
+        # 分块行范围，才能让确定性分析看到相似度实际对应的配置和分支，而不是
+        # 只读取分块首行附近的无关类声明。
+        line_end = max(hit_line, int(item.get("line_end") or hit_line))
+        return hit_line, min(hit_line + max_span, line_end)
     if "." in query and "::" not in query:
         # 点号配置键的命中通常位于实际执行校验的方法体内，而不是配置定义文件。
         # 读取命中行前后 24 行可以同时带回方法注释、业务说明和紧随其后的计数
@@ -679,6 +701,10 @@ def _select_diagnostic_evidence(
             已加入新的文件和行号时返回 `True`；重复或预算已满时返回 `False`。
         """
         nonlocal generic_count
+        if item.get("retrieval_stage") == "semantic_vector":
+            # 真实向量候选由独立的小预算处理，不能顺带占满中文锚点和概念
+            # 命中共用的通用候选额度。
+            return False
         key = (str(item.get("file") or ""), int(item.get("line") or 0))
         if key in selected_keys or generic_count >= generic_budget:
             return False
@@ -708,6 +734,21 @@ def _select_diagnostic_evidence(
         append(item)
         hierarchy_count += 1
         if hierarchy_count >= 6 or len(selected) >= limit:
+            break
+
+    # 真实向量候选没有中文锚点，但可能是未知业务唯一可用的发现入口。单独预留
+    # 最多十条源码证据，强候选优先；它们只负责把真实文件和方法带进后续源码
+    # 校验，最终事实仍由读取到的控制流、配置定义和调用链决定。
+    semantic_vector_count = 0
+    for item in evidence:
+        if (
+            item.get("retrieval_stage") != "semantic_vector"
+            or item.get("semantic_vector") is not True
+        ):
+            continue
+        append(item)
+        semantic_vector_count += 1
+        if semantic_vector_count >= 10 or len(selected) >= limit:
             break
 
     # 历史版本问题需要把提交快照中的门槛常量和当前源码中的解析函数组合起来。
@@ -879,6 +920,9 @@ def _select_diagnostic_evidence(
                 break
 
     for item in evidence:
+        if item.get("retrieval_stage") == "semantic_vector":
+            # 向量候选已在独立预算中处理，普通回填不能再次追加超出上限。
+            continue
         if item.get("type") == "generic_code" and generic_count >= generic_budget:
             continue
         append(item)
@@ -1458,6 +1502,12 @@ async def execute_diagnosis(task_id: str) -> None:
         warnings = []
         generic_anchors = extract_generic_anchors(current["question"])
         initial_generic_hits: list[dict] = []
+        semantic_vector_hits: list[dict] = []
+        semantic_vector_summary: dict = {
+            "channel": "semantic_vector",
+            "status": "not_requested",
+            "hit_count": 0,
+        }
         semantic_hits: list[dict] = []
         generic_hits: list[dict] = []
         semantic_plan = {
@@ -1536,6 +1586,36 @@ async def execute_diagnosis(task_id: str) -> None:
         except (CodeToolError, ValueError) as exc:
             warnings.append(f"业务锚点和显式符号检索降级: {exc}")
 
+        # 中文锚点不是所有仓库的稳定入口。真实 embedding 用问题语义直接检索
+        # 已建索引的源码分块，为未知业务提供不依赖中文注释和固定词表的候选。
+        # 这里只接收真实模型且相似度达标的 PHP 源码分块；返回结果仍要经过
+        # 符号发现、配置定义搜索和当前源码读取，不能把相似度当作业务事实。
+        try:
+            semantic_vector_result = await search_semantic_vector_candidates(
+                pool,
+                current["project"],
+                current["question"],
+                settings,
+            )
+            semantic_vector_hits = semantic_vector_result.hits
+            semantic_vector_summary = semantic_vector_result.summary
+            retrieval_channel_summaries.append(semantic_vector_summary)
+            warnings.extend(semantic_vector_result.warnings)
+            if semantic_vector_hits:
+                initial_generic_hits = rank_discovery_hits(
+                    [*initial_generic_hits, *semantic_vector_hits],
+                    limit=MAX_GENERIC_HITS,
+                )
+        except Exception:
+            semantic_vector_summary = {
+                "channel": "semantic_vector",
+                "status": "degraded",
+                "hit_count": 0,
+                "reason": "语义向量检索编排失败",
+            }
+            retrieval_channel_summaries.append(semantic_vector_summary)
+            warnings.append("真实语义向量检索降级: 语义候选编排失败")
+
         # 问题中的业务名词决定“要找什么”，首轮高质量命中补充代码实际使用的
         # 同义词。这里只生成可组合概念词，不再把完整问句绑定到某个项目符号。
         semantic_plan = build_semantic_query_plan(
@@ -1584,6 +1664,8 @@ async def execute_diagnosis(task_id: str) -> None:
             limit=MAX_GENERIC_HITS,
             preferred_repository=preferred_repository,
         )
+        if not preferred_repository:
+            preferred_repository = infer_preferred_repository(ranked_generic_hits)
         support = assess_retrieval_support(
             ranked_generic_hits,
             semantic_plan.get("concepts") or {},
@@ -2029,6 +2111,8 @@ async def execute_diagnosis(task_id: str) -> None:
             "retrieval_plan": {
                 "generic_anchor_count": len(generic_anchors),
                 "initial_generic_hit_count": len(initial_generic_hits),
+                "semantic_vector_hit_count": len(semantic_vector_hits),
+                "semantic_vector": semantic_vector_summary,
                 "semantic_hit_count": len(semantic_hits),
                 "focused_hit_count": len(generic_hits),
                 "preferred_repository": preferred_repository,

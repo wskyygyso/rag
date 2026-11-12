@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.preflight import enforce_production_settings, static_preflight
+from app.preflight import check_embedding_service, enforce_production_settings, static_preflight
 from app.settings import Settings
 
 
@@ -19,12 +19,16 @@ def test_strict_preflight_rejects_missing_production_controls(tmp_path) -> None:
     settings = Settings(
         app_env="production",
         auth_enabled=False,
+        # 显式关闭 embedding，避免本机 `.env` 中的真实向量配置让严格门禁
+        # 误判为 PASS，从而掩盖“生产缺少必需控制项”这一被测行为。
+        embedding_enabled=False,
         database_url="postgresql://metadata/ragent",
         validation_database_url="",
         code_repositories_root=str(repository_root),
     )
     results = {result.name: result for result in static_preflight(settings, strict=True)}
     assert results["authentication"].status == "FAIL"
+    assert results["embedding"].status == "FAIL"
     assert results["validation_database_url"].status == "FAIL"
     assert results["metadata_database_url"].status == "PASS"
 
@@ -89,6 +93,10 @@ def test_preflight_accepts_valid_static_configuration(tmp_path) -> None:
         database_url="postgresql://metadata/ragent",
         validation_database_url="postgresql://readonly/business",
         code_repositories_root=str(repository_root),
+        embedding_enabled=True,
+        embedding_api_url="https://api.example.com/v1/embeddings",
+        embedding_model="multilingual-semantic-v2",
+        embedding_dimension=1024,
     )
     results = static_preflight(settings, strict=True)
     assert all(result.status == "PASS" for result in results)
@@ -131,6 +139,10 @@ def test_production_startup_gate_accepts_complete_configuration(tmp_path) -> Non
         database_url="postgresql://metadata/ragent",
         validation_database_url="postgresql://readonly/business",
         code_repositories_root=str(repository_root),
+        embedding_enabled=True,
+        embedding_api_url="https://api.example.com/v1/embeddings",
+        embedding_model="multilingual-semantic-v2",
+        embedding_dimension=1024,
     )
     enforce_production_settings(settings)
 
@@ -148,3 +160,53 @@ def test_development_startup_does_not_require_production_controls(tmp_path) -> N
         code_repositories_root=str(tmp_path / "missing"),
     )
     enforce_production_settings(settings)
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_probe_checks_real_provider(tmp_path, monkeypatch) -> None:
+    """验证运行期预检会实际调用 embedding，而不是只检查配置字符串。
+
+    参数:
+        - `tmp_path`：pytest 临时目录。
+        - `monkeypatch`：pytest 运行期替换工具。
+    """
+    class Provider:
+        """返回固定两维向量的真实 provider 测试替身。"""
+
+        model_name = "multilingual-semantic-v2"
+        dimension = 2
+
+        def embed(self, text):
+            """返回探测向量并确认探测文本不包含用户问题。
+
+            参数:
+                - `text`：预检固定探测文本。
+            """
+            assert text.startswith("RAgent semantic")
+            return [1.0, 0.0]
+
+    settings = Settings(
+        embedding_enabled=True,
+        embedding_api_url="https://api.example.com/v1/embeddings",
+        embedding_model="multilingual-semantic-v2",
+        embedding_dimension=2,
+        code_repositories_root=str(tmp_path),
+    )
+    monkeypatch.setattr(
+        "app.preflight.get_configured_embedding_provider",
+        lambda current_settings: Provider(),
+    )
+
+    result = await check_embedding_service(settings)
+
+    assert result is not None
+    assert result.status == "PASS"
+    assert result.detail == {"model": "multilingual-semantic-v2", "dimension": 2}
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_probe_is_skipped_when_disabled() -> None:
+    """验证未启用真实向量时不在运行期预检重复发起外部请求。"""
+    settings = Settings(embedding_enabled=False)
+
+    assert await check_embedding_service(settings) is None

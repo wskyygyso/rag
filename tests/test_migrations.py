@@ -127,8 +127,8 @@ def test_repository_migrations_are_ordered_and_named_consistently() -> None:
     """验证正式迁移目录版本连续，防止开发提交遗漏中间版本。"""
     migrations = load_migrations(ROOT / "migrations")
     assert migrations[0].version.startswith("001_")
-    assert migrations[-1].version.startswith("023_")
-    assert len(migrations) == 23
+    assert migrations[-1].version.startswith("024_")
+    assert len(migrations) == 24
 
 
 @pytest.mark.asyncio

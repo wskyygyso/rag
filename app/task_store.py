@@ -209,7 +209,16 @@ CREATE_DOCUMENT_CHUNKS_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_document_chunks_project_type
     ON document_chunks (project, source_type);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_search_vector
-    ON document_chunks USING GIN (search_vector)
+    ON document_chunks USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_semantic_scan
+    ON document_chunks (
+        project,
+        embedding_model,
+        embedding_dimension,
+        updated_at DESC,
+        source_id
+    )
+    WHERE embedding IS NOT NULL
 """
 
 CREATE_DOCUMENT_INDEX_RUNS_SQL = """

@@ -1274,7 +1274,10 @@
           details.dataset.searchText = `${key} ${item.query || ""} ${item.content || ""}`.toLowerCase();
           const summary = createElement("summary");
           const path = createElement("span", "evidence-path", key);
-          const query = createElement("span", "evidence-query", item.query ? `命中：${item.query}` : "源码命中");
+          const queryLabel = item.retrieval_stage === "semantic_vector"
+            ? `语义候选：${(Number(item.vector_score || 0) * 100).toFixed(1)}%`
+            : (item.query ? `命中：${item.query}` : "源码命中");
+          const query = createElement("span", "evidence-query", queryLabel);
           summary.append(path, query);
           const body = createElement("div", "evidence-content");
           if (item.content) body.appendChild(createElement("p", "evidence-line", item.content));
@@ -1397,6 +1400,7 @@
         [
           ["检索关键词", (result.queries || []).length],
           ["显式符号", (retrievalPlan.verified_explicit_symbols || []).length],
+          ["语义向量", retrievalPlan.semantic_vector_hit_count || 0],
           ["动态发现", (retrievalPlan.discovered_queries || []).length],
           ["符号", (result.symbols || []).length],
           ["配置", (result.configs || []).length],
@@ -1461,6 +1465,21 @@
                 "li",
                 "",
                 `批量精确检索：${termSearch.query_count || 0} 个检索词，${termSearch.match_count || 0} 条候选，耗时 ${Number(termSearch.elapsed_ms || 0).toFixed(0)} ms。`,
+              ),
+            );
+          }
+          const semanticVector = retrievalPlan.semantic_vector || {};
+          if (semanticVector.status && !["disabled", "not_requested"].includes(semanticVector.status)) {
+            const semanticStatus = semanticVector.status === "completed" ? "已完成" : "降级或无候选";
+            const modelCopy = semanticVector.embedding_model ? `，模型 ${semanticVector.embedding_model}` : "";
+            const scoreCopy = semanticVector.best_similarity
+              ? `，最高相似度 ${(Number(semanticVector.best_similarity) * 100).toFixed(1)}%`
+              : "";
+            supportList.appendChild(
+              createElement(
+                "li",
+                "",
+                `真实语义向量：${semanticStatus}，${semanticVector.hit_count || 0} 条源码候选，耗时 ${Number(semanticVector.elapsed_ms || 0).toFixed(0)} ms${modelCopy}${scoreCopy}。`,
               ),
             );
           }

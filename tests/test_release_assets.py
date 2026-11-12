@@ -61,12 +61,10 @@ def test_local_worker_concurrency_is_bounded_by_capacity() -> None:
 
 
 def test_local_compose_mounts_supported_projects_read_only() -> None:
-    """验证本地 API 和两个 Worker 挂载同一组 waky 项目且不可写。"""
+    """验证本地 API 和两个 Worker 挂载同一组启用项目且不可写。"""
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     expected_targets = {
         "/repositories/waky3": "WAKY3_REPOSITORY_PATH",
-        "/repositories/waky4": "WAKY4_REPOSITORY_PATH",
-        "/repositories/waky6": "WAKY6_REPOSITORY_PATH",
     }
     for service_name in ("api", "worker", "index-worker"):
         volumes = {item["target"]: item for item in compose["services"][service_name]["volumes"]}

@@ -60,6 +60,18 @@ def test_explicit_symbol_extraction_excludes_generic_technology_tokens() -> None
     assert symbols == ["FuseRecoveryService", "GuildController::inviteGuild"]
 
 
+def test_explicit_symbol_extraction_keeps_business_identifiers_with_digits() -> None:
+    """验证带数字的活动标识和小写业务标识不会被大小写规则误删。"""
+    symbols = worker._explicit_symbol_queries(
+        ["FIFA2026", "fupay", "API", "SQL", "waky3"]
+    )
+
+    assert "FIFA2026" in symbols
+    assert "fupay" in symbols
+    assert "API" not in symbols
+    assert "SQL" not in symbols
+
+
 def test_config_keys_are_extracted_from_hit_context_for_followup_search() -> None:
     """验证日志命中附近的真实配置读取会进入下一轮定义检索。"""
     hits = [

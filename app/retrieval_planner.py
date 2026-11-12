@@ -130,6 +130,10 @@ _GENERIC_SUPPORT_CONCEPTS = {
     "user",
 }
 
+# 离线哈希向量只用于测试和兼容，不能绕过源码业务锚点门禁。这里按模型标识
+# 再设一道防御，避免调用方误把 `semantic_vector=True` 传给旧索引。
+_OFFLINE_EMBEDDING_MODELS = {"hash-v1"}
+
 _CLASS_REFERENCE_PATTERN = re.compile(
     r"\b[A-Z][A-Za-z0-9_]{2,}(?:::[A-Za-z_][A-Za-z0-9_]*)?\b"
 )
@@ -272,6 +276,21 @@ def rank_discovery_hits(
             # 配置块，使报告只看到方法调用而看不到逐级数值。
             anchor_bonus = 240
         explicit_bonus = 260 if item.get("retrieval_stage") == "explicit_symbol" else 0
+        semantic_vector_bonus = 0
+        if (
+            item.get("retrieval_stage") == "semantic_vector"
+            and item.get("semantic_vector") is True
+            and str(item.get("embedding_model") or "") not in _OFFLINE_EMBEDDING_MODELS
+        ):
+            # 真实语义候选可能没有关键字面重合，因此不能用中文长度和词频评分。
+            # 分数把强相似候选推进符号发现窗口；弱候选仍低于显式符号和直接锚点。
+            try:
+                vector_score = max(0.0, min(1.0, float(item.get("vector_score") or 0.0)))
+            except (TypeError, ValueError):
+                vector_score = 0.0
+            semantic_vector_bonus = 230 + int(vector_score * 220)
+            if item.get("semantic_vector_strong") is True:
+                semantic_vector_bonus += 80
         repository_bonus = 0
         normalized_file = file_name.replace("\\", "/").strip("/")
         if preferred_repository and "/" in normalized_file:
@@ -286,6 +305,7 @@ def rank_discovery_hits(
             + concept_bonus
             + anchor_bonus
             + explicit_bonus
+            + semantic_vector_bonus
             + repository_bonus
         )
         scored.append((score, index, item))
@@ -317,6 +337,8 @@ def select_semantic_hits(
     best_coverage = max(concept_counts, default=0)
     selected: List[Dict[str, Any]] = []
     seen = set()
+    semantic_budget = min(12, max(4, limit // 3))
+    semantic_added = 0
 
     def append(item: Dict[str, Any]) -> None:
         """按文件和行号去重追加一条语义命中。
@@ -324,10 +346,17 @@ def select_semantic_hits(
         参数:
             - `item`：候选源码命中，类型为 `Dict[str, Any]`。
         """
+        nonlocal semantic_added
         key = (str(item.get("file") or ""), int(item.get("line") or 0))
-        if key not in seen and len(selected) < limit:
-            seen.add(key)
-            selected.append(item)
+        is_semantic_vector = item.get("retrieval_stage") == "semantic_vector"
+        if is_semantic_vector and semantic_added >= semantic_budget:
+            return
+        if key in seen or len(selected) >= limit:
+            return
+        seen.add(key)
+        selected.append(item)
+        if is_semantic_vector:
+            semantic_added += 1
 
     # 用户显式给出的类或方法命中优先级最高。显式符号可能只出现在类声明行，
     # 没有中文业务注释，也不一定覆盖多个概念；若先按概念筛选，它会在进入索引
@@ -390,6 +419,27 @@ def select_semantic_hits(
             if len(term_lines) >= 6 or len(selected) >= anchor_budget:
                 break
         if len(selected) >= anchor_budget:
+            break
+
+    # 真实语义向量候选没有中文锚点，不能等待后续概念阈值筛选。锚点之后保留
+    # 强候选，再用剩余预算补充分数达标的弱候选，最多十二只用于发现符号和配置；
+    # 是否有足够支撑仍由门禁、源码读取和确定性分析决定。
+    semantic_candidates = [
+        item
+        for item in ranked
+        if item.get("retrieval_stage") == "semantic_vector"
+        and item.get("semantic_vector") is True
+        and str(item.get("embedding_model") or "") not in _OFFLINE_EMBEDDING_MODELS
+    ]
+    semantic_candidates.sort(
+        key=lambda item: (
+            0 if item.get("semantic_vector_strong") is True else 1,
+            -float(item.get("vector_score") or 0.0),
+        )
+    )
+    for item in semantic_candidates:
+        append(item)
+        if semantic_added >= semantic_budget or len(selected) >= limit:
             break
 
     threshold = 2 if best_coverage >= 2 else max(1, best_coverage)
@@ -727,7 +777,33 @@ def assess_retrieval_support(
     hit_list = list(hits)
     direct_anchor_count = 0
     rejected_generic_anchor_count = 0
+    semantic_vector_count = 0
+    strong_semantic_vector_count = 0
+    best_vector_score = 0.0
     for item in hit_list:
+        vector_file = str(item.get("file") or "").replace("\\", "/").strip("/")
+        vector_path = f"/{vector_file.casefold()}"
+        vector_extension = f".{vector_file.rsplit('.', 1)[-1].lower()}" if "." in vector_file else ""
+        if (
+            item.get("retrieval_stage") == "semantic_vector"
+            and item.get("semantic_vector") is True
+            and item.get("vector_compatible") is True
+            and item.get("embedding_provider") == "openai_compatible"
+            and str(item.get("embedding_model") or "") not in _OFFLINE_EMBEDDING_MODELS
+            and vector_extension in {".php", ".inc", ".phtml"}
+            and not any(
+                marker in vector_path
+                for marker in ("/tests/", "/phpunit/", "/vendor/", "/node_modules/", "/docs/", "/lang/")
+            )
+        ):
+            semantic_vector_count += 1
+            try:
+                vector_score = max(0.0, min(1.0, float(item.get("vector_score") or 0.0)))
+            except (TypeError, ValueError):
+                vector_score = 0.0
+            best_vector_score = max(best_vector_score, vector_score)
+            if item.get("semantic_vector_strong") is True:
+                strong_semantic_vector_count += 1
         if item.get("retrieval_stage") != "business_anchor":
             continue
         file_name = str(item.get("file") or "").replace("\\", "/").casefold()
@@ -786,6 +862,10 @@ def assess_retrieval_support(
         level = "business_anchor"
         reason = "源码中存在问题原句的四字以上中文业务锚点"
         grounded = True
+    elif strong_semantic_vector_count:
+        level = "semantic_vector"
+        reason = "真实 embedding 找到强相似源码候选，允许继续做符号发现、源码读取和调用链验证"
+        grounded = True
     elif semantic_grounded:
         level = "semantic_concepts"
         reason = "同一源码命中覆盖了足够的业务概念和至少一个领域概念"
@@ -801,6 +881,9 @@ def assess_retrieval_support(
         "direct_anchor_count": direct_anchor_count,
         "best_concept_coverage": best_concept_coverage,
         "best_domain_coverage": best_domain_coverage,
+        "semantic_vector_count": semantic_vector_count,
+        "strong_semantic_vector_count": strong_semantic_vector_count,
+        "best_vector_score": round(best_vector_score, 6),
         "required_concept_coverage": required_coverage,
         "required_domain_coverage": required_domain_coverage,
         "rejected_generic_anchor_count": rejected_generic_anchor_count,

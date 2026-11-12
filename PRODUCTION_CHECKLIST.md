@@ -71,7 +71,9 @@
 - [x] 完整测试、注释覆盖、编译、前端语法和依赖锁镜像构建通过。
 - [x] `python scripts/preflight_check.py --strict` 已在本机生产等价环境通过。
 - [x] 100 请求性能基线达到约定阈值：0 错误，P95 155.890 ms。
+- [x] 使用真实多语言 embedding 完成不含中文注释的英文源码探针 E2E，确认中文问题可回读源码并形成配置事实。
 - [ ] 使用目标生产 Secret、托管服务、只读业务库和 TLS 域名重跑 `preflight_check.py --strict`。
+- [ ] 使用生产 embedding 配额完成至少一个项目全量重建，并确认索引在 `DOCUMENT_INDEX_TIME_LIMIT_SECONDS` 内完成。
 - [ ] 使用目标生产 URL 重跑烟雾测试、受控诊断和性能基线。
 - [ ] 监控、告警和备份验证完成。
 

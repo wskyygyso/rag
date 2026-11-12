@@ -515,9 +515,14 @@ def _generic_facts(lines: Sequence[EvidenceLine], question: str) -> List[Dict[st
         }
         covered = question_concepts.intersection(line_concepts)
         if not has_direct_anchor:
+            # 只有通用概念（配置、用户、状态）时不能把任意 `throw new`、`return
+            # false` 当成业务答案。支付配置和开关类问题常出现这种组合，若放行会
+            # 用无关异常分支冒充结论；此时应留空并让上层报告证据缺口。
+            if not domain_concepts:
+                continue
             if len(covered) < required_coverage:
                 continue
-            if domain_concepts and not covered.intersection(domain_concepts):
+            if not covered.intersection(domain_concepts):
                 continue
         if item.ref in seen_refs:
             continue

@@ -11,6 +11,10 @@ from app.domain.diagnosis.analyzers.common import (
     EvidenceLine,
     _evidence_lines,
 )
+from app.domain.diagnosis.analyzers.configuration import (
+    _configuration_fact_conclusion,
+    _configuration_literal_facts,
+)
 from app.domain.diagnosis.analyzers.activity import _analyze_spaceship_fragments
 from app.domain.diagnosis.analyzers.display import _analyze_frontend_diamond_display
 from app.domain.diagnosis.analyzers.exchange import _analyze_diamond_exchange
@@ -81,7 +85,16 @@ def build_deterministic_findings(
         explicit_classes = _explicit_class_names(question)
         explicit_topic = False
         analyzer = ANALYZER_REGISTRY.select(normalized_question, question_concepts)
-        if analyzer is not None:
+        configuration_facts = (
+            _configuration_literal_facts(lines, question)
+            if analyzer is None
+            else []
+        )
+        if configuration_facts:
+            facts = configuration_facts
+            topic = "活动配置值"
+            explicit_topic = True
+        elif analyzer is not None:
             facts = analyzer.analyze(lines)
             topic = analyzer.topic
             if analyzer.analyzer_id == "diamond_withdrawal" and not facts:
@@ -146,11 +159,17 @@ def build_deterministic_findings(
     if len(facts) < 6:
         uncertainties.append("部分业务分支未在本次检索证据中完整出现，建议沿已引用文件继续核对。")
     if explicit_topic:
-        fact_scope = "目标类及已验证直接基类" if fact_inherited_files else "目标类"
-        uncertainties.append(
-            f"上述事实来自用户显式指定的{fact_scope}及其当前证据窗口；"
-            "类外调用方、运行态数据和未展开的私有方法仍需继续核对。"
-        )
+        if topic == "活动配置值":
+            uncertainties.append(
+                "上述事实来自问题指定的活动配置及其当前证据窗口；数据库覆盖值、"
+                "运行环境切换和未进入证据窗口的配置分支仍需继续核对。"
+            )
+        else:
+            fact_scope = "目标类及已验证直接基类" if fact_inherited_files else "目标类"
+            uncertainties.append(
+                f"上述事实来自用户显式指定的{fact_scope}及其当前证据窗口；"
+                "类外调用方、运行态数据和未展开的私有方法仍需继续核对。"
+            )
         uncertainties.extend(
             _requested_action_gaps(
                 lines,
@@ -158,7 +177,9 @@ def build_deterministic_findings(
                 inherited_files=inherited_target_files,
             )
         )
-    if topic == "美元熔断":
+    if topic == "活动配置值":
+        conclusion = _configuration_fact_conclusion(facts)
+    elif topic == "美元熔断":
         conclusion_parts = []
         category_names = {str(item.get("category") or "") for item in facts}
         if "作用范围" in category_names:

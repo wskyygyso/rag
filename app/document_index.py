@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.document_chunks import build_repository_chunks, index_repository_documents
+from app.embeddings import embedding_index_version, get_configured_embedding_provider
 from app.settings import get_settings
 from app.task_store import (
     cleanup_document_index_runs,
@@ -20,7 +21,8 @@ from app.task_store import (
     start_document_index_run_with_revision,
 )
 
-# 索引算法或分块格式不兼容时提升版本，旧运行记录将不再被复用。
+# 离线索引保持 `v1`；真实 embedding 会按模型和维度生成独立版本，防止旧哈希
+# 向量或不同模型向量被错误复用。
 INDEX_VERSION = "v1"
 
 
@@ -72,22 +74,35 @@ async def run_document_index(project: str, dry_run: bool = False) -> DocumentInd
     settings = get_settings()
     if dry_run:
         return DocumentIndexResult(
-            len(build_repository_chunks(settings.code_repositories_root, project))
+            len(
+                build_repository_chunks(
+                    settings.code_repositories_root,
+                    project,
+                    embed=False,
+                )
+            )
         )
+    embedding_provider = get_configured_embedding_provider(settings)
+    index_version = embedding_index_version(embedding_provider)
     pool = await create_pool(settings)
     try:
         revision = _repository_revision(settings.code_repositories_root, project)
         await recover_stale_document_index_runs(pool, project)
         if revision:
             reusable = await find_reusable_document_index_run(
-                pool, project, revision, INDEX_VERSION
+                pool, project, revision, index_version
             )
             if reusable is not None:
                 return DocumentIndexResult(int(reusable["chunk_count"]), reused=True)
         run_id = await start_document_index_run_with_revision(
-            pool, project, revision, INDEX_VERSION
+            pool, project, revision, index_version
         )
-        count = await index_repository_documents(settings.code_repositories_root, project, pool)
+        count = await index_repository_documents(
+            settings.code_repositories_root,
+            project,
+            pool,
+            embedding_provider=embedding_provider,
+        )
         await finish_document_index_run(pool, run_id, "COMPLETED", count)
         await cleanup_document_index_runs(pool, project)
         return DocumentIndexResult(count)

@@ -1743,3 +1743,180 @@ def test_device_registration_limit_resolves_test_mode_override() -> None:
     assert "测试环境允许单个设备" in statements
     assert "测试环境中，同一设备最多可注册 10 个用户" in findings["conclusion"]
     assert "正式环境相应用户数量上限为 3 个" in findings["conclusion"]
+
+
+def test_activity_configuration_facts_ignore_unrelated_semantic_control_points() -> None:
+    """验证活动标识会把配置事实限定到真实目录，并指出注释与代码值冲突。"""
+    config_file = "waky3_miyouactivity/Logic/fifa2026/boot/config.php"
+    result = {
+        "evidence": [
+            {
+                "file": config_file,
+                "line": 57,
+                "context": _context(
+                    57,
+                    [
+                        "    'convert' => [ // 转换器, 计算分数转换比例",
+                        "        'guess:score:ticket' => ['rate' => 1, 'base' => 100,],",
+                        "        'lottery:football:num' => ['rate' => 1, 'base' => 600,],",
+                        "    ],",
+                        "",
+                        "    // 奖池配置",
+                        "    'pool' => [",
+                        "        'base' => 900000, // 基础奖池",
+                        "        'rate' => 0.05, // 送礼积分的 10% 进入奖池；代码里是 score * rate / 100",
+                        "        'prize' => [],",
+                        "        'contributeRate' => [ // 按贡献比发放奖池",
+                        "            'min' => 1,",
+                        "            'max' => 20,",
+                        "        ],",
+                        "    ],",
+                    ],
+                ),
+            },
+            {
+                "file": "waky3_miyouactivity/Logic/familyOilTycoons/service/MiningService.php",
+                "line": 38,
+                "context": _context(
+                    38,
+                    ["throw new OilTycoonsException(ExceptionCode::INVALID_TIMES);"],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "semantic_vector"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "waky3 的 FIFA2026 活动奖池基础值是多少？送礼积分按多少比例进奖池？",
+        result,
+    )
+
+    assert "pool.base=900000" in findings["conclusion"]
+    assert "pool.rate=0.05" in findings["conclusion"]
+    assert "注释写 10%" in findings["conclusion"]
+    assert "OilTycoonsException" not in findings["conclusion"]
+    assert findings["evidence_refs"] == [f"{config_file}:64", f"{config_file}:65"]
+
+
+def test_activity_configuration_switch_question_returns_all_enabled_flags() -> None:
+    """验证存在性提问会返回同一父级下的全部开关，而不是只答最高分的一个。"""
+    config_file = "waky3_miyouactivity/Logic/fifa2026/boot/config.php"
+    result = {
+        "evidence": [
+            {
+                "file": config_file,
+                "line": 111,
+                "context": _context(
+                    111,
+                    [
+                        "    'lottery' => [",
+                        "        'rules' => [",
+                        "            ['id' => 1, 'pro' => 500000, 'price' => 0, 'prize_id' => 500],",
+                        "        ],",
+                        "        'pity' => ['enabled' => 0,],",
+                        "        'price_limit' => ['enabled' => 0,],",
+                        "    ],",
+                    ],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "business_anchor"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "FIFA2026 抽奖有没有保底机制和价格限制？",
+        result,
+    )
+
+    assert "lottery.pity.enabled=0" in findings["conclusion"]
+    assert "lottery.price_limit.enabled=0" in findings["conclusion"]
+
+
+def test_configuration_facts_skip_unrelated_activity_config_when_scope_missing() -> None:
+    """验证中文活动名无法定位目录时，不会把别的活动配置当成答案。"""
+    result = {
+        "evidence": [
+            {
+                "file": "waky3_miyouactivity/crontab/gameRanking/gameRankingBoot.php",
+                "line": 1,
+                "context": _context(
+                    1,
+                    [
+                        "<?php require_once (dirname(__DIR__) . '/index.php');",
+                        "class gameRankingBoot extends BaseBoot",
+                    ],
+                ),
+            },
+            {
+                "file": "waky3_miyouactivity/Logic/superSoldier/boot/config.php",
+                "line": 60,
+                "context": _context(
+                    60,
+                    [
+                        "    'pool' => [",
+                        "        'prize' => ['rank' => 1, 'rate' => 100],",
+                        "    ],",
+                    ],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "semantic_vector"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "游戏榜活动监听哪些游戏类型的发奖？前 10 名分别奖励什么？",
+        result,
+    )
+
+    assert "superSoldier" not in findings["conclusion"]
+    assert "pool.prize" not in findings["conclusion"]
+    assert findings["facts"] == []
+    assert findings["uncertainties"]
+
+
+def test_generic_fallback_does_not_turn_config_exception_into_answer() -> None:
+    """验证支付配置问题不会把无关 `throw new` 控制点当成业务结论。"""
+    result = {
+        "evidence": [
+            {
+                "file": "waky3_pay-api/myapp/config/fupay.php",
+                "line": 55,
+                "context": _context(
+                    55,
+                    [
+                        "    'merchantId' => getByTestMode('', 'alvV4011fAdY'),",
+                        "    'secretKey' => getByTestMode('', \\ServiceFactory::kmDecrypt('cipher')),",
+                    ],
+                ),
+            },
+            {
+                "file": "waky3_miyouphp/php/action/roomControl.php",
+                "line": 88,
+                "context": _context(
+                    88,
+                    ["throw new \\Exception('game config err!');"],
+                ),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "business_anchor"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "fupay 的商户号在配置里怎么写的？secretKey 是怎么存储的？",
+        result,
+    )
+
+    assert "game config err" not in findings["conclusion"]
+    assert all("game config err" not in item["statement"] for item in findings["facts"])
