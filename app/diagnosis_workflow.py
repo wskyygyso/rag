@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Optional
@@ -121,6 +122,75 @@ def _explicit_symbol_queries(queries: list[str]) -> list[str]:
         if query[0].islower() and len(query) >= 4 and query.isalpha():
             result.append(query)
     return list(dict.fromkeys(result))
+
+
+def _concept_config_file_evidence(
+    root: str,
+    project: str,
+    terms: list[str],
+    *,
+    limit: int = 3,
+) -> list[dict]:
+    """把概念英文词命中的配置文件名词干加入证据。
+
+    参数:
+        - `root`：被诊断仓库白名单根目录，类型为 `str`。
+        - `project`：当前项目标识，类型为 `str`。
+        - `terms`：问题理解生成的概念英文词，例如 `noble`、`newnoblelv`，类型为
+          `list[str]`。只使用长度不少于六个字符的词，降低通用词误命中。
+        - `limit`：最多补充的配置文件数量，类型为 `int`。限制用于避免把大量
+          同名配置塞入证据预算。
+
+    Returns:
+        配置文件首行证据列表。只在目录名为 `config`/`conf` 下做词干全等匹配，
+        不读取业务数据库，也不根据文件名直接生成结论；值仍由确定性分析器从
+        完整配置窗口中解析。
+    """
+    normalized = {
+        re.sub(r"[^a-z0-9]", "", str(term).casefold())
+        for term in terms
+        if len(str(term).strip()) >= 6
+    }
+    normalized.discard("")
+    if not normalized:
+        return []
+    base = os.path.join(root, project)
+    skipped = {
+        ".git",
+        ".gitnexus",
+        ".idea",
+        "logs",
+        "node_modules",
+        "templates_c",
+        "tmp",
+        "vendor",
+    }
+    results: list[dict] = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [name for name in dirnames if name not in skipped]
+        if os.path.basename(dirpath).casefold() not in {"config", "conf"}:
+            continue
+        for name in filenames:
+            if not name.endswith(".php"):
+                continue
+            stem = re.sub(r"[^a-z0-9]", "", name[:-4].casefold())
+            if stem not in normalized:
+                continue
+            file_name = os.path.relpath(
+                os.path.join(dirpath, name), base
+            ).replace(os.sep, "/")
+            results.append(
+                {
+                    "type": "concept_config",
+                    "query": stem,
+                    "file": file_name,
+                    "line": 1,
+                    "content": "<?php",
+                }
+            )
+            if len(results) >= limit:
+                return results
+    return results
 
 
 def _tag_initial_retrieval_stage(
@@ -759,6 +829,18 @@ def _select_diagnostic_evidence(
             continue
         append(item)
         break
+
+    # 概念英文词命中的配置文件（如 noble → newNobleLv.php）需要独立名额。
+    # 全文检索会因同词文件过多在截断处丢掉定义文件，而这类证据没有业务锚点
+    # 和 matched_queries，不能依赖后续通用候选回填。
+    concept_config_count = 0
+    for item in evidence:
+        if item.get("type") != "concept_config":
+            continue
+        append(item)
+        concept_config_count += 1
+        if concept_config_count >= 3 or len(selected) >= limit:
+            break
 
     # 第一层保留问题原句直接命中的四字以上业务锚点，最多十八条。等级配置、
     # 页面入口和业务注释往往都落在这里，优先级高于跨语言概念候选。
@@ -1897,6 +1979,18 @@ async def execute_diagnosis(task_id: str) -> None:
             }
             for rank, item in enumerate(generic_hits)
         )
+        # 概念英文词如果正好是配置文件名词干（如 noble 概念 → newNobleLv.php），
+        # 直接把该配置加入证据。全文检索会因同词文件过多在截断处丢掉定义文件，
+        # 文件名词干匹配可以稳定找回“配置定义处”，仍由后续源码分析验证取值。
+        evidence.extend(
+            {"project": current["project"], **item}
+            for item in _concept_config_file_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                semantic_terms,
+                limit=3,
+            )
+        )
         evidence.extend(history_version_evidence)
         # 完整点号键可能来自首轮调用点提取，负责证明业务读取了配置，但不含真实
         # 数值。检索前从全部规划键重新提取末级字段，确保 `dollar_to_diamond`
@@ -1995,6 +2089,21 @@ async def execute_diagnosis(task_id: str) -> None:
         for item in deduplicated:
             try:
                 start_line, end_line = _method_evidence_range(project_index, item)
+                # 枚举类问题（每个等级/所有档位）需要完整配置文件窗口，按方法
+                # 命中范围截取会只看到前几个等级，导致答案不完整。
+                evidence_file = str(item.get("file") or "")
+                if (
+                    (
+                        evidence_file.endswith("config.php")
+                        or "/config/" in f"/{evidence_file}"
+                    )
+                    and any(
+                        token in current["question"]
+                        for token in ("每个", "所有", "全部", "列出", "分别", "各等级")
+                    )
+                ):
+                    # read_file 单次最多读取 1000 行，这里取允许的最大窗口。
+                    start_line, end_line = 1, 1001
                 context = read_file(
                     settings.code_repositories_root,
                     current["project"],

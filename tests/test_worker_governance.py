@@ -72,6 +72,42 @@ def test_explicit_symbol_extraction_keeps_business_identifiers_with_digits() -> 
     assert "SQL" not in symbols
 
 
+def test_concept_config_file_evidence_matches_config_stem(tmp_path) -> None:
+    """验证概念词可通过配置文件名稳定定位定义处，而不依赖全文检索截断。
+
+    参数:
+        - `tmp_path`：pytest 提供的临时目录，用于构造最小仓库结构。
+    """
+    project_root = tmp_path / "waky3"
+    config_dir = project_root / "php" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "newNobleLv.php").write_text("<?php return [];", encoding="utf-8")
+    (config_dir / "unrelated.php").write_text("<?php return [];", encoding="utf-8")
+
+    evidence = diagnosis_workflow._concept_config_file_evidence(
+        str(tmp_path),
+        "waky3",
+        ["noble", "newnoblelv", "prize"],
+    )
+
+    assert [item["file"] for item in evidence] == ["php/config/newNobleLv.php"]
+
+
+def test_diagnostic_evidence_keeps_concept_config_files() -> None:
+    """验证概念配置证据不会被通用候选预算挤掉。"""
+    evidence = [
+        {
+            "type": "concept_config",
+            "file": "waky3_miyouphp/php/config/newNobleLv.php",
+            "line": 1,
+        }
+    ]
+
+    selected = diagnosis_workflow._select_diagnostic_evidence(evidence, [], limit=64)
+
+    assert selected == evidence
+
+
 def test_config_keys_are_extracted_from_hit_context_for_followup_search() -> None:
     """验证日志命中附近的真实配置读取会进入下一轮定义检索。"""
     hits = [

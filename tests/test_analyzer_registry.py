@@ -30,6 +30,7 @@ def test_registered_analyzer_ids_are_unique_and_ordered() -> None:
         "anchor_withdrawal",
         "diamond_exchange",
         "spaceship_fragments",
+        "vip_prize_levels",
     ]
 
 
@@ -45,6 +46,7 @@ def test_registry_selects_analyzers_from_composable_business_features() -> None:
         "钻石如何兑换金币？": "diamond_exchange",
         "官方渠道钻石兑换金币最低多少？": "diamond_exchange",
         "年度活动飞船商品碎片怎么分配？": "spaceship_fragments",
+        "测试环境中每个vip等级附赠的奖品是那些？将每个等级列出来": "vip_prize_levels",
     }
 
     for question, expected in cases.items():

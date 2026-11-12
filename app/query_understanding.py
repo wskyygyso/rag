@@ -75,6 +75,21 @@ SEMANTIC_CONCEPTS: Tuple[SemanticConcept, ...] = (
     SemanticConcept("ticket", ("券", "门票", "足球券"), ("ticket", "coupon")),
     SemanticConcept("country", ("国家", "国家队", "国旗"), ("country", "nation", "flag")),
     SemanticConcept("level", ("等级", "级别", "门槛"), ("level", "tier")),
+    # VIP 在代码里多以 noble 命名（newNobleLv、noble.php），只靠中文“贵族/VIP”
+    # 无法命中配置目录，因此补充可复用的业务名词与代码词。
+    SemanticConcept(
+        "noble",
+        ("vip", "贵族", "会员等级", "会员"),
+        (
+            "noble",
+            "newnoblelv",
+            "vip",
+            # 贵族等级奖品配置使用这两个常量，且文件名为 newNobleLv.php，
+            # 仅搜 noble/prize 会被大量同词文件截断。
+            "PRIZE_TYPE_NOBLE_CARD",
+            "PRIZE_TYPE_NOBLE_EXP_CARD",
+        ),
+    ),
     SemanticConcept("task", ("任务",), ("task",)),
     SemanticConcept("fuel", ("燃料",), ("fuel",)),
     SemanticConcept("time", ("时间", "起止", "开始", "结束"), ("time", "stime", "etime")),

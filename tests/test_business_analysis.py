@@ -1838,6 +1838,59 @@ def test_activity_configuration_switch_question_returns_all_enabled_flags() -> N
     assert "lottery.price_limit.enabled=0" in findings["conclusion"]
 
 
+def test_vip_prize_levels_enumerates_every_level_in_test_branch() -> None:
+    """验证 VIP 等级奖品问题会逐级列出测试分支，而不是只取一个数值。"""
+    config_file = "waky3_miyouphp/php/config/newNobleLv.php"
+    context_lines = [
+        "    'prize' => [",
+        "        1 => getByTestMode(",
+        "            [",
+        "                ['type' => PrizeModel::PRIZE_TYPE_NOBLE_CARD, 'gid' => 1, 'days' => 30, 'num' => 1,],",
+        "            ],",
+        "            //正式配置",
+        "            [",
+        "                ['type' => PrizeModel::PRIZE_TYPE_NOBLE_CARD, 'gid' => 1, 'days' => 30, 'num' => 1,],",
+        "            ]",
+        "        ),",
+        "        6 => getByTestMode(",
+        "            [",
+        "                ['type' => PrizeModel::PRIZE_TYPE_NOBLE_CARD, 'gid' => 6, 'days' => 30, 'num' => 1,],",
+        "                ['type' => PrizeModel::PRIZE_TYPE_PROP, 'gid' => 29, 'days' => 30, 'num' => 1,],",
+        "                ['type' => PrizeModel::PRIZE_TYPE_NOBLE_EXP_CARD, 'gid' => 1, 'days' => 30, 'num' => 1,],",
+        "            ],",
+        "            //正式配置",
+        "            [",
+        "                ['type' => PrizeModel::PRIZE_TYPE_PROP, 'gid' => 30, 'days' => 30, 'num' => 1,],",
+        "            ]",
+        "        ),",
+    ]
+    result = {
+        "evidence": [
+            {
+                "file": config_file,
+                "line": 21,
+                "context": _context(21, context_lines),
+            },
+        ],
+        "retrieval_plan": {
+            "retrieval_mode": "semantic_discovery",
+            "retrieval_support": {"grounded": True, "level": "business_anchor"},
+        },
+    }
+
+    findings = build_deterministic_findings(
+        "测试环境中每个vip等级附赠的奖品是那些？将每个等级列出来",
+        result,
+    )
+
+    assert "等级 1" in findings["conclusion"]
+    assert "等级 6" in findings["conclusion"]
+    assert "贵族卡 x1" in findings["conclusion"]
+    assert "贵族体验卡 x1" in findings["conclusion"]
+    assert "gid=30" not in findings["conclusion"]
+    assert len(findings["facts"]) == 2
+
+
 def test_configuration_facts_skip_unrelated_activity_config_when_scope_missing() -> None:
     """验证中文活动名无法定位目录时，不会把别的活动配置当成答案。"""
     result = {

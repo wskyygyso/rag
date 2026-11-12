@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Set
 
 from app.domain.diagnosis.analyzers.activity import _analyze_spaceship_fragments
 from app.domain.diagnosis.analyzers.common import EvidenceLine
+from app.domain.diagnosis.analyzers.configuration import _analyze_vip_prize_levels
 from app.domain.diagnosis.analyzers.display import _analyze_frontend_diamond_display
 from app.domain.diagnosis.analyzers.exchange import _analyze_diamond_exchange
 from app.domain.diagnosis.analyzers.registration import _analyze_device_registration_limit
@@ -142,6 +143,18 @@ ANALYZER_REGISTRY = AnalyzerRegistry(
             topic="飞船商品碎片分配",
             matches=lambda question, concepts: "飞船" in question and "碎片" in question,
             analyze=_analyze_spaceship_fragments,
+        ),
+        AnalyzerSpec(
+            analyzer_id="vip_prize_levels",
+            topic="VIP等级附赠奖品",
+            # 只有“贵族/VIP”领域概念加上枚举动作才进入该分析器，避免把所有
+            # 带“等级”的问题都路由到 VIP 配置。
+            matches=lambda question, concepts: "noble" in concepts
+            and any(
+                word in question
+                for word in ("每个", "各等级", "所有", "全部", "列出", "分别")
+            ),
+            analyze=_analyze_vip_prize_levels,
         ),
     ]
 )

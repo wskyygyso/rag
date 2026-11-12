@@ -30,6 +30,91 @@ _SAFE_CODE_CONSTANT_PATTERN = re.compile(r"^\\?[A-Za-z_][A-Za-z0-9_\\]*::[A-Za-z
 _SAFE_REWARD_LABEL_PATTERN = re.compile(
     r"^\d+(?:\.\d+)?\s*(?:美元|金币|钻石|足球券|碎片|天|日|次)$"
 )
+# VIP/贵族配置按等级重复出现 `N => getByTestMode(测试配置, 正式配置)`。
+# 枚举类问题需要读取每个等级的第一段（测试环境）配置，而不是只挑一个数值。
+_LEVEL_BLOCK_PATTERN = re.compile(r"(?m)^\s*(\d+)\s*=>\s*getByTestMode\(")
+_TEST_BRANCH_MARKER = "//正式配置"
+_PRIZE_ITEM_PATTERN = re.compile(
+    r"'type'\s*=>\s*(?P<type>[A-Za-z0-9_\\:]+)\s*,\s*"
+    r"'gid'\s*=>\s*(?P<gid>\d+)\s*,\s*"
+    r"'days'\s*=>\s*(?P<days>\d+)\s*,\s*"
+    r"'num'\s*=>\s*(?P<num>\d+)",
+    re.S,
+)
+_PRIZE_TYPE_LABELS = {
+    "prize_type_noble_card": "贵族卡",
+    "prize_type_prop": "道具",
+    "prize_type_noble_exp_card": "贵族体验卡",
+}
+
+
+def _analyze_vip_prize_levels(lines: Sequence[EvidenceLine]) -> List[Dict[str, Any]]:
+    """枚举 VIP/贵族等级在测试环境附赠的奖品清单。
+
+    参数:
+        - `lines`：已展开的源码证据行，类型为 `Sequence[EvidenceLine]`。调用方
+          需要在枚举类问题中提供完整配置文件窗口，否则只能看到部分等级。
+
+    Returns:
+        每个等级一条事实，`category` 标明等级，`statement` 列出测试分支的奖品
+        类型、数量和有效天数。没有等级块或测试分支为空时返回空列表，由上层
+        报告证据缺口，不能用正式环境配置冒充测试环境。
+    """
+    by_file: Dict[str, List[EvidenceLine]] = {}
+    for item in lines:
+        by_file.setdefault(item.file, []).append(item)
+    best_file = ""
+    best_text = ""
+    best_count = 0
+    for file_name, file_lines in by_file.items():
+        text = "\n".join(
+            item.content for item in sorted(file_lines, key=lambda row: row.line)
+        )
+        if "getByTestMode(" not in text or "'prize'" not in text:
+            continue
+        count = len(_LEVEL_BLOCK_PATTERN.findall(text))
+        if count > best_count:
+            best_file, best_text, best_count = file_name, text, count
+    if not best_file:
+        return []
+
+    facts: List[Dict[str, Any]] = []
+    matches = list(_LEVEL_BLOCK_PATTERN.finditer(best_text))
+    for index, match in enumerate(matches):
+        level = int(match.group(1))
+        block_end = (
+            matches[index + 1].start() if index + 1 < len(matches) else len(best_text)
+        )
+        block = best_text[match.end():block_end]
+        test_branch = block.split(_TEST_BRANCH_MARKER, 1)[0]
+        items = list(_PRIZE_ITEM_PATTERN.finditer(test_branch))
+        if not items:
+            continue
+        parts = []
+        for prize in items:
+            raw_type = prize.group("type").split("::")[-1].casefold()
+            label = _PRIZE_TYPE_LABELS.get(raw_type, prize.group("type"))
+            parts.append(
+                f"{label} x{int(prize.group('num'))}（gid={int(prize.group('gid'))}，"
+                f"{int(prize.group('days'))} 天）"
+            )
+        statement = f"等级 {level}：" + "；".join(parts)
+        line_number = next(
+            (
+                item.line
+                for item in by_file[best_file]
+                if re.match(rf"^\s*{level}\s*=>\s*getByTestMode\(", item.content)
+            ),
+            1,
+        )
+        facts.append(
+            {
+                "category": f"VIP{level}级附赠奖品",
+                "statement": statement,
+                "evidence_refs": [f"{best_file}:{line_number}"],
+            }
+        )
+    return facts
 
 # 只过滤问题中常见的协议、环境和语言缩写。活动标识、类名、配置键不在此处
 # 固定，因此未知活动仍可由问题与真实路径的字符匹配进入配置解析。

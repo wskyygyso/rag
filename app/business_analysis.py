@@ -179,6 +179,12 @@ def build_deterministic_findings(
         )
     if topic == "活动配置值":
         conclusion = _configuration_fact_conclusion(facts)
+    elif topic == "VIP等级附赠奖品":
+        # 枚举型问题必须逐级回答，不能只取最高分的一条配置。事实本身来自
+        # newNobleLv.php 的测试分支，结论只拼接已验证的等级语句。
+        conclusion = "测试环境中各 VIP 等级附赠的奖品为：" + "；".join(
+            str(item.get("statement") or "") for item in facts
+        ) + "。以上取值来自贵族等级配置中 `getByTestMode` 的测试分支。"
     elif topic == "美元熔断":
         conclusion_parts = []
         category_names = {str(item.get("category") or "") for item in facts}

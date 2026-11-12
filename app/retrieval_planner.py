@@ -125,7 +125,9 @@ _GENERIC_SUPPORT_CONCEPTS = {
     "daily",
     "display",
     "gift",
+    "level",
     "limit",
+    "prize",
     "status",
     "user",
 }
