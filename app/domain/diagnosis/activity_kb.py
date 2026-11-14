@@ -28,6 +28,25 @@ MAX_CONTEXT_ZH = 200
 MAX_SOURCE_REFS = 6
 # 全仓最多构建的活动记录数；活动目录和全局配置文件合计通常不超过 350 个。
 MAX_ACTIVITIES = 400
+# 单个活动保留的结构化等级条目上限。等级表通常不超过 20 条，上限只防止异常
+# 配置把整个文件当成独立等级写入内存。
+MAX_LEVELS = 40
+# 单个活动保留的奖励定义条数上限。奖励表常按 100..503 编号，120 条覆盖真实活动。
+MAX_PRIZES = 120
+# 单个等级保留的奖励引用条数上限，避免异常数组把整份奖品表挂到同一等级。
+MAX_LEVEL_PRIZE_REFS = 12
+# 等级条目中可作为门槛的字段名，按优先级排列；只接受数字或 getByTestMode 成对值。
+LEVEL_THRESHOLD_KEYS = ("limit", "score", "value", "need", "require", "gift_value")
+# 等级条目中可能保存奖励引用的数组键。
+LEVEL_PRIZE_KEYS = ("prizes", "top1_prizes")
+# 后台活动登记的路径优先级：后台先查 crontab 配置，再查 Logic boot 配置。
+BACKEND_MARKER_PRIORITY = {
+    "crontab": 0,
+    "Logic": 1,
+    "action_activity": 2,
+    "config": 3,
+    "conf": 4,
+}
 # 活动目录标记。它们是仓库中承载活动配置与实现的真实目录名。
 ACTIVITY_MARKERS = ("Logic", "crontab", "action_activity")
 # 全局配置目录标记。贵族、支付等配置没有活动目录，按文件名干单独成组。
@@ -66,6 +85,46 @@ GENERIC_EN_TERMS = {
 
 
 @dataclass(frozen=True)
+class ActivityLevel:
+    """描述活动配置中的一条等级（档位）记录。
+
+    属性说明：
+    - `ordinal`：等级序号，优先取配置中的 `id`，缺失时按数组声明顺序补 1..n；
+    - `threshold`：门槛的展示值，普通数字保留原字面值，`getByTestMode` 成对值
+      渲染为 `测试 X / 正式 Y`；
+    - `name`：等级名称，来自 `name.zh` 或字符串 `name`；没有名称时为空字符串；
+    - `prize_ids`：该等级引用的奖励 id，来自 `prizes`/`top1_prizes` 数组；
+    - `source_ref`：等级条目起始行的 `文件:行号`，用于事实审计。
+    """
+
+    ordinal: int
+    threshold: str = ""
+    name: str = ""
+    prize_ids: Tuple[str, ...] = ()
+    source_ref: str = ""
+
+
+@dataclass(frozen=True)
+class ActivityPrize:
+    """描述活动配置顶层奖励定义表中的一条奖励。
+
+    属性说明：
+    - `prize_id`：`prizes` 映射键（与条目内 `id` 一致），等级表通过它引用；
+    - `name`：奖励可读名称，来自 `name` 或 `name.zh`；没有名称时为空字符串；
+    - `type`/`num`/`days`：奖励类型、数量和有效期天数，只保存在知识库中，
+      本阶段不进入用户结论；
+    - `source_ref`：奖励定义起始行的 `文件:行号`，用于事实审计。
+    """
+
+    prize_id: str
+    name: str = ""
+    type: str = ""
+    num: str = ""
+    days: str = ""
+    source_ref: str = ""
+
+
+@dataclass(frozen=True)
 class ActivityRecord:
     """描述一个可从仓库数据重建的活动或全局配置分组。
 
@@ -82,6 +141,12 @@ class ActivityRecord:
     - `level_field`：等级门槛字段（`score`、`value` 或 `limit`）；
     - `stime`/`etime`：配置中的起止时间字面量；
     - 其余布尔字段表示配置中是否存在对应结构，用于与问题意图对齐；
+    - `volume`/`year`：活动期次与年份字面值，例如 `3`、`2023`；
+    - `vol_ref`/`year_ref`：期次与年份所在行 `文件:行号`，用于事实审计；
+    - `levels`：结构化等级表，保存序号、门槛、名称和奖励引用；
+    - `prizes`：顶层奖励定义表，供等级奖励引用解析出可读名称；
+    - `backend_registered`：是否命中后台活动登记路径；
+    - `backend_config_file`：后台读取的配置路径，未登记时为空字符串；
     - `source_refs`：`文件:行号` 审计引用，供报告展示链接依据。
     """
 
@@ -102,6 +167,14 @@ class ActivityRecord:
     has_surprise: bool = False
     has_jump_switch: bool = False
     env_pair_count: int = 0
+    volume: str = ""
+    year: str = ""
+    vol_ref: str = ""
+    year_ref: str = ""
+    levels: Tuple[ActivityLevel, ...] = ()
+    prizes: Tuple[ActivityPrize, ...] = ()
+    backend_registered: bool = False
+    backend_config_file: str = ""
     source_refs: Tuple[str, ...] = ()
 
 
@@ -229,23 +302,74 @@ def _line_number(text: str, index: int) -> int:
     return text.count("\n", 0, min(index, len(text))) + 1
 
 
-def _array_block(text: str, key: str) -> str:
-    """提取指定键对应数组的源码片段。
+def _strip_php_comments(text: str) -> str:
+    """删除 PHP 注释并保留换行，供结构化字段解析使用。
 
     参数:
-        - `text`：完整配置文本，类型为 `str`。
-        - `key`：配置数组键名，例如 `levels` 或 `level`，类型为 `str`。
+        - `text`：配置文件完整文本，类型为 `str`。
 
     Returns:
-        从 `'key' => [` 开始到配对右括号为止的片段；找不到该键或括号不配对时
-        返回空字符串。只做字符级括号计数，不执行 PHP 代码。
+        注释内容被替换为空格（块注释）或删除（行注释）的文本。所有换行原样
+        保留，因此行号仍与原始配置一致；字符串字面量内的 `//`、`#` 不会被
+        误删。结构化解析必须使用该结果，避免把注释掉的示例奖励或期次当成
+        当前配置。
     """
-    match = re.search(
-        rf"['\"]{re.escape(key)}['\"]\s*=>\s*\[", text or ""
-    )
-    if not match:
-        return ""
-    start = match.end() - 1
+    result: List[str] = []
+    index = 0
+    quote = ""
+    escaped = False
+    in_block = False
+    while index < len(text):
+        char = text[index]
+        if in_block:
+            if char == "*" and index + 1 < len(text) and text[index + 1] == "/":
+                in_block = False
+                index += 2
+                continue
+            result.append("\n" if char == "\n" else " ")
+            index += 1
+            continue
+        if quote:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            result.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < len(text) and text[index + 1] == "*":
+            in_block = True
+            index += 2
+            continue
+        if (char == "/" and index + 1 < len(text) and text[index + 1] == "/") or char == "#":
+            while index < len(text) and text[index] != "\n":
+                index += 1
+            continue
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
+def _bracket_end(text: str, start: int) -> int:
+    """返回与指定左方括号配对的右方括号下标。
+
+    参数:
+        - `text`：待扫描文本，类型为 `str`。
+        - `start`：左方括号 `[` 的下标，类型为 `int`；越界时返回 -1。
+
+    Returns:
+        配对 `]` 的下标；`start` 不是 `[` 或括号不配对时返回 -1。只做字符级
+        计数，不解析 PHP 表达式，也不执行任何配置代码。
+    """
+    if start < 0 or start >= len(text) or text[start] != "[":
+        return -1
     depth = 0
     for position in range(start, len(text)):
         char = text[position]
@@ -254,8 +378,310 @@ def _array_block(text: str, key: str) -> str:
         elif char == "]":
             depth -= 1
             if depth == 0:
-                return text[start:position + 1]
-    return ""
+                return position
+    return -1
+
+
+def _top_level_array_block(text: str, key: str) -> Tuple[str, int]:
+    """提取嵌套层级最浅的指定键数组，避免误取等级条目内的同名数组。
+
+    参数:
+        - `text`：完整配置文本，类型为 `str`。
+        - `key`：配置数组键名，例如 `prizes`，类型为 `str`。
+
+    Returns:
+        `(数组片段, 起始下标)`。同名键在配置中多次出现时，选择左方括号之前
+        方括号净深度最小的那一处，也就是最外层定义；深度相同取最早出现的一处。
+        找不到时返回 `("", -1)`。
+    """
+    pattern = re.compile(rf"['\"]{re.escape(key)}['\"]\s*=>\s*\[")
+    best = ("", -1)
+    best_depth = 10 ** 9
+    for match in pattern.finditer(text or ""):
+        start = match.end() - 1
+        # 注释和字符串里的方括号也会参与计数，但它们的相对深度不会改变
+        # “哪一处更外层”的判断，因此不需要复杂的状态机。
+        depth = text[:start].count("[") - text[:start].count("]")
+        if depth > best_depth:
+            continue
+        end = _bracket_end(text, start)
+        if end < 0:
+            continue
+        if depth < best_depth:
+            best_depth = depth
+            best = (text[start:end + 1], start)
+    return best
+
+
+def _array_items(block: str) -> List[Tuple[int, str]]:
+    """把方括号数组按顶层子数组切分。
+
+    参数:
+        - `block`：以 `[` 开头、以配对 `]` 结尾的数组片段，类型为 `str`。
+
+    Returns:
+        `(子数组起始偏移, 子数组文本)` 列表。只返回深度为 2 的数组条目，因此
+        标量列表（如 `[110,120]`）返回空列表，由调用方按裸数字另行解析。
+    """
+    items: List[Tuple[int, str]] = []
+    depth = 0
+    item_start = -1
+    for index, char in enumerate(block):
+        if char == "[":
+            depth += 1
+            if depth == 2 and item_start < 0:
+                item_start = index
+        elif char == "]":
+            if depth == 2 and item_start >= 0:
+                items.append((item_start, block[item_start:index + 1]))
+                item_start = -1
+            depth -= 1
+            if depth <= 0:
+                break
+    return items
+
+
+def _display_name(raw: str) -> str:
+    """把等级或奖励名称规范化为可读文本。
+
+    参数:
+        - `raw`：配置中的名称字面值，类型为 `str`。
+
+    Returns:
+        含中文时复用 `_normalize_zh_alias` 去掉标点与占位符；纯英文名称保留
+        原文本并压缩空白，长度 2 至 60 才返回；URL、图片路径、翻译键等返回
+        空字符串，避免把技术字符串当成业务名称。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    lowered = text.casefold()
+    for fragment in ("http", "://", ".png", ".jpg", ".jpeg", ".gif", "@", "lang_map"):
+        if fragment in lowered:
+            return ""
+    if re.search(r"[\u4e00-\u9fff]", text):
+        return _normalize_zh_alias(text)
+    text = re.sub(r"\s+", " ", text).strip(" []'\"")
+    return text if 2 <= len(text) <= 60 else ""
+
+
+def _level_name(item_text: str) -> str:
+    """提取等级条目中的可读名称。
+
+    参数:
+        - `item_text`：单个等级条目的源码片段，类型为 `str`。
+
+    Returns:
+        优先返回 `name` 数组中的 `zh` 值，其次返回字符串形式的 `name`；
+        没有名称或名称不可读时返回空字符串。
+    """
+    match = re.search(
+        r"['\"]name['\"]\s*=>\s*\[[^\]]{0,200}?['\"]zh['\"]\s*=>\s*"
+        r"['\"]([^'\"\n]{1,60})['\"]",
+        item_text or "",
+    )
+    if not match:
+        match = re.search(
+            r"['\"]name['\"]\s*=>\s*['\"]([^'\"\n]{1,60})['\"]",
+            item_text or "",
+        )
+    return _display_name(match.group(1)) if match else ""
+
+
+def _threshold_value(item_text: str) -> Tuple[str, str]:
+    """提取等级条目的门槛展示值和字段名。
+
+    参数:
+        - `item_text`：单个等级条目的源码片段，类型为 `str`。
+
+    Returns:
+        `(展示值, 命中字段名)`。`getByTestMode(测试, 正式)` 渲染为
+        `测试 X / 正式 Y`；普通数字保留原字面值；没有门槛时返回 `("", "")`。
+        只读取数字字面量，不计算表达式结果。
+    """
+    for key in LEVEL_THRESHOLD_KEYS:
+        pair = re.search(
+            rf"['\"]{key}['\"]\s*=>\s*getByTestMode\(\s*"
+            r"(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)",
+            item_text or "",
+        )
+        if pair:
+            return f"测试 {pair.group(1)} / 正式 {pair.group(2)}", key
+        single = re.search(
+            rf"['\"]{key}['\"]\s*=>\s*(\d+(?:\.\d+)?)",
+            item_text or "",
+        )
+        if single:
+            return single.group(1), key
+    return "", ""
+
+
+def _level_prize_ids(item_text: str) -> Tuple[str, ...]:
+    """提取等级条目引用的奖励 id。
+
+    参数:
+        - `item_text`：单个等级条目的源码片段，类型为 `str`。
+
+    Returns:
+        去重后的奖励 id 元组，最多 `MAX_LEVEL_PRIZE_REFS` 条。支持
+        `[110,120]` 裸数字与 `[['id' => 10, 'sex' => 1]]` 引用对象；引用对象
+        只读取 `id`，不会把 `sex` 等附加字段当成奖励编号。
+    """
+    ids: List[str] = []
+    for key in LEVEL_PRIZE_KEYS:
+        match = re.search(
+            rf"['\"]{key}['\"]\s*=>\s*\[",
+            item_text or "",
+        )
+        if not match:
+            continue
+        start = match.end() - 1
+        end = _bracket_end(item_text, start)
+        if end < 0:
+            continue
+        block = item_text[start:end + 1]
+        items = _array_items(block)
+        if not items:
+            ids.extend(re.findall(r"\d+", block))
+            continue
+        for _, sub_item in items:
+            reference = re.search(r"['\"]id['\"]\s*=>\s*(\d+)", sub_item)
+            if reference:
+                ids.append(reference.group(1))
+                continue
+            bare = re.fullmatch(r"\[\s*(\d+)\s*\]", sub_item.strip())
+            if bare:
+                ids.append(bare.group(1))
+    return tuple(dict.fromkeys(ids))[:MAX_LEVEL_PRIZE_REFS]
+
+
+def _parse_level_items(
+    text: str,
+    block: str,
+    block_start: int,
+    config_file: str,
+) -> Tuple[ActivityLevel, ...]:
+    """把等级数组解析为结构化等级表。
+
+    参数:
+        - `text`：配置文件完整文本，类型为 `str`；只用于换算行号。
+        - `block`：等级数组片段，类型为 `str`，来自最外层 `levels`/`level` 键。
+        - `block_start`：数组片段在 `text` 中的起始下标，类型为 `int`。
+        - `config_file`：项目内相对路径，类型为 `str`；用于生成审计引用。
+
+    Returns:
+        等级记录元组，最多 `MAX_LEVELS` 条。没有序号时按声明顺序补 1..n；
+        条目缺少可读门槛和名称时仍保留，是否输出由事实层决定。
+    """
+    levels: List[ActivityLevel] = []
+    for sequence, (offset, item_text) in enumerate(_array_items(block), start=1):
+        reference = re.search(r"['\"]id['\"]\s*=>\s*(\d+)", item_text)
+        ordinal = int(reference.group(1)) if reference else sequence
+        threshold, _field = _threshold_value(item_text)
+        levels.append(
+            ActivityLevel(
+                ordinal=ordinal,
+                threshold=threshold,
+                name=_level_name(item_text),
+                prize_ids=_level_prize_ids(item_text),
+                source_ref=(
+                    f"{config_file}:"
+                    f"{_line_number(text, block_start + offset)}"
+                ),
+            )
+        )
+        if len(levels) >= MAX_LEVELS:
+            break
+    return tuple(levels)
+
+
+def _prize_field(item_text: str, key: str) -> str:
+    """读取奖励定义条目中的单个字段字面值。
+
+    参数:
+        - `item_text`：单个奖励定义条目的源码片段，类型为 `str`。
+        - `key`：字段名，例如 `type`、`num`、`days`，类型为 `str`。
+
+    Returns:
+        字段的字符串或数字字面值；字段不存在时返回空字符串。名称字段由
+        `_level_name`/`_display_name` 单独处理，避免多语言数组被截断。
+    """
+    match = re.search(
+        rf"['\"]{re.escape(key)}['\"]\s*=>\s*['\"]?([^'\"\n,]{1,60})['\"]?",
+        item_text or "",
+    )
+    return match.group(1).strip() if match else ""
+
+
+def _parse_prizes(
+    text: str,
+    config_file: str,
+) -> Tuple[ActivityPrize, ...]:
+    """解析顶层奖励定义表。
+
+    参数:
+        - `text`：配置文件完整文本，类型为 `str`。
+        - `config_file`：项目内相对路径，类型为 `str`；用于生成审计引用。
+
+    Returns:
+        奖励记录元组，最多 `MAX_PRIZES` 条。只解析最外层 `prizes` 数组，避免
+        把等级条目内的 `prizes` 引用数组误当成奖励定义；没有名称的奖励仍然
+        保留 id 和引用，由事实层跳过展示。
+    """
+    block, block_start = _top_level_array_block(text, "prizes")
+    if not block:
+        return ()
+    prizes: List[ActivityPrize] = []
+    for match in re.finditer(r"(\d+)\s*=>\s*\[", block):
+        start = match.end() - 1
+        end = _bracket_end(block, start)
+        if end < 0:
+            continue
+        item_text = block[start:end + 1]
+        prizes.append(
+            ActivityPrize(
+                prize_id=match.group(1),
+                name=_level_name(item_text),
+                type=_prize_field(item_text, "type"),
+                num=_prize_field(item_text, "num"),
+                days=_prize_field(item_text, "days"),
+                source_ref=(
+                    f"{config_file}:"
+                    f"{_line_number(text, block_start + match.start())}"
+                ),
+            )
+        )
+        if len(prizes) >= MAX_PRIZES:
+            break
+    return tuple(prizes)
+
+
+def _literal_with_line(
+    text: str,
+    key: str,
+) -> Tuple[str, str]:
+    """读取配置顶层标量字面值及其行号。
+
+    参数:
+        - `text`：配置文件完整文本，类型为 `str`。
+        - `key`：标量键名，例如 `vol`、`year`，类型为 `str`。
+
+    Returns:
+        `(字面值, 文件内行号)`。只接受数字或字符串数字；跳过注释行中的同名
+        键，避免把 `// 'vol' => 1` 的示例值当成当前期次。找不到时返回
+        `("", "")`。
+    """
+    for match in re.finditer(
+        rf"['\"]{re.escape(key)}['\"]\s*=>\s*['\"]?(\d+)['\"]?",
+        text or "",
+    ):
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        prefix = text[line_start:match.start()]
+        # 注释行中的示例配置不参与取值：行内键名之前出现注释标记即跳过。
+        if "//" in prefix or "#" in prefix or "/*" in prefix:
+            continue
+        return match.group(1), str(_line_number(text, match.start()))
+    return "", ""
 
 
 def _extract_alias_data(
@@ -292,8 +718,14 @@ def _extract_alias_data(
     level_key = ""
     level_field = ""
     level_names: List[str] = []
+    structured_levels: Tuple[ActivityLevel, ...] = ()
+    level_block = ""
+    level_block_start = -1
+    # 结构化字段只解析未注释的配置：活动配置里常有注释掉的旧奖励或旧期次，
+    # 直接扫描原文会把它们当成当前配置。
+    structured_text = _strip_php_comments(text)
     for key in ("level", "levels"):
-        block = _array_block(text, key)
+        block, block_start = _top_level_array_block(structured_text, key)
         if not block:
             continue
         names = [
@@ -305,18 +737,36 @@ def _extract_alias_data(
             level_names.extend(names)
         if key == "level" and ("'score'" in block or "'value'" in block):
             level_key, level_field = key, ("score" if "'score'" in block else "value")
+            level_block, level_block_start = block, block_start
             break
         if key == "levels":
             if not level_key:
                 level_key = "levels"
                 level_field = "score" if "'score'" in block else "limit"
+                level_block, level_block_start = block, block_start
+    if level_key and level_block:
+        structured_levels = _parse_level_items(
+            structured_text,
+            level_block,
+            level_block_start,
+            config_file,
+        )
     if level_key and not level_names:
         level_names = []
-    count_level_limits = len(re.findall(r"['\"]limit['\"]\s*=>", text or ""))
-    count_level_constants = len(re.findall(r"::LEVEL_[A-Z0-9_]+\s*=>\s*\[", text or ""))
+    count_level_limits = len(re.findall(r"['\"]limit['\"]\s*=>", structured_text))
+    count_level_constants = len(
+        re.findall(r"::LEVEL_[A-Z0-9_]+\s*=>\s*\[", structured_text)
+    )
     level_count = max(count_level_limits, count_level_constants)
+    level_count = max(level_count, len(structured_levels))
     if len(level_names) > level_count:
         level_count = len(level_names)
+
+    structured_prizes = _parse_prizes(structured_text, config_file)
+    volume, vol_line = _literal_with_line(structured_text, "vol")
+    year_value, year_line = _literal_with_line(structured_text, "year")
+    vol_ref = f"{config_file}:{vol_line}" if vol_line else ""
+    year_ref = f"{config_file}:{year_line}" if year_line else ""
 
     primary_zh.extend(level_names)
     unique_primary = tuple(dict.fromkeys(primary_zh))[:120]
@@ -392,6 +842,12 @@ def _extract_alias_data(
         ),
         "has_jump_switch": "'is_can_jump_x'" in (text or ""),
         "env_pair_count": len(re.findall(r"getByTestMode\s*\(", text or "")),
+        "volume": volume,
+        "year": year_value,
+        "vol_ref": vol_ref,
+        "year_ref": year_ref,
+        "levels": structured_levels,
+        "prizes": structured_prizes,
         "source_refs": tuple(refs[:MAX_SOURCE_REFS]),
     }
 
@@ -457,6 +913,36 @@ def _extract_lang_package(
         return ""
 
 
+def _backend_registration(
+    marker: str,
+    activity_id: str,
+    config_file: str,
+) -> Tuple[bool, str]:
+    """判定活动配置是否落在后台活动登记路径中。
+
+    参数:
+        - `marker`：活动来源目录标记，类型为 `str`；`crontab`/`Logic` 等。
+        - `activity_id`：活动目录名或配置文件名干，类型为 `str`。
+        - `config_file`：项目内配置相对路径，类型为 `str`。
+
+    Returns:
+        `(是否登记, 后台读取配置路径)`。后台（`activityBackend/index.php`）的
+        真实规则是优先 `crontab/<name>/config.php`，其次
+        `Logic/<name>/boot/config.php`；只有命中这两条路径才算登记，全局配置
+        和 `action_activity` 返回 `(False, "")`。
+    """
+    folded = (config_file or "").replace("\\", "/").casefold()
+    if not folded or not activity_id:
+        return False, ""
+    crontab_path = f"/crontab/{activity_id}/config.php".casefold()
+    logic_path = f"/logic/{activity_id}/boot/config.php".casefold()
+    if marker == "crontab" and folded.endswith(crontab_path):
+        return True, config_file
+    if marker == "Logic" and folded.endswith(logic_path):
+        return True, config_file
+    return False, ""
+
+
 def build_activity_knowledge(
     root: str,
     project: str,
@@ -475,8 +961,9 @@ def build_activity_knowledge(
           成本。
 
     Returns:
-        去重后的活动记录元组。活动目录必须有 `config.php`；全局配置按
-        `php/config`、`php/conf` 下的 `.php` 文件建立。读取失败的文件跳过，
+        去重后的活动记录元组。活动目录必须有 `config.php`，`Logic` 活动还接受
+        `boot/config.php`；全局配置按 `php/config`、`php/conf` 下的 `.php` 文件
+        建立。同一活动名只保留后台优先级最高的一条记录。读取失败的文件跳过，
         不影响其他活动；没有任何可读文件时返回空元组。
     """
     reader = read_text or _default_read_text(root, project)
@@ -485,6 +972,11 @@ def build_activity_knowledge(
         return ()
     records: List[ActivityRecord] = []
     seen: set = set()
+    # 活动名 → 已收录记录的 marker 优先级。后台先查 crontab 配置，知识库必须
+    # 与后台一致，避免 Logic boot 副本顶掉 crontab 记录或造成重复链接得分。
+    activity_priority: Dict[str, int] = {}
+    # 活动名 → 记录下标，用于按后台优先级原地替换同名记录。
+    activity_index: Dict[str, int] = {}
     for marker, marker_path in _iter_marker_dirs(base_path):
         try:
             entries = sorted(os.listdir(marker_path))
@@ -493,18 +985,27 @@ def build_activity_knowledge(
         for entry in entries:
             full_path = os.path.join(marker_path, entry)
             if marker in ACTIVITY_MARKERS:
-                config_path = os.path.join(full_path, "config.php")
-                if not os.path.isdir(full_path) or not os.path.isfile(config_path):
+                if not os.path.isdir(full_path):
+                    continue
+                # 后台活动后台先找 `crontab/<name>/config.php`，再找
+                # `Logic/<name>/boot/config.php`；知识库按同一布局枚举。
+                config_names = (
+                    ("boot/config.php", "config.php")
+                    if marker == "Logic"
+                    else ("config.php",)
+                )
+                config_path = next(
+                    (
+                        os.path.join(full_path, *name.split("/"))
+                        for name in config_names
+                        if os.path.isfile(os.path.join(full_path, *name.split("/")))
+                    ),
+                    "",
+                )
+                if not config_path:
                     continue
                 activity_id = entry
-                relative = "/".join(
-                    part
-                    for part in (
-                        os.path.relpath(full_path, base_path).replace("\\", "/"),
-                        "config.php",
-                    )
-                    if part
-                )
+                relative = os.path.relpath(config_path, base_path).replace("\\", "/")
             elif marker in CONFIG_MARKERS:
                 if not entry.endswith(".php") or not os.path.isfile(full_path):
                     continue
@@ -514,6 +1015,10 @@ def build_activity_knowledge(
                 continue
             normalized_relative = relative.replace("\\", "/")
             if not normalized_relative or normalized_relative.casefold() in seen:
+                continue
+            priority = BACKEND_MARKER_PRIORITY.get(marker, 9)
+            existing_priority = activity_priority.get(activity_id)
+            if existing_priority is not None and priority >= existing_priority:
                 continue
             try:
                 text = reader(normalized_relative)
@@ -563,28 +1068,48 @@ def build_activity_knowledge(
                 data["aliases_en"] = tuple(
                     dict.fromkeys([*data["aliases_en"], *uppercase_tokens])
                 )[:120]
-            records.append(
-                ActivityRecord(
-                    activity_id=activity_id,
-                    marker=marker,
-                    config_file=normalized_relative,
-                    aliases_zh=tuple(data["aliases_zh"]),
-                    context_zh=tuple(data["context_zh"]),
-                    aliases_en=tuple(data["aliases_en"]),
-                    level_names=tuple(data["level_names"]),
-                    level_count=int(data["level_count"]),
-                    level_key=str(data["level_key"]),
-                    level_field=str(data["level_field"]),
-                    stime=str(data["stime"]),
-                    etime=str(data["etime"]),
-                    has_rank_prizes=bool(data["has_rank_prizes"]),
-                    has_allow_types=bool(data["has_allow_types"]),
-                    has_surprise=bool(data["has_surprise"]),
-                    has_jump_switch=bool(data["has_jump_switch"]),
-                    env_pair_count=int(data["env_pair_count"]),
-                    source_refs=tuple(data["source_refs"]),
-                )
+            backend_registered, backend_config_file = _backend_registration(
+                marker,
+                activity_id,
+                normalized_relative,
             )
+            record = ActivityRecord(
+                activity_id=activity_id,
+                marker=marker,
+                config_file=normalized_relative,
+                aliases_zh=tuple(data["aliases_zh"]),
+                context_zh=tuple(data["context_zh"]),
+                aliases_en=tuple(data["aliases_en"]),
+                level_names=tuple(data["level_names"]),
+                level_count=int(data["level_count"]),
+                level_key=str(data["level_key"]),
+                level_field=str(data["level_field"]),
+                stime=str(data["stime"]),
+                etime=str(data["etime"]),
+                has_rank_prizes=bool(data["has_rank_prizes"]),
+                has_allow_types=bool(data["has_allow_types"]),
+                has_surprise=bool(data["has_surprise"]),
+                has_jump_switch=bool(data["has_jump_switch"]),
+                env_pair_count=int(data["env_pair_count"]),
+                volume=str(data["volume"]),
+                year=str(data["year"]),
+                vol_ref=str(data["vol_ref"]),
+                year_ref=str(data["year_ref"]),
+                levels=tuple(data["levels"]),
+                prizes=tuple(data["prizes"]),
+                backend_registered=backend_registered,
+                backend_config_file=backend_config_file,
+                source_refs=tuple(data["source_refs"]),
+            )
+            existing_index = activity_index.get(activity_id)
+            if existing_index is not None:
+                # 后台优先级更高的配置替换先前记录：例如 Logic boot 配置先
+                # 被扫描到时，随后出现的 crontab 配置才是后台真正读取的版本。
+                records[existing_index] = record
+            else:
+                activity_index[activity_id] = len(records)
+                records.append(record)
+            activity_priority[activity_id] = priority
             if len(records) >= max_activities:
                 return tuple(records)
     return tuple(records)

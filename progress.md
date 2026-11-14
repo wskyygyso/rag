@@ -32,12 +32,12 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 | 项目 | 状态 |
 |---|---|
-| 当前阶段 | 阶段 39：项目活动知识库与实体链接 |
-| 总体进度 | 99%（阶段 0 至 39 已完成；生产 embedding 吞吐待补齐） |
+| 当前阶段 | 阶段 40：扩展活动知识库结构化事实 |
+| 总体进度 | 99%（阶段 0 至 40 已完成；生产 embedding 吞吐待补齐） |
 | 最近更新 | 2026-11-15 |
 | 当前负责人 | Codex |
 | 当前阻塞 | 生产 embedding 吞吐仍需更高配额；`鉴定大师` 在 waky3 无中文数据别名，B3 按缺口返回 |
-| 下一步 | 用户审阅阶段 39 工作区改动，确认后使用中文 commit 提交 |
+| 下一步 | 用户审阅阶段 40 工作区改动，确认后使用中文 commit 提交 |
 
 ## 阶段进度
 
@@ -83,10 +83,79 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 | 37 | 配置问答长尾修复与活动目录别名定位 | 已完成（含真实 E2E） | 100% |
 | 38 | VIP 升级门槛可答、结论可读化与证据缺口门控 | 已完成（含真实 E2E） | 100% |
 | 39 | 项目活动知识库与实体链接 | 已完成（含真实 E2E） | 100% |
+| 40 | 扩展活动知识库结构化事实 | 已完成（含真实 E2E） | 100% |
 
 ---
 
 ## 阶段性提交记录
+
+### 2026-11-15：阶段 40 扩展活动知识库结构化事实
+
+#### 本次推进
+
+- `app/domain/diagnosis/activity_kb.py`：
+  - 新增 `ActivityLevel`、`ActivityPrize`；`ActivityRecord` 增加 `volume/year`、
+    `vol_ref/year_ref`、`levels/prizes`、`backend_registered/backend_config_file`；
+  - `_parse_level_items` 按最外层 `levels`/`level` 数组逐条解析序号、门槛、名称和
+    奖励引用，支持 `limit/score/value`、`getByTestMode(测试, 正式)`、`[110,120]`
+    与 `[['id' => 10]]` 两种奖励引用；
+  - `_parse_prizes` 只解析顶层 `prizes` 定义表，保存奖励 id、名称、类型、数量和
+    天数及行号；
+  - 新增 `_strip_php_comments`，结构化解析跳过注释掉的旧期次、旧奖励，避免把
+    注释示例当成当前配置；
+  - `_literal_with_line` 提取 `vol/year` 并记录行号，注释中的同名键被跳过；
+  - 活动构建新增 `Logic/<name>/boot/config.php` 覆盖，按
+    `crontab > Logic > action_activity > config > conf` 同名去重，并依据后台真实
+    路径规则计算 `backend_registered`。
+- `app/diagnosis_workflow.py`：`activity_link_payload` 新增期次、年份、等级表、
+  奖励表、后台登记与对应审计引用；歧义链接仍保留字段但业务层不得使用。
+- 新增 `app/domain/diagnosis/analyzers/activity_kb_facts.py`：
+  - `activity_structured_facts`：期次与后台登记事实；
+  - `activity_level_table_facts`：逐级输出名称、门槛、奖励名称，奖励 id 通过
+    `prizes` 快照解析，无名奖励不展示内部 id；
+  - 支持“第 N 档/级/等级/阶段”和“等级 N/档位 N”序号过滤，越界时返回空事实。
+- `app/business_analysis.py`：
+  - 期次/后台登记事实形成 `活动结构化事实` 分支；
+  - 配置枚举解析为空时用知识库等级表兜底，门槛缺口门控改为知识库事实存在时
+    不缺口，现有枚举通过路径保持不变；
+  - 新增“活动结构化事实”结论拼接与配置类不确定性说明。
+- `tests/test_activity_kb.py`：新增期次/年份、等级表与奖励引用、后台事实、
+  crontab 优先去重、Logic boot 覆盖、全局配置未登记、缺失数据降级、越界等级
+  序号 8 项测试。
+- `tests/diagnosis-acceptance-round2.md`：D1 期望值同步为当前
+  `magicAlchemyHouse/config.php` 的 `stime/etime` 代码字面值（文件头注释仍为旧
+  日期），并补充“以代码字面值为准”的说明。
+
+#### 本次验证
+
+- `.venv/bin/python -m pytest -q`：`401 passed`；
+- `python3 scripts/check_comment_coverage.py`：通过；
+- `node scripts/check_frontend_syntax.js`：通过；
+- `git diff --check`：通过；
+- 真实 waky3 抽样（只读构建，不启服务）：
+  - `loveBall`：`vol=3`、`year=2023`、5 条等级（100000..3000000）、8 条奖励定义，
+    奖励名可解析为 `bubble box*5 days` 等；
+  - `gemMaster`：`vol=4`、`year=2022`、4 条等级（80000/200000/1000000/3000000）
+    且中文名称为业余/通晓/资深人士/鉴宝专家；
+  - `noble`：12 条 `level`、门槛渲染为“测试 X / 正式 Y”、无奖励定义、
+    `backend_registered=False`；
+  - 全仓 `backend_registered=True` 71 个活动，活动 id 无重复。
+- 重建并重启 `rag-api`、`rag-worker` 后重跑 24 题验收：`23/24`；
+  - 唯一失败 B3（`鉴定大师` 无中文数据别名）按缺口返回；
+  - E2“VIP 等级 99”修正为缺口，不再回退整张等级表；
+  - C2、D1 均通过；D1 采用当前配置字面值。
+
+#### 当前状态与缺口
+
+- 阶段 40 完成；知识库已能直接回答期次、后台登记，并在配置图无法枚举时兜底
+  等级表名称/门槛/奖励引用。
+- 唯一已知验收缺口仍是 B3：waky3 仓库没有“鉴定大师”中文文案，本轮继续按缺口
+  返回，不引入硬编码或猜测映射。
+
+#### 下一步
+
+- 等待用户审阅工作区改动；确认后使用中文 commit 提交。
+- B3 后续仍可选择“反馈别名表”或 LLM 实体链接方案，需要用户先确认。
 
 ### 2026-11-15：阶段 39 项目活动知识库与实体链接
 

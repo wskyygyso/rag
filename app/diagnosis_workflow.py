@@ -2914,6 +2914,33 @@ async def execute_diagnosis(task_id: str) -> None:
                     "ambiguous": linked.ambiguous,
                     "level_key": linked.record.level_key,
                     "level_field": linked.record.level_field,
+                    # 结构化事实快照：期次、等级表、奖励定义和后台登记。只把
+                    # 源码中已解析出的字段传给业务层，未解析字段保持空值，由
+                    # 事实函数按缺口降级，不在工作流里补猜。
+                    "volume": linked.record.volume,
+                    "year": linked.record.year,
+                    "vol_ref": linked.record.vol_ref,
+                    "year_ref": linked.record.year_ref,
+                    "levels": [
+                        {
+                            "ordinal": level.ordinal,
+                            "threshold": level.threshold,
+                            "name": level.name,
+                            "prize_ids": list(level.prize_ids),
+                            "ref": level.source_ref,
+                        }
+                        for level in linked.record.levels
+                    ],
+                    "prizes": [
+                        {
+                            "id": prize.prize_id,
+                            "name": prize.name,
+                            "ref": prize.source_ref,
+                        }
+                        for prize in linked.record.prizes
+                    ],
+                    "backend_registered": linked.record.backend_registered,
+                    "backend_config_file": linked.record.backend_config_file,
                     "related_files": related_files,
                 }
                 if not linked.ambiguous:

@@ -18,6 +18,10 @@ from app.domain.diagnosis.analyzers.configuration import (
     execution_source_facts,
 )
 from app.domain.diagnosis.analyzers.activity import _analyze_spaceship_fragments
+from app.domain.diagnosis.analyzers.activity_kb_facts import (
+    activity_level_table_facts,
+    activity_structured_facts,
+)
 from app.domain.diagnosis.analyzers.display import _analyze_frontend_diamond_display
 from app.domain.diagnosis.analyzers.exchange import _analyze_diamond_exchange
 from app.domain.diagnosis.analyzers.explicit import (
@@ -145,6 +149,9 @@ def build_deterministic_findings(
     linked_activity_resolved = bool(activity_link.get("activity_id")) and not activity_link.get(
         "ambiguous"
     )
+    # 期次与后台登记直接来自知识库结构化快照：只有链接成功且问题命对应意图时
+    # 才生成事实，未链接问题继续走原有分析器，避免跨活动抢答。
+    structured_facts = activity_structured_facts(activity_link, question)
     if history_facts:
         facts = history_facts
         topic = "功能版本历史"
@@ -163,6 +170,12 @@ def build_deterministic_findings(
             ],
             "gap": True,
         }
+    elif structured_facts:
+        # 期次/后台登记事实来自知识库解析出的配置字面值，不需要再套用通用
+        # 段落；结论在下方分支直接拼接事实语句。
+        facts = structured_facts
+        topic = "活动结构化事实"
+        explicit_topic = True
     elif (
         decision_facts := activity_decision_source_facts(
             lines,
@@ -283,6 +296,16 @@ def build_deterministic_findings(
                 evidence_text = " ".join(line.content for line in lines)
                 if name_candidate[:4] not in evidence_text:
                     enumeration_facts = []
+        # 配置图解析不到逐级等级表时，用知识库已解析的等级结构兜底。兜底只
+        # 在已链接活动且问题确实询问等级/门槛时启用，现有枚举通过路径不变。
+        level_table_facts = (
+            activity_level_table_facts(activity_link, question)
+            if config_question
+            and level_intent
+            and not enumeration_facts
+            and linked_activity_resolved
+            else []
+        )
         # 用户明确追问“每个等级/档位的门槛”却没有解析出逐级配置时，继续回退
         # 到任意配置字面量会把其他活动的数值当成答案。这里直接报告证据缺口，
         # 并标记 `gap` 让上层跳过 AI 补充，避免模型继续输出无关活动。
@@ -293,7 +316,12 @@ def build_deterministic_findings(
             or asks_member_count(question)
             or level_intent
         )
-        if enumeration_attempted and threshold_intent and not enumeration_facts:
+        if (
+            enumeration_attempted
+            and threshold_intent
+            and not enumeration_facts
+            and not level_table_facts
+        ):
             return {
                 "conclusion": "",
                 "facts": [],
@@ -368,6 +396,12 @@ def build_deterministic_findings(
         if enumeration_facts:
             facts = enumeration_facts
             topic = "配置枚举"
+            explicit_topic = True
+        elif level_table_facts:
+            # 知识库等级表兜底：等级名称、门槛和奖励名称均来自链接活动配置，
+            # 结论与枚举事实共用同一拼接分支。
+            facts = level_table_facts
+            topic = "活动结构化事实"
             explicit_topic = True
         elif execution_facts:
             facts = execution_facts
@@ -447,7 +481,7 @@ def build_deterministic_findings(
     if len(facts) < 6:
         uncertainties.append("部分业务分支未在本次检索证据中完整出现，建议沿已引用文件继续核对。")
     if explicit_topic:
-        if topic in {"活动配置值", "配置枚举", "环境配置值"}:
+        if topic in {"活动配置值", "配置枚举", "环境配置值", "活动结构化事实"}:
             uncertainties.append(
                 "上述事实来自问题指定的活动配置及其当前证据窗口；数据库覆盖值、"
                 "运行环境切换和未进入证据窗口的配置分支仍需继续核对。"
@@ -469,6 +503,18 @@ def build_deterministic_findings(
         # 通用配置图已按等级/档位逐条解析，直接拼接已验证的配置行，不推断
         # 证据之外的奖励名称或业务标签。
         conclusion = configuration_enumeration_conclusion(facts)
+    elif topic == "活动结构化事实":
+        # 期次、后台登记和等级表兜底事实都已包含可读语句与源码引用；这里只
+        # 去重拼接，不再按事实类别做业务推断。
+        conclusion = "；".join(
+            dict.fromkeys(
+                str(item.get("statement") or "").strip()
+                for item in facts
+                if str(item.get("statement") or "").strip()
+            )
+        )
+        if conclusion and not conclusion.endswith("。"):
+            conclusion += "。"
     elif topic == "等级判定入口":
         # 知识库已把问题链接到活动，并定位到读取该活动等级配置的类和方法；
         # 这里直接复用事实中的可读语句，不额外推断调用顺序。
