@@ -127,91 +127,6 @@ _UNSAFE_LABEL_FRAGMENTS = (
     ".webp",
     "@",
 )
-# VIP/贵族配置按等级重复出现 `N => getByTestMode(测试配置, 正式配置)`。
-# 枚举类问题需要读取每个等级的第一段（测试环境）配置，而不是只挑一个数值。
-_LEVEL_BLOCK_PATTERN = re.compile(r"(?m)^\s*(\d+)\s*=>\s*getByTestMode\(")
-_TEST_BRANCH_MARKER = "//正式配置"
-_PRIZE_ITEM_PATTERN = re.compile(
-    r"'type'\s*=>\s*(?P<type>[A-Za-z0-9_\\:]+)\s*,\s*"
-    r"'gid'\s*=>\s*(?P<gid>\d+)\s*,\s*"
-    r"'days'\s*=>\s*(?P<days>\d+)\s*,\s*"
-    r"'num'\s*=>\s*(?P<num>\d+)",
-    re.S,
-)
-_PRIZE_TYPE_LABELS = {
-    "prize_type_noble_card": "贵族卡",
-    "prize_type_prop": "道具",
-    "prize_type_noble_exp_card": "贵族体验卡",
-}
-
-
-def _analyze_vip_prize_levels(lines: Sequence[EvidenceLine]) -> List[Dict[str, Any]]:
-    """枚举 VIP/贵族等级在测试环境附赠的奖品清单。
-
-    参数:
-        - `lines`：已展开的源码证据行，类型为 `Sequence[EvidenceLine]`。调用方
-          需要在枚举类问题中提供完整配置文件窗口，否则只能看到部分等级。
-
-    Returns:
-        每个等级一条事实，`category` 标明等级，`statement` 列出测试分支的奖品
-        类型、数量和有效天数。没有等级块或测试分支为空时返回空列表，由上层
-        报告证据缺口，不能用正式环境配置冒充测试环境。
-    """
-    by_file: Dict[str, List[EvidenceLine]] = {}
-    for item in lines:
-        by_file.setdefault(item.file, []).append(item)
-    best_file = ""
-    best_text = ""
-    best_count = 0
-    for file_name, file_lines in by_file.items():
-        text = "\n".join(
-            item.content for item in sorted(file_lines, key=lambda row: row.line)
-        )
-        if "getByTestMode(" not in text or "'prize'" not in text:
-            continue
-        count = len(_LEVEL_BLOCK_PATTERN.findall(text))
-        if count > best_count:
-            best_file, best_text, best_count = file_name, text, count
-    if not best_file:
-        return []
-
-    facts: List[Dict[str, Any]] = []
-    matches = list(_LEVEL_BLOCK_PATTERN.finditer(best_text))
-    for index, match in enumerate(matches):
-        level = int(match.group(1))
-        block_end = (
-            matches[index + 1].start() if index + 1 < len(matches) else len(best_text)
-        )
-        block = best_text[match.end():block_end]
-        test_branch = block.split(_TEST_BRANCH_MARKER, 1)[0]
-        items = list(_PRIZE_ITEM_PATTERN.finditer(test_branch))
-        if not items:
-            continue
-        parts = []
-        for prize in items:
-            raw_type = prize.group("type").split("::")[-1].casefold()
-            label = _PRIZE_TYPE_LABELS.get(raw_type, prize.group("type"))
-            parts.append(
-                f"{label} x{int(prize.group('num'))}（gid={int(prize.group('gid'))}，"
-                f"{int(prize.group('days'))} 天）"
-            )
-        statement = f"等级 {level}：" + "；".join(parts)
-        line_number = next(
-            (
-                item.line
-                for item in by_file[best_file]
-                if re.match(rf"^\s*{level}\s*=>\s*getByTestMode\(", item.content)
-            ),
-            1,
-        )
-        facts.append(
-            {
-                "category": f"VIP{level}级附赠奖品",
-                "statement": statement,
-                "evidence_refs": [f"{best_file}:{line_number}"],
-            }
-        )
-    return facts
 
 # 只过滤问题中常见的协议、环境和语言缩写。活动标识、类名、配置键不在此处
 # 固定，因此未知活动仍可由问题与真实路径的字符匹配进入配置解析。
@@ -306,17 +221,6 @@ def _scope_identifier(question: str, lines: Sequence[EvidenceLine]) -> str:
         if any(char.isupper() for char in token[1:]):
             specificity += 18
         ranked.append((specificity, folded))
-    # 中文版本词无法通过英文标识匹配，但“新版”稳定对应目录后缀 `new`。
-    # 只有目录段以词根结尾时才参与，避免把 `news`、`renew` 误当成活动版本。
-    for phrase, hint in _CHINESE_DIRECTORY_HINTS.items():
-        if phrase not in question:
-            continue
-        for segment, paths in directory_segments.items():
-            if not segment.endswith(hint):
-                continue
-            if len(file_paths) > 1 and len(set(paths)) == len(file_paths):
-                continue
-            ranked.append((len(segment) * 3 + len(set(paths)) + 12, segment))
     ranked.sort(key=lambda item: (-item[0], item[1]))
     return ranked[0][1] if ranked else ""
 
@@ -370,18 +274,6 @@ def _activity_root(file_name: str) -> str:
     return ""
 
 
-# 中文营销名与英文目录的通用词根提示：只处理“新版/旧版”这类跨活动稳定存在的
-# 版本语义，不保存任何具体活动名到目录的映射。目录段以词根结尾时才参与打分，
-# 避免把 `news`、`renew` 等无关目录误认成新版活动。
-_CHINESE_DIRECTORY_HINTS: Dict[str, str] = {
-    "新版": "new",
-    "旧版": "old",
-}
-# 面向用户的中文展示词：活动标题、pushmsg 文案、关卡名称和同行注释。只保留
-# 连续中文片段，URL、路径、翻译键和密钥天然不含中文，不会被抽取。
-_CHINESE_PHRASE_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,40}")
-
-
 def _config_file_root(file_name: str) -> str:
     """为没有活动目录的传统配置文件生成稳定分组标识。
 
@@ -424,106 +316,6 @@ def _is_config_definition_file(file_name: str) -> bool:
         (("/config/" in folded) or ("/conf/" in folded))
         and folded.endswith(".php")
     )
-
-
-def _activity_display_terms(
-    lines: Sequence[EvidenceLine],
-) -> Dict[str, Tuple[str, ...]]:
-    """从证据行中抽取每个活动目录的中文展示词。
-
-    参数:
-        - `lines`：当前诊断证据展开后的源码行，类型为 `Sequence[EvidenceLine]`；
-          需要包含活动 `config.php` 的完整窗口，才能覆盖 pushmsg、关卡名和注释。
-
-    Returns:
-        活动根（`crontab/<活动>`、`logic/<活动>` 等，小写）到中文片段元组的映射。
-        片段来自标题、推送文案、`name.zh` 和注释，长度 2 至 40 个汉字；单个活动
-        最多保留 240 个片段，避免异常配置放大评分成本。该结果只用于活动目录
-        选择，不会写入诊断结论。
-    """
-    by_root: Dict[str, set] = {}
-    for item in lines:
-        root = _activity_root(item.file.replace("\\", "/"))
-        if not root:
-            continue
-        terms = by_root.setdefault(root, set())
-        if len(terms) >= 240:
-            continue
-        for match in _CHINESE_PHRASE_PATTERN.finditer(item.content or ""):
-            value = match.group(0).strip()
-            if 2 <= len(value) <= 40:
-                terms.add(value)
-    return {root: tuple(sorted(terms)) for root, terms in by_root.items()}
-
-
-def _activity_alias_score(question: str, root_lines: Sequence[EvidenceLine]) -> int:
-    """计算问题中文片段与活动展示词、目录名的重合度。
-
-    参数:
-        - `question`：用户原始业务问题，类型为 `str`；其中的营销名、版本词和
-          业务动作用于判断活动归属。
-        - `root_lines`：同一活动根下的证据行，类型为 `Sequence[EvidenceLine]`；
-          应尽量包含完整配置窗口，否则展示词可能缺失。
-
-    Returns:
-        非负分值。问题中文双向片段（2 至 6 字）命中展示词时按长度加权，四字
-        以上片段权重更高；目录名命中“新版/旧版”词根时额外加分。该分值只参与
-        活动目录排序，不参与结论生成，也不构成活动名硬编码映射。
-    """
-    display_terms = _activity_display_terms(root_lines)
-    # 同一活动可能同时以 crontab/logic/action_activity 出现，合并所有根的展示词。
-    terms = sorted({term for values in display_terms.values() for term in values})
-    # 上下文只由活动自身的展示词、目录名和源码内容组成，不能把问题本身拼进来，
-    # 否则任何问题片段都会“命中”并让所有活动得到相同分值。传统全局配置
-    # （`php/config/noble.php`）没有活动目录，展示词为空，但源码内容仍可用于
-    # 匹配英文业务词和中文注释。
-    context = " ".join(
-        [*terms, *display_terms.keys(), *[item.content or "" for item in root_lines]]
-    ).casefold()
-    if not context:
-        return 0
-    anchors = [
-        value
-        for value in extract_generic_anchors(question, max_anchors=32)
-        if 2 <= len(value) <= 8
-    ]
-    # 补充 2 至 6 字连续片段，覆盖“游戏榜”“公会寻宝”这类四字营销名，也覆盖
-    # 检索锚点切分后遗漏的短业务词。
-    grams = set()
-    for anchor in anchors:
-        if len(anchor) < 2:
-            continue
-        for start in range(len(anchor)):
-            for size in range(2, min(6, len(anchor) - start) + 1):
-                grams.add(anchor[start:start + size])
-    score = 0
-    matched: List[str] = []
-    for value in sorted(grams, key=len, reverse=True):
-        if value in matched:
-            continue
-        # 只在展示词/目录上下文中匹配，避免用问题自身回环得分。
-        if value not in context:
-            continue
-        if any(value in existing for existing in matched):
-            continue
-        matched.append(value)
-        score += len(value) * (4 if len(value) >= 4 else 1)
-    # 问题直接写出英文业务词（`VIP`、`year`）时，也参与活动内容匹配：
-    # 全局配置 `noble.php` 的注释和图片字段含 `noble_vip`，可据此区分
-    # “VIP 升级”与同时检索到的 Ramadan 等活动配置。
-    for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", question or ""):
-        folded = identifier.casefold()
-        if folded in _GENERIC_SCOPE_IDENTIFIERS:
-            continue
-        if folded in context:
-            score += min(len(folded), 8) * 2
-    for phrase, hint in _CHINESE_DIRECTORY_HINTS.items():
-        if phrase not in question:
-            continue
-        root_names = " ".join(display_terms.keys())
-        if hint and re.search(rf"/[^/]+{hint}$", root_names):
-            score += 12
-    return score
 
 
 _CLASS_SUFFIX_PATTERN = re.compile(
@@ -717,10 +509,6 @@ def _dominant_activity_lines(
             value = anchor.casefold()
             if value and value in context:
                 score += len(value) * (3 if len(value) >= 4 else 1)
-        # 中文营销名在配置里往往只出现在 pushmsg/关卡名/注释中，英文目录名与
-        # 问题没有直接重合。展示词评分把这些真实文案带回选择依据，避免行数更多
-        # 的错误活动抢走配置。
-        score += _activity_alias_score(question, root_lines)
         score += _activity_structure_score(question, root_lines)
         context_concepts = {
             concept.name for concept in detect_semantic_concepts(context)
@@ -827,14 +615,6 @@ def scoped_config_evidence(
         }
         if concepts.intersection(root_segments):
             score += 40
-        # `VIP` 是业务侧对贵族体系的常用叫法，配置目录使用 `noble`。
-        # 这里只按领域同义词加分，帮助贵族门槛题稳定落在 `config/noble`，
-        # 不改变其他活动的排序。
-        if "vip" in question.casefold() and "noble" in root_segments:
-            score += 25
-        # 展示词评分与锚点评分同一口径：只使用活动自身的中文文案和目录语义，
-        # 让“公会寻宝”“游戏榜”这类营销名在多活动并列时仍能落到真实目录。
-        score += _activity_alias_score(question, root_lines)
         structure_score = _activity_structure_score(question, root_lines)
         score += structure_score
         has_config = any(

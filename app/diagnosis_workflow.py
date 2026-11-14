@@ -307,7 +307,6 @@ def _full_config_window_files(
             and item.get("type")
             in {
                 "concept_config",
-                "activity_alias_config",
                 "sibling_config",
                 "config_definition",
             }
@@ -612,175 +611,6 @@ def _activity_service_evidence(
                         "project": project,
                         "type": "activity_service",
                         "query": "活动入口实现",
-                        "file": relative,
-                        "line": 1,
-                        "line_start": 1,
-                        "line_end": 1,
-                        "content": "<?php",
-                    }
-                )
-                if len(additions) >= limit:
-                    return additions
-    return additions
-
-
-_GENERIC_ACTIVITY_WORDS = {
-    "type", "types", "service", "services", "model", "models", "helper",
-    "helpers", "request", "requests", "command", "commands", "logic", "boot",
-    "controller", "control", "config", "conf", "manager", "handler", "index",
-    "data", "base", "common", "export", "list",
-}
-
-
-def _activity_alias_config_evidence(
-    root: str,
-    project: str,
-    question: str,
-    evidence: list[dict],
-    *,
-    limit: int = 3,
-) -> list[dict]:
-    """根据中文锚点与英文标识的共现补回活动配置证据。
-
-    参数:
-        - `root`：仓库根目录，类型为 `str`。
-        - `project`：项目标识，类型为 `str`。
-        - `question`：用户原始业务问题，类型为 `str`；其中三字以上中文片段
-          用于在同一源码行内寻找英文业务标识。
-        - `evidence`：当前证据项，类型为 `list[dict]`；后台页面、排行模型等
-          文件常同时含“游戏榜”和 `GAME_RANK_TYPE`。
-        - `limit`：最多补回的活动配置数量，类型为 `int`。
-
-    Returns:
-        `config.php` 占位证据。中文营销名与英文常量/类名在同一行共现时，
-        把英文词拆成目录词根（`GAME_RANK_TYPE` → `game/rank`），再去匹配
-        `gameRanking` 这类驼峰活动目录。只使用真实源码中出现的词，不保存
-        活动名映射，也不输出任何字符串值。
-    """
-    anchors = [
-        value
-        for value in extract_generic_anchors(question, max_anchors=24)
-        if len(value) >= 3
-    ]
-    if not anchors:
-        return []
-    # 锚点切分可能带量词/词尾（`游戏榜第`），而源码写“游戏榜单”。用锚点的
-    # 三字连续片段做匹配即可同时覆盖完整活动名和常见词尾差异。
-    anchor_fragments = {
-        anchor[start:start + 3]
-        for anchor in anchors
-        for start in range(len(anchor) - 2)
-    }
-    tokens: set[str] = set()
-    read_budget = 0
-    for item in evidence:
-        file_name = str(item.get("file") or "").replace("\\", "/")
-        content = str(item.get("content") or "")
-        has_anchor = any(fragment in content for fragment in anchor_fragments)
-        if not has_anchor and file_name.endswith(".php") and read_budget < 8:
-            # 证据项通常只保存命中行，中文活动名和英文常量可能相隔几十行。
-            # 在命中行附近读取一个小窗口，再做同文件共现；限制读取文件数量，
-            # 避免把配置推导变成全仓扫描。
-            read_budget += 1
-            try:
-                line = int(item.get("line") or 1)
-                window = read_file(
-                    root,
-                    project,
-                    file_name,
-                    max(1, line - 120),
-                    min(line + 120, line + 240),
-                )
-                content = str(window.get("content") or "")
-            except (CodeToolError, ValueError, OSError):
-                content = ""
-            has_anchor = any(fragment in content for fragment in anchor_fragments)
-        if not has_anchor:
-            continue
-        for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", content):
-            # 同时拆 CamelCase 和下划线：`GAME_RANK_TYPE`、`RankPrizeConf`
-            # 都能得到可用于目录比较的独立词根。
-            words = re.findall(
-                r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+",
-                identifier,
-            )
-            for word in words:
-                folded = word.casefold()
-                if len(folded) >= 3 and folded not in _GENERIC_ACTIVITY_WORDS:
-                    tokens.add(folded)
-    if len(tokens) < 2:
-        return []
-
-    def directory_words(name: str) -> set[str]:
-        """把驼峰活动目录拆成小写单词集合。
-
-        参数:
-            - `name`：活动目录名，类型为 `str`。
-
-        Returns:
-            由 CamelCase 或下划线分隔出的单词集合；用于与共现英文词根比较。
-        """
-        return {
-            value.casefold()
-            for value in re.findall(
-                r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+",
-                name,
-            )
-            if len(value) >= 3
-        }
-
-    def token_matches(token: str, words: set[str]) -> bool:
-        """判断共现词根与目录单词是否互为前缀。
-
-        参数:
-            - `token`：源码标识拆分出的词根，类型为 `str`。
-            - `words`：活动目录单词集合，类型为 `set[str]`。
-
-        Returns:
-            存在长度至少四个字符的互相前缀关系时返回 `True`，例如
-            `rank` 与 `ranking`；过短的同名不参与匹配。
-        """
-        return any(
-            len(token) >= 4
-            and len(word) >= 4
-            and (word.startswith(token) or token.startswith(word))
-            for word in words
-        )
-
-    base = os.path.join(root, project)
-    if not os.path.isdir(base):
-        return []
-    prefixes = [
-        "",
-        *[
-            name
-            for name in os.listdir(base)
-            if os.path.isdir(os.path.join(base, name))
-        ],
-    ]
-    additions: list[dict] = []
-    for prefix in prefixes:
-        for marker in ("Logic", "crontab", "action_activity"):
-            marker_path = os.path.join(base, prefix, marker)
-            if not os.path.isdir(marker_path):
-                continue
-            for activity in sorted(os.listdir(marker_path)):
-                activity_path = os.path.join(marker_path, activity)
-                config_path = os.path.join(activity_path, "config.php")
-                if not os.path.isfile(config_path):
-                    continue
-                words = directory_words(activity)
-                matched = {token for token in tokens if token_matches(token, words)}
-                if len(matched) < 2 or len(matched) < len(words):
-                    continue
-                relative = "/".join(
-                    part for part in (prefix, marker, activity, "config.php") if part
-                )
-                additions.append(
-                    {
-                        "project": project,
-                        "type": "activity_alias_config",
-                        "query": "活动配置",
                         "file": relative,
                         "line": 1,
                         "line_start": 1,
@@ -1660,16 +1490,6 @@ def _select_diagnostic_evidence(
         append(item)
         activity_kb_entry_count += 1
         if activity_kb_entry_count >= 6 or len(selected) >= limit:
-            break
-
-    # 中文锚点与英文常量共现推导出的活动配置同样只有首行占位，需要独立名额。
-    alias_config_count = 0
-    for item in evidence:
-        if item.get("type") != "activity_alias_config":
-            continue
-        append(item)
-        alias_config_count += 1
-        if alias_config_count >= 3 or len(selected) >= limit:
             break
 
     # 同目录补入的活动配置占位证据必须独立保留：它们本身只有一个 `<?php`
@@ -3043,17 +2863,7 @@ async def execute_diagnosis(task_id: str) -> None:
             except (CodeToolError, ValueError) as exc:
                 warnings.append(f"调用链证据补全降级: {exc}")
         # 最后一轮补充在所有检索通道和调用链之后执行：后台排行页、模型文件
-        # 往往由后置检索/调用链带入，只有此时才能从“游戏榜 + GAME_RANK_TYPE”
-        # 推导 activity 目录，或从同活动服务读取期数与结算实现。
-        evidence.extend(
-            _activity_alias_config_evidence(
-                settings.code_repositories_root,
-                current["project"],
-                current["question"],
-                evidence,
-                limit=3,
-            )
-        )
+        # 往往由后置检索/调用链带入，此时才能从同活动服务读取期数与结算实现。
         evidence.extend(
             _sibling_config_evidence(
                 settings.code_repositories_root,

@@ -5,7 +5,7 @@
 """
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from app.domain.diagnosis.analyzers.common import (
     EvidenceLine,
@@ -70,6 +70,44 @@ def _unresolved_activity_name(
     return match.group(1) if match else ""
 
 
+def _scope_lines_to_linked_activity(
+    lines: List[EvidenceLine],
+    activity_link: Dict[str, Any],
+) -> List[EvidenceLine]:
+    """把证据行收敛到知识库链接到的活动。
+
+    参数:
+        - `lines`：当前诊断证据展开后的源码行，类型为 `List[EvidenceLine]`；
+          可能同时包含多个活动的配置和实现文件。
+        - `activity_link`：工作流写入的实体链接摘要，类型为 `Dict[str, Any]`；
+          提供 `activity_id`、`config_file`、`related_files` 和 `ambiguous`。
+
+    Returns:
+        只属于链接活动的配置与相关实现文件证据行。未链接、链接歧义或过滤后
+        为空时原样返回，保证普通代码问题和其他分析器不受影响。该过滤让链接
+        结果成为配置取值的唯一活动边界，不再依赖中文别名打分。
+    """
+    if not activity_link.get("activity_id") or activity_link.get("ambiguous"):
+        return lines
+    config_file = str(activity_link.get("config_file") or "").replace(
+        "\\", "/"
+    ).casefold()
+    related = {
+        str(path or "").replace("\\", "/").casefold()
+        for path in (activity_link.get("related_files") or [])
+    }
+    related.add(config_file)
+    related.discard("")
+    if not related:
+        return lines
+    scoped = [
+        item
+        for item in lines
+        if item.file.replace("\\", "/").casefold() in related
+    ]
+    return scoped or lines
+
+
 def build_deterministic_findings(
     question: str,
     result: Dict[str, Any],
@@ -95,12 +133,18 @@ def build_deterministic_findings(
     question_concepts = {
         concept.name for concept in detect_semantic_concepts(question)
     }
+    activity_link = retrieval_plan.get("activity_link") or {}
+    # 知识库链接成功后，后续配置枚举、取值和判定入口只读取该活动的配置与
+    # 相关实现文件；未链接的问题保持原证据窗口不变。
+    lines = _scope_lines_to_linked_activity(lines, activity_link)
     history_facts = analyze_history_events(lines, history_events)
     # 显式类名只在通用分支填充；知识库链接或缺口分支提前返回时也要保证
     # 后续报告组装能安全读取该变量。
     explicit_classes: list[str] = []
-    activity_link = retrieval_plan.get("activity_link") or {}
     unresolved_activity = _unresolved_activity_name(question, activity_link)
+    linked_activity_resolved = bool(activity_link.get("activity_id")) and not activity_link.get(
+        "ambiguous"
+    )
     if history_facts:
         facts = history_facts
         topic = "功能版本历史"
@@ -134,7 +178,7 @@ def build_deterministic_findings(
     elif (
         retrieval_support.get("grounded") is False
         or retrieval_plan.get("retrieval_mode") == "insufficient_support"
-    ):
+    ) and not linked_activity_resolved:
         return {
             "conclusion": "",
             "facts": [],
@@ -183,23 +227,10 @@ def build_deterministic_findings(
                 )
             )
         )
-        # VIP/贵族奖品分析器会把手里的 `PrizeModel` 常量翻译成“贵族卡 x1”
-        # 这类业务名称，比通用配置枚举只输出常量名更可读。问题明确问“奖品/
-        # 奖励”且没有问门槛时，优先使用该分析器；门槛问题继续走配置枚举。
-        reward_intent = any(
-            token in question for token in ("奖品", "奖励", "附赠")
-        )
+        # 门槛问题需要逐级枚举给出完整等级表；阈值问法与其他配置取值共用。
         threshold_intent = any(
             token in question
             for token in ("门槛", "阈值", "所需积分", "要求积分")
-        )
-        preferred_analyzer_facts = (
-            analyzer.analyze(lines)
-            if analyzer is not None
-            and analyzer.analyzer_id == "vip_prize_levels"
-            and reward_intent
-            and not threshold_intent
-            else []
         )
         # “四个等级门槛及头衔奖励”这类问题在问法上不一定被分类成枚举，但
         # 明确点了等级/阶段，逐级配置图能同时给出名称、门槛和奖励，比只取
@@ -215,7 +246,6 @@ def build_deterministic_findings(
                 expanded_scope_terms,
             )
             if config_question
-            and not preferred_analyzer_facts
             and (
                 question_type == QuestionType.CONFIG_ENUMERATION
                 or asks_member_count(question)
@@ -335,11 +365,7 @@ def build_deterministic_findings(
             and not execution_facts
             else []
         )
-        if preferred_analyzer_facts:
-            facts = preferred_analyzer_facts
-            topic = "VIP等级附赠奖品"
-            explicit_topic = True
-        elif enumeration_facts:
+        if enumeration_facts:
             facts = enumeration_facts
             topic = "配置枚举"
             explicit_topic = True

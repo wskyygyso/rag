@@ -15,7 +15,6 @@ from app.domain.diagnosis.analyzers.common import EvidenceLine
 from app.diagnosis_workflow import _full_config_window_files
 from app.domain.diagnosis.analyzers.configuration import (
     _configuration_literal_facts,
-    scoped_config_evidence,
 )
 from app.domain.diagnosis.config_graph import (
     configuration_enumeration_facts,
@@ -798,60 +797,6 @@ def test_jump_switch_filters_supported_levels_only() -> None:
     text = " ".join(str(item["statement"]) for item in facts)
     assert "佩特拉古城" in text and "长城" in text and "吴哥窟" in text
     assert "巴比伦空中花园" not in text and "泰姬陵" not in text
-
-
-def test_new_version_hint_selects_new_activity_directory() -> None:
-    """验证“新版”能按目录后缀 `new` 选择活动，而不是旧版配置。"""
-    old_file = "waky3_miyouactivity/crontab/giftWeekStar/config.php"
-    new_file = "waky3_miyouactivity/Logic/giftWeekStarNew/boot/config.php"
-    old_lines = _lines(old_file, ["<?php", "return ['year' => 2022];"])
-    new_lines = _lines(new_file, ["<?php", "return ['year' => 2026];"])
-    facts = _configuration_literal_facts(
-        [*old_lines, *new_lines],
-        "礼物周星新版配置里的 year 是什么？",
-    )
-    text = " ".join(str(item["statement"]) for item in facts)
-    assert "2026" in text
-    assert "2022" not in text
-
-
-def test_activity_display_terms_disambiguate_chinese_marketing_names() -> None:
-    """验证中文营销名只出现在 pushmsg/注释时也能选中正确活动。"""
-    hunt_file = "waky3_miyouactivity/crontab/guildTreasureHunt/config.php"
-    monster_file = "waky3_miyouactivity/crontab/guildVsMonsters/config.php"
-    hunt_lines = _lines(
-        hunt_file,
-        [
-            "<?php",
-            "return [",
-            "    'pushmsg' => ['levels_up_prize' => '【公会夺宝赛】恭喜你到达新的寻宝点'],",
-            "];",
-        ],
-    )
-    monster_lines = _lines(
-        monster_file,
-        [
-            "<?php",
-            "return [",
-            "    'pushmsg' => ['level' => '【公会怪物】挑战失败'],",
-            "];",
-        ],
-    )
-    hunt_boot = _lines(
-        "waky3_miyouactivity/crontab/guildTreasureHunt/guildTreasureHuntBoot.php",
-        ["<?php", "// 公会寻宝入口"],
-    )
-    monster_boot = _lines(
-        "waky3_miyouactivity/crontab/guildVsMonsters/guildVsMonstersBoot.php",
-        ["<?php", "// 公会怪物入口"],
-    )
-    selected = scoped_config_evidence(
-        [*hunt_lines, *hunt_boot, *monster_lines, *monster_boot],
-        "公会寻宝设置了哪几个送礼阶段？",
-        [],
-    )
-    assert selected is not None
-    assert {item.file for item in selected} == {hunt_file, hunt_boot[0].file}
 
 
 def _constant_level_config() -> list[str]:

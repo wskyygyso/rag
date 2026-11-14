@@ -122,9 +122,23 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 - 新增 `tests/test_activity_kb.py` 7 项构造源码测试，覆盖别名来源、中文活动链接、
     歧义放弃、语言包 VIP 别名、时间窗、相关文件边界和判定入口。
 
+#### 业务答案映射清理
+
+- 删除 `query_understanding.py` 中 `vip/贵族 → noble` 的人工概念映射；
+- 删除 `configuration.py` 的 `_activity_alias_score`、`_activity_display_terms`
+  和 `vip → noble` 加分，活动选择改由知识库链接结果决定；
+- 删除 `diagnosis_workflow.py` 的 `_activity_alias_config_evidence`（中文锚点与
+  英文常量共现推导活动目录）及其证据预算；
+- 删除 `vip_prize_levels` 活动专用分析器、注册规则和 `VIP等级附赠奖品` 特殊结论
+  分支，以及对应手工回归测试；
+- 删除 `新版/旧版 → new/old` 目录后缀提示映射及对应测试；
+- 知识库链接成功后，`build_deterministic_findings` 只保留链接活动的配置和相关
+  实现文件，配置枚举/取值/判定入口不再依赖中文别名打分；
+- 未链接活动仍按原证据窗口处理；显式 `X活动` 未链接时继续返回缺口。
+
 #### 本次验证
 
-- `.venv/bin/python -m pytest -q`：`396 passed`；
+- `.venv/bin/python -m pytest -q`：`393 passed`；
 - `python3 scripts/check_comment_coverage.py`：通过；
 - `node scripts/check_frontend_syntax.js`：通过；
 - `git diff --check`：通过；
