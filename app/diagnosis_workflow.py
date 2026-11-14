@@ -54,6 +54,8 @@ from app.repository_history import (
 )
 from app.domain.diagnosis.config_graph import parse_config_graph
 from app.domain.diagnosis.analyzers.common import _evidence_lines
+from app.domain.diagnosis.analyzers.configuration import _activity_root
+from app.question_type import QuestionType, classify_question
 from app.project_index_cache import load_project_symbol_index
 from app.project_knowledge import (
     load_conclusion_candidates,
@@ -98,6 +100,270 @@ _PARENT_CLASS_PATTERN = re.compile(
 )
 
 
+def _chinese_question_substrings(question: str, limit: int = 8) -> list[str]:
+    """生成保留中文虚词的连续片段检索词。
+
+    参数:
+        - `question`：用户原始业务问题，类型为 `str`。
+        - `limit`：最多返回的片段数量，类型为 `int`。
+
+    Returns:
+        含“的/之”等虚词的中文连续片段。通用锚点生成会去掉虚词
+        （`失落的文明` → `失落文明`），而源码 pushmsg 保留完整写法；额外
+        生成原句片段可以找回这类只在展示文案中出现的新活动名。只处理含
+        “的/之”的短语，避免普通问题扩张出大量噪声检索词。
+    """
+    variants: list[str] = []
+    for run in re.findall(r"[\u4e00-\u9fff]{4,}", question or ""):
+        if "的" not in run and "之" not in run:
+            continue
+        # 先取 5 字片段（`失落的文明` 正好 5 字），再取 4/6 字作为兜底。
+        for size in (5, 4, 6):
+            for start in range(0, len(run) - size + 1):
+                value = run[start:start + size]
+                if value not in variants:
+                    variants.append(value)
+                if len(variants) >= limit:
+                    return variants
+    return variants
+
+
+def _needs_full_config_window(question: str) -> bool:
+    """判断配置类问题是否需要完整读取活动配置文件。
+
+    参数:
+        - `question`：用户原始业务问题，类型为 `str`。
+
+    Returns:
+        问题被路由为配置枚举/配置取值，或包含逐项列举词时返回 `True`。配置
+        答案往往分散在同一文件的不同数组（奖池、阶段、奖品表），只读取命中
+        行附近的窗口会漏掉问题真正指向的数组。
+    """
+    concepts = {concept.name for concept in detect_semantic_concepts(question)}
+    question_type = classify_question(question, concepts)
+    if question_type in {
+        QuestionType.CONFIG_ENUMERATION,
+        QuestionType.CONFIG_LOOKUP,
+    }:
+        return True
+    # 问题直接写出 `pool.rate`、`allow_multi_option` 这类配置路径/键名时，
+    # 需要完整读取活动配置才能在对应数组中找到这个键。
+    if re.search(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*", question):
+        return True
+    if re.search(r"`[A-Za-z_][A-Za-z0-9_.:-]+`", question):
+        return True
+    return any(
+        token in question
+        for token in (
+            "每个", "所有", "全部", "列出", "分别", "各等级", "各级",
+            "几级", "几轮", "哪些", "档", "档位", "区间", "阶段", "遗迹",
+            # 奖励/名次问题需要读到同文件的 `rank_prizes`、`prizes` 奖品表；
+            # 只给命中行窗口时，名次表和奖品定义往往都在窗口之外。
+            "奖励", "奖品", "名次", "排名", "金币", "美元", "瓜分",
+        )
+    )
+
+
+def _compact_config_term(value: str) -> str:
+    """把路径片段或代码术语压缩成只含小写字母和数字的字符串。
+
+    参数:
+        - `value`：目录名、文件名或运行时术语，类型为 `str`。
+
+    Returns:
+        去掉分隔符后的紧凑文本，用于比较 `gameRanking` 与
+        `GameRankPrizeService` 这类驼峰/下划线命名差异。
+    """
+    return re.sub(r"[^a-z0-9]", "", (value or "").casefold())
+
+
+def _config_term_matches(activity: str, terms: list[str]) -> bool:
+    """判断配置分组名是否与运行时术语指向同一业务。
+
+    参数:
+        - `activity`：配置分组名（活动目录或配置文件名），类型为 `str`。
+        - `terms`：术语扩展校验后的真实代码词，类型为 `list[str]`。
+
+    Returns:
+        `gameRanking` 与 `GameRankPrizeService` 共享足够长的前缀时返回 `True`。
+        只用于决定是否完整读取配置文件，不直接生成结论；要求前缀至少六个
+        字符且覆盖分组名六成以上，避免把短词误配到无关配置。
+    """
+    compact_activity = _compact_config_term(activity)
+    if len(compact_activity) < 4:
+        return False
+    for term in terms:
+        compact_term = _compact_config_term(str(term or ""))
+        if not compact_term:
+            continue
+        if compact_activity in compact_term:
+            return True
+        prefix = 0
+        for left, right in zip(compact_activity, compact_term):
+            if left != right:
+                break
+            prefix += 1
+        if prefix >= 6 and prefix / len(compact_activity) >= 0.6:
+            return True
+    return False
+
+
+def _full_config_window_files(
+    question: str,
+    evidence: list[dict],
+    terms: Optional[list[str]] = None,
+    selected_files: Optional[set] = None,
+) -> set[str]:
+    """选择需要整文件读取的活动配置文件。
+
+    参数:
+        - `question`：用户原始业务问题，类型为 `str`；其中显式英文活动标识
+          优先用于锁定配置文件。
+        - `evidence`：已经选中的证据项，类型为 `list[dict]`；每项包含 `file`。
+        - `terms`：术语扩展校验后的真实代码词，类型为 `Optional[list[str]]`；
+          用于把 `游戏榜` 这类中文展示词对应的 `GameRankPrizeService` 定位到
+          `gameRanking/config.php`，避免只读到文件头部。
+        - `selected_files`：已进入最终证据预算的配置路径集合，类型为
+          `Optional[set]`（小写归一化）。这些文件已经通过检索相关性筛选，
+          完整窗口选择时优先保留，避免被原始证据中的大量噪声配置挤出名额。
+
+    Returns:
+        最多三个配置文件路径集合。优先选择问题中显式活动标识命中的文件；
+        没有显式标识时，选择证据最集中的活动目录下的 `config.php`，避免把
+        全部配置文件的完整内容都放进证据窗口。
+    """
+    config_files = []
+    for item in evidence:
+        file_name = str(item.get("file") or "").replace("\\", "/")
+        folded = file_name.casefold()
+        # 活动配置统一叫 `config.php`；全局配置（贵族、支付等）位于
+        # `php/config/` 或 `php/conf/`，文件名各不相同。两类文件都需要完整窗口，
+        # 否则等级门槛分散在几十行里时只能读到命中行附近。
+        if folded.endswith("/config.php") or (
+            (("/config/" in folded) or ("/conf/" in folded))
+            and folded.endswith(".php")
+        ):
+            config_files.append(file_name)
+    if not config_files:
+        return set()
+    question_folded = (question or "").casefold()
+    # 用问题锚点的两字片段衡量配置证据与问题的字面重合。完整配置窗口的
+    # 选择不能只看检索相关度，否则带入口文件的无关活动会靠行数挤占名额。
+    anchors = [
+        value
+        for value in extract_generic_anchors(question, max_anchors=32)
+        if len(value) >= 2
+    ]
+    anchor_grams = {
+        anchor[start:start + 2]
+        for anchor in anchors
+        for start in range(len(anchor) - 1)
+    }
+    candidates = []
+    for file_name in dict.fromkeys(config_files):
+        normalized = file_name.replace("\\", "/").casefold()
+        root = _activity_root(normalized)
+        activity = root.split("/")[-1] if root else ""
+        # 问题直接写出的活动英文标识（例如 `giftWeekStarNew`）是最可靠的窗口
+        # 选择依据，优先完整读取该活动配置，避免旧版活动文件抢占证据预算。
+        explicit = 1 if activity and activity in question_folded else 0
+        file_items = [
+            item
+            for item in evidence
+            if str(item.get("file") or "").replace("\\", "/").casefold() == normalized
+        ]
+        try:
+            relevance = max(
+                [float(item.get("score") or 0.0) for item in file_items] or [0.0]
+            )
+        except (TypeError, ValueError):
+            relevance = 0.0
+        # 同目录有入口/服务代码时，说明这个配置更可能是问题真正指向的活动，
+        # 而不是检索噪声带进来的同名配置文件。
+        # 同一活动可能同时出现在 `crontab`、`Logic` 和 `action_activity` 下，
+        # 路径前缀不同但活动名相同。按活动名比较，控制器也能为配置提供佐证。
+        sibling_source = any(
+            _activity_root(
+                str(item.get("file") or "").replace("\\", "/").casefold()
+            ).split("/")[-1]
+            == activity
+            and not str(item.get("file") or "").replace("\\", "/").casefold().endswith(
+                "/config.php"
+            )
+            for item in evidence
+        )
+        # 由概念术语、中文锚点共现或同目录补入直接命中的配置文件，本身就是
+        # 高置信候选；即使同活动入口尚未检索到，也必须完整展开，否则只能看到
+        # 首行 `<?php`，无法回答名次、等级和阶段取值。
+        explicit_config = any(
+            str(item.get("file") or "").replace("\\", "/").casefold() == normalized
+            and item.get("type")
+            in {
+                "concept_config",
+                "activity_alias_config",
+                "sibling_config",
+                "config_definition",
+            }
+            for item in evidence
+        )
+        # 同活动所有证据（配置、入口、服务）的字面内容参与锚点命中统计。
+        related_content = " ".join(
+            str(item.get("content") or "")
+            for item in evidence
+            if _activity_root(
+                str(item.get("file") or "").replace("\\", "/").casefold()
+            ).split("/")[-1]
+            == activity
+        )
+        anchor_score = sum(
+            len(gram) for gram in anchor_grams if gram in related_content
+        )
+        # 传统全局配置没有活动目录，用文件名当作分组名参与术语比较。
+        term_activity = activity or normalized.rsplit("/", 1)[-1].removesuffix(".php")
+        term_hit = 1 if terms and _config_term_matches(term_activity, terms) else 0
+        # 已经进入最终证据预算的文件，说明检索相关性已经确认过；完整窗口
+        # 名额有限时必须排在原始证据里的噪声配置之前。
+        in_selected = 1 if selected_files and normalized in selected_files else 0
+        candidates.append(
+            (
+                explicit,
+                in_selected,
+                term_hit,
+                anchor_score,
+                sibling_source or explicit_config,
+                relevance,
+                len(file_items),
+                normalized,
+            )
+        )
+    candidates.sort(
+        key=lambda row: (
+            -row[0], -row[1], -row[2], -row[3],
+            -row[4], -row[5], -row[6], row[7],
+        )
+    )
+    # 有同活动入口/服务代码佐证、问题术语能定位到该配置、或已进入最终证据
+    # 预算的配置优先完整展开。真实检索会带进多个活动的 `config.php`，若只按
+    # 固定名额截断，正确答案所在活动可能被行数更多的噪声活动挤出；因此先保留
+    # 高置信配置（上限 12），再退回到证据最集中的前三个。
+    qualified = [row for row in candidates if row[4] or row[2] or row[1]]
+    # 名次奖励题的名次表和奖品定义通常位于配置文件中后段。只给 12 个高置信
+    # 名额时，`gameRanking/config.php` 可能因头部窗口过短被挤出；这类问题
+    # 允许把证据中的配置候选放宽到 20 个，确保名次表能被完整读到。
+    rank_focus = (
+        bool(re.search(r"第\s*\d+\s*名|前\s*\d+\s*名|名次|排名", question or ""))
+        and any(
+            token in (question or "")
+            for token in ("奖励", "奖品", "奖金", "金币", "美元")
+        )
+    )
+    if rank_focus:
+        selected = candidates[:20]
+    else:
+        selected = qualified[:12] or candidates[:3]
+    return {row[7] for row in selected}
+
+
 def _explicit_symbol_queries(queries: list[str]) -> list[str]:
     """筛选问题中可用于源码验证的显式类、方法或配置标识。
 
@@ -137,6 +403,389 @@ def _explicit_symbol_queries(queries: list[str]) -> list[str]:
     return list(dict.fromkeys(result))
 
 
+def _sibling_config_evidence(
+    root: str,
+    project: str,
+    evidence: list[dict],
+    *,
+    limit: int = 6,
+) -> list[dict]:
+    """把活动入口文件同目录下的 `config.php` 加入证据。
+
+    参数:
+        - `root`：被诊断仓库白名单根目录，类型为 `str`。
+        - `project`：当前项目标识，类型为 `str`。
+        - `evidence`：已检索到的证据项，类型为 `list[dict]`；每项包含项目内
+          相对文件路径。
+        - `limit`：最多补充的配置文件数量，类型为 `int`。限制避免把大量活动
+          配置塞入证据预算。
+
+    Returns:
+        同目录配置文件的占位证据。活动配置通常放在 `crontab/<活动>/config.php`
+        或 `Logic/<活动>/boot/config.php`，入口/服务文件被检索到时，配置定义
+        往往因为不含问题中文词而缺席；这里按真实目录存在性补回文件位置，取值
+        仍由后续源码读取和配置解析验证。
+    """
+    base = os.path.join(root, project)
+    seen: set[str] = set()
+    additions: list[dict] = []
+    for item in evidence:
+        file_name = str(item.get("file") or "").replace("\\", "/").strip("/")
+        if not file_name:
+            continue
+        parent = file_name.rsplit("/", 1)[0] if "/" in file_name else ""
+        if not parent:
+            continue
+        candidate = f"{parent}/config.php"
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        folded = parent.casefold()
+        # 框架、语言包和测试目录不承载活动配置，补充它们只会扩大证据噪声。
+        if any(
+            part in f"/{folded}/"
+            for part in ("/lib/", "/lang/", "/vendor/", "/tests/", "/phpunit/")
+        ):
+            continue
+        if not os.path.exists(os.path.join(base, *candidate.split("/"))):
+            continue
+        additions.append(
+            {
+                "project": project,
+                "type": "sibling_config",
+                "query": "同目录活动配置",
+                "file": candidate,
+                "line": 1,
+                "line_start": 1,
+                "line_end": 1,
+                "content": "<?php",
+            }
+        )
+        if len(additions) >= limit:
+            break
+    return additions
+
+
+def _activity_service_evidence(
+    root: str,
+    project: str,
+    evidence: list[dict],
+    *,
+    limit: int = 3,
+) -> list[dict]:
+    """为只命中配置的活动补入同活动服务与控制器文件。
+
+    参数:
+        - `root`：被诊断仓库白名单根目录，类型为 `str`。
+        - `project`：当前项目标识，类型为 `str`。
+        - `evidence`：已检索到的证据项，类型为 `list[dict]`；其活动配置、
+          后台页面或控制器路径用于推导真实活动目录名。
+        - `limit`：最多补充的服务文件数量，类型为 `int`；与服务/控制器目录
+          的读取预算保持一致，避免把整个活动模块塞进证据。
+
+    Returns:
+        服务/控制器文件的占位证据列表。活动期配置、结算写入表和幂等判断通常
+        不在 `config.php` 里，而是在同活动的 `service` 或 `controller` 中；这些
+        文件只有首行占位，完整内容仍由后续只读源码读取和事实校验产生。
+    """
+    base = os.path.join(root, project)
+    # 真实仓库根下可能有多个子项目（`waky3_miyouactivity`、`waky3_miyouphp`
+    # 等），活动目录位于子项目的 `Logic`、`crontab`、`action_activity` 下。
+    # 同时检查根目录和一层子项目，避免把子项目层级误当成活动名。
+    prefixes = [""]
+    try:
+        prefixes.extend(
+            name
+            for name in os.listdir(base)
+            if os.path.isdir(os.path.join(base, name))
+        )
+    except OSError:
+        return []
+    marker_roots: list[tuple[str, str, str, dict]] = []
+    for prefix in prefixes:
+        for marker in ("Logic", "crontab", "action_activity"):
+            marker_path = os.path.join(base, prefix, marker)
+            if not os.path.isdir(marker_path):
+                continue
+            marker_roots.append(
+                (
+                    prefix,
+                    marker,
+                    marker_path,
+                    {
+                        name.casefold(): name
+                        for name in os.listdir(marker_path)
+                        if os.path.isdir(os.path.join(marker_path, name))
+                    },
+                )
+            )
+    if not marker_roots:
+        return []
+
+    def normalized(value: str) -> str:
+        """把路径段归一化为可比较的活动目录名。
+
+        参数:
+            - `value`：目录名或路径段，类型为 `str`。
+
+        Returns:
+            仅保留小写字母和数字的活动目录名；不足四个字符时返回空字符串，
+            避免 `new`、`boot` 等通用目录参与匹配。
+        """
+        folded = re.sub(r"[^a-z0-9]", "", value.casefold())
+        return folded if len(folded) >= 4 else ""
+
+    # 记录候选活动名的来源强度：后台/入口路径的相邻两段拼接（如
+    # `giftWeekStar/new`）比单个目录名更具体；排序时优先处理前者，避免
+    # 证据里同时含多个活动时，字母序靠前的无关活动先耗尽补入预算。
+    candidate_names: dict[str, int] = {}
+    for item in evidence:
+        file_name = str(item.get("file") or "").replace("\\", "/").strip("/")
+        parts = [part for part in file_name.split("/")[:-1] if part]
+        if not parts:
+            continue
+        single = normalized(parts[-1])
+        if single:
+            candidate_names[single] = max(candidate_names.get(single, 0), 1)
+        if len(parts) >= 2:
+            pair = normalized("".join(parts[-2:]))
+            if pair:
+                candidate_names[pair] = max(candidate_names.get(pair, 0), 2)
+
+    additions: list[dict] = []
+    seen: set[str] = set()
+    for prefix, marker, marker_path, directories in marker_roots:
+        for candidate in sorted(
+            candidate_names,
+            key=lambda name: (-candidate_names[name], name),
+        ):
+            actual = directories.get(candidate)
+            if not actual:
+                continue
+            activity_path = os.path.join(marker_path, actual)
+            # 服务与控制器优先：配置读取、结算表和防重方法都在这里。
+            for sub in ("service", "controller", "services"):
+                sub_path = os.path.join(activity_path, sub)
+                if not os.path.isdir(sub_path):
+                    continue
+                for name in sorted(os.listdir(sub_path)):
+                    if not name.endswith(".php"):
+                        continue
+                    relative = "/".join(
+                        part for part in (prefix, marker, actual, sub, name) if part
+                    )
+                    if relative in seen:
+                        continue
+                    seen.add(relative)
+                    additions.append(
+                        {
+                            "project": project,
+                            "type": "activity_service",
+                            "query": "活动服务实现",
+                            "file": relative,
+                            "line": 1,
+                            "line_start": 1,
+                            "line_end": 1,
+                            "content": "<?php",
+                        }
+                    )
+                    if len(additions) >= limit:
+                        return additions
+            for name in sorted(os.listdir(activity_path)):
+                if not name.endswith((".php",)):
+                    continue
+                relative = "/".join(
+                    part for part in (prefix, marker, actual, name) if part
+                )
+                if relative in seen:
+                    continue
+                seen.add(relative)
+                additions.append(
+                    {
+                        "project": project,
+                        "type": "activity_service",
+                        "query": "活动入口实现",
+                        "file": relative,
+                        "line": 1,
+                        "line_start": 1,
+                        "line_end": 1,
+                        "content": "<?php",
+                    }
+                )
+                if len(additions) >= limit:
+                    return additions
+    return additions
+
+
+_GENERIC_ACTIVITY_WORDS = {
+    "type", "types", "service", "services", "model", "models", "helper",
+    "helpers", "request", "requests", "command", "commands", "logic", "boot",
+    "controller", "control", "config", "conf", "manager", "handler", "index",
+    "data", "base", "common", "export", "list",
+}
+
+
+def _activity_alias_config_evidence(
+    root: str,
+    project: str,
+    question: str,
+    evidence: list[dict],
+    *,
+    limit: int = 3,
+) -> list[dict]:
+    """根据中文锚点与英文标识的共现补回活动配置证据。
+
+    参数:
+        - `root`：仓库根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `question`：用户原始业务问题，类型为 `str`；其中三字以上中文片段
+          用于在同一源码行内寻找英文业务标识。
+        - `evidence`：当前证据项，类型为 `list[dict]`；后台页面、排行模型等
+          文件常同时含“游戏榜”和 `GAME_RANK_TYPE`。
+        - `limit`：最多补回的活动配置数量，类型为 `int`。
+
+    Returns:
+        `config.php` 占位证据。中文营销名与英文常量/类名在同一行共现时，
+        把英文词拆成目录词根（`GAME_RANK_TYPE` → `game/rank`），再去匹配
+        `gameRanking` 这类驼峰活动目录。只使用真实源码中出现的词，不保存
+        活动名映射，也不输出任何字符串值。
+    """
+    anchors = [
+        value
+        for value in extract_generic_anchors(question, max_anchors=24)
+        if len(value) >= 3
+    ]
+    if not anchors:
+        return []
+    # 锚点切分可能带量词/词尾（`游戏榜第`），而源码写“游戏榜单”。用锚点的
+    # 三字连续片段做匹配即可同时覆盖完整活动名和常见词尾差异。
+    anchor_fragments = {
+        anchor[start:start + 3]
+        for anchor in anchors
+        for start in range(len(anchor) - 2)
+    }
+    tokens: set[str] = set()
+    read_budget = 0
+    for item in evidence:
+        file_name = str(item.get("file") or "").replace("\\", "/")
+        content = str(item.get("content") or "")
+        has_anchor = any(fragment in content for fragment in anchor_fragments)
+        if not has_anchor and file_name.endswith(".php") and read_budget < 8:
+            # 证据项通常只保存命中行，中文活动名和英文常量可能相隔几十行。
+            # 在命中行附近读取一个小窗口，再做同文件共现；限制读取文件数量，
+            # 避免把配置推导变成全仓扫描。
+            read_budget += 1
+            try:
+                line = int(item.get("line") or 1)
+                window = read_file(
+                    root,
+                    project,
+                    file_name,
+                    max(1, line - 120),
+                    min(line + 120, line + 240),
+                )
+                content = str(window.get("content") or "")
+            except (CodeToolError, ValueError, OSError):
+                content = ""
+            has_anchor = any(fragment in content for fragment in anchor_fragments)
+        if not has_anchor:
+            continue
+        for identifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", content):
+            # 同时拆 CamelCase 和下划线：`GAME_RANK_TYPE`、`RankPrizeConf`
+            # 都能得到可用于目录比较的独立词根。
+            words = re.findall(
+                r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+",
+                identifier,
+            )
+            for word in words:
+                folded = word.casefold()
+                if len(folded) >= 3 and folded not in _GENERIC_ACTIVITY_WORDS:
+                    tokens.add(folded)
+    if len(tokens) < 2:
+        return []
+
+    def directory_words(name: str) -> set[str]:
+        """把驼峰活动目录拆成小写单词集合。
+
+        参数:
+            - `name`：活动目录名，类型为 `str`。
+
+        Returns:
+            由 CamelCase 或下划线分隔出的单词集合；用于与共现英文词根比较。
+        """
+        return {
+            value.casefold()
+            for value in re.findall(
+                r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+",
+                name,
+            )
+            if len(value) >= 3
+        }
+
+    def token_matches(token: str, words: set[str]) -> bool:
+        """判断共现词根与目录单词是否互为前缀。
+
+        参数:
+            - `token`：源码标识拆分出的词根，类型为 `str`。
+            - `words`：活动目录单词集合，类型为 `set[str]`。
+
+        Returns:
+            存在长度至少四个字符的互相前缀关系时返回 `True`，例如
+            `rank` 与 `ranking`；过短的同名不参与匹配。
+        """
+        return any(
+            len(token) >= 4
+            and len(word) >= 4
+            and (word.startswith(token) or token.startswith(word))
+            for word in words
+        )
+
+    base = os.path.join(root, project)
+    if not os.path.isdir(base):
+        return []
+    prefixes = [
+        "",
+        *[
+            name
+            for name in os.listdir(base)
+            if os.path.isdir(os.path.join(base, name))
+        ],
+    ]
+    additions: list[dict] = []
+    for prefix in prefixes:
+        for marker in ("Logic", "crontab", "action_activity"):
+            marker_path = os.path.join(base, prefix, marker)
+            if not os.path.isdir(marker_path):
+                continue
+            for activity in sorted(os.listdir(marker_path)):
+                activity_path = os.path.join(marker_path, activity)
+                config_path = os.path.join(activity_path, "config.php")
+                if not os.path.isfile(config_path):
+                    continue
+                words = directory_words(activity)
+                matched = {token for token in tokens if token_matches(token, words)}
+                if len(matched) < 2 or len(matched) < len(words):
+                    continue
+                relative = "/".join(
+                    part for part in (prefix, marker, activity, "config.php") if part
+                )
+                additions.append(
+                    {
+                        "project": project,
+                        "type": "activity_alias_config",
+                        "query": "活动配置",
+                        "file": relative,
+                        "line": 1,
+                        "line_start": 1,
+                        "line_end": 1,
+                        "content": "<?php",
+                    }
+                )
+                if len(additions) >= limit:
+                    return additions
+    return additions
+
+
 def _concept_config_file_evidence(
     root: str,
     project: str,
@@ -172,6 +821,61 @@ def _concept_config_file_evidence(
     normalized.discard("")
     if not normalized:
         return []
+    # 术语常以类名形式出现（`GameRankPrizeService`、`giftWeekStarBoot`），而
+    # 活动目录只保留业务名（`gameRanking`、`giftWeekStar`）。这里用通用类名
+    # 后缀剥离派生活动别名，避免因为完整类名与目录名不相等而漏掉配置文件。
+    class_suffixes = (
+        "controller",
+        "service",
+        "control",
+        "command",
+        "request",
+        "handler",
+        "manager",
+        "helper",
+        "process",
+        "factory",
+        "index",
+        "boot",
+        "config",
+        "logic",
+        "model",
+        "task",
+        "prize",
+        "base",
+        "trait",
+        "api",
+        "action",
+        "rule",
+        "rules",
+    )
+
+    def activity_aliases(normalized_term: str) -> set[str]:
+        """从类名/文件名词干派生活动目录别名。
+
+        参数:
+            - `normalized_term`：已去掉标点并转小写的术语，类型为 `str`。
+
+        Returns:
+            原词及逐级剥离已知类名后缀后的候选文件夹名集合。每次剥离至少保留
+            五个字符，避免 `task`、`api` 这类短词把无关目录识别为活动目录。
+        """
+        aliases = {normalized_term}
+        current = normalized_term
+        for _ in range(3):
+            removed = False
+            for suffix in class_suffixes:
+                if current.endswith(suffix) and len(current) - len(suffix) >= 5:
+                    current = current[: -len(suffix)]
+                    aliases.add(current)
+                    removed = True
+            if not removed:
+                break
+        return aliases
+
+    term_aliases = set().union(
+        *(activity_aliases(term) for term in normalized)
+    )
     base = os.path.join(root, project)
     skipped = {
         ".git",
@@ -197,7 +901,7 @@ def _concept_config_file_evidence(
             if is_config_dir:
                 # 传统配置目录：`config/newNobleLv.php` 由文件名干命中。
                 stem = re.sub(r"[^a-z0-9]", "", name[:-4].casefold())
-                if stem in normalized:
+                if stem in term_aliases:
                     candidates.append((1, file_name, stem))
                 continue
             if name.casefold() not in {"config.php", "conf.php"}:
@@ -208,7 +912,42 @@ def _concept_config_file_evidence(
                 re.sub(r"[^a-z0-9]", "", part.casefold())
                 for part in file_name.split("/")[:-1]
             }
-            matched = components.intersection(normalized)
+            def compact_subsequence(alias: str, component: str) -> bool:
+                """判断活动目录名是否包含术语的连续字母骨架。
+
+                参数:
+                    - `alias`：剥离类名后缀后的活动术语，类型为 `str`。
+                    - `component`：配置路径中的目录段，类型为 `str`。
+
+                Returns:
+                    目录段按顺序包含术语全部字母、且长度差不超过五个字符时
+                    返回 `True`。用于 `gamrank` 匹配 `gameRanking` 这类
+                    类名与目录名只差元音/词尾的常见写法；不做编辑距离或
+                    拼音匹配，避免扩大误命中。
+                """
+                if len(alias) < 6 or len(component) <= len(alias):
+                    return False
+                index = 0
+                for char in component:
+                    if index < len(alias) and char == alias[index]:
+                        index += 1
+                return index == len(alias) and len(component) - len(alias) <= 5
+
+            matched = {
+                component
+                for component in components
+                if component in term_aliases
+                or any(
+                    len(alias) >= 5
+                    and 0 < len(component) - len(alias) <= 3
+                    and component.startswith(alias)
+                    for alias in term_aliases
+                )
+                or any(
+                    compact_subsequence(alias, component)
+                    for alias in term_aliases
+                )
+            }
             if matched:
                 best_term = max(matched, key=len)
                 candidates.append(
@@ -247,8 +986,27 @@ def _tag_initial_retrieval_stage(
         联系；标记只描述检索来源，不代表业务结论。
     """
     matched = {str(value) for value in item.get("matched_queries") or []}
-    anchor_set = set(generic_anchors)
-    if any(len(value) >= 4 and value in anchor_set for value in matched):
+    # 中文锚点生成会去掉“的/地/得”等虚词（`失落的文明` → `失落文明`），而
+    # 源码检索按原句匹配。比较时统一去掉虚词，否则四字以上活动名命中会被
+    # 误判为普通片段，导致检索直接进入 insufficient_support。
+    def normalized_anchor(value: str) -> str:
+        """去掉中文虚词和空白，得到可直接比较的业务锚点。
+
+        参数:
+            - `value`：问题锚点或源码命中词，类型为 `str`。
+
+        Returns:
+            去除“的/地/得/了/吗/呢”和空白后的文本；仅用于检索来源判定，
+            不参与结论生成。
+        """
+        return re.sub(r"[的地得了吧呢吗\s]", "", value)
+
+    anchor_set = {normalized_anchor(value) for value in generic_anchors}
+    if any(
+        len(normalized_anchor(value)) >= 4
+        and normalized_anchor(value) in anchor_set
+        for value in matched
+    ):
         return "business_anchor"
     if matched.intersection(explicit_symbols):
         return "explicit_symbol"
@@ -864,6 +1622,39 @@ def _select_diagnostic_evidence(
         append(item)
         break
 
+    # 活动服务/控制器占位证据只有首行，没有匹配词，必须独立保留；否则配置
+    # 问题会只剩 config.php，无法回答数据库读取表和防重方法。
+    activity_service_count = 0
+    for item in evidence:
+        if item.get("type") != "activity_service":
+            continue
+        append(item)
+        activity_service_count += 1
+        if activity_service_count >= 5 or len(selected) >= limit:
+            break
+
+    # 中文锚点与英文常量共现推导出的活动配置同样只有首行占位，需要独立名额。
+    alias_config_count = 0
+    for item in evidence:
+        if item.get("type") != "activity_alias_config":
+            continue
+        append(item)
+        alias_config_count += 1
+        if alias_config_count >= 3 or len(selected) >= limit:
+            break
+
+    # 同目录补入的活动配置占位证据必须独立保留：它们本身只有一个 `<?php`
+    # 行，既没有业务锚点也没有匹配词，若进入通用预算会被大量命中挤出，导致
+    # 活动配置无法展开为完整窗口。
+    sibling_config_count = 0
+    for item in evidence:
+        if item.get("type") != "sibling_config":
+            continue
+        append(item)
+        sibling_config_count += 1
+        if sibling_config_count >= 12 or len(selected) >= limit:
+            break
+
     # 概念英文词命中的配置文件（如 noble → newNobleLv.php）需要独立名额。
     # 全文检索会因同词文件过多在截断处丢掉定义文件，而这类证据没有业务锚点
     # 和 matched_queries，不能依赖后续通用候选回填。
@@ -873,7 +1664,7 @@ def _select_diagnostic_evidence(
             continue
         append(item)
         concept_config_count += 1
-        if concept_config_count >= 3 or len(selected) >= limit:
+        if concept_config_count >= 8 or len(selected) >= limit:
             break
 
     # 第一层保留问题原句直接命中的四字以上业务锚点，最多十八条。等级配置、
@@ -1607,6 +2398,12 @@ async def execute_diagnosis(task_id: str) -> None:
         if current is None or current["status"] == "CANCELLED":
             return
         queries = extract_search_queries(current["question"])
+        # 额外保留“的/之”原句片段，才能检索到只写在 pushmsg 里的活动名。
+        queries = list(
+            dict.fromkeys(
+                [*queries, *_chinese_question_substrings(current["question"])]
+            )
+        )
         # 项目名已由任务字段单独限定，继续把 waky6 当作代码关键词只会召回
         # 文档和部署文件；若问题只有项目名，则保留原词以维持可解释性。
         queries = [item for item in queries if item != current["project"]] or queries
@@ -1675,7 +2472,18 @@ async def execute_diagnosis(task_id: str) -> None:
             "candidate_count": 0,
         }
         try:
-            initial_terms = list(dict.fromkeys([*generic_anchors, *explicit_symbols]))
+            initial_terms = list(
+                dict.fromkeys(
+                    [
+                        *generic_anchors,
+                        *explicit_symbols,
+                        # 首轮发现也带上保留“的/之”的原句片段；否则
+                        # `失落文明` 检索不到只写 `失落的文明` 的 pushmsg，
+                        # 会直接判定 insufficient_support。
+                        *_chinese_question_substrings(current["question"]),
+                    ]
+                )
+            )
             initial_outcome = await RetrievalEngine(
                 [SearchTermsChannel(search_code_terms)]
             ).run(
@@ -2116,8 +2924,32 @@ async def execute_diagnosis(task_id: str) -> None:
             for item in _concept_config_file_evidence(
                 settings.code_repositories_root,
                 current["project"],
-                semantic_terms,
-                limit=3,
+                # 同时使用语义概念词和检索扩展出的真实类名（如
+                # `GameRankPrizeService`）；后者能通过连续字母骨架匹配到
+                # `gameRanking` 这类类名与目录名不完全一致的活动。
+                dict.fromkeys([*semantic_terms, *expanded_terms]),
+                limit=8,
+            )
+        )
+        # 活动入口/服务文件被检索到时，同目录 `config.php` 往往因不含问题中文
+        # 词而没有进入证据。这里按真实目录补回配置位置，让配置取值分析器能
+        # 读取到用户点名的活动配置，而不是退回到其他活动的同名数组。
+        evidence.extend(
+            _sibling_config_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                evidence,
+                limit=6,
+            )
+        )
+        # 活动期配置、结算写入和幂等判断通常在服务/控制器里，配置类问题需要
+        # 同活动的实现文件才能回答“从哪里读取/写哪张表/如何防重”。
+        evidence.extend(
+            _activity_service_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                evidence,
+                limit=5,
             )
         )
         evidence.extend(history_version_evidence)
@@ -2177,6 +3009,34 @@ async def execute_diagnosis(task_id: str) -> None:
                 )
             except (CodeToolError, ValueError) as exc:
                 warnings.append(f"调用链证据补全降级: {exc}")
+        # 最后一轮补充在所有检索通道和调用链之后执行：后台排行页、模型文件
+        # 往往由后置检索/调用链带入，只有此时才能从“游戏榜 + GAME_RANK_TYPE”
+        # 推导 activity 目录，或从同活动服务读取期数与结算实现。
+        evidence.extend(
+            _activity_alias_config_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                current["question"],
+                evidence,
+                limit=3,
+            )
+        )
+        evidence.extend(
+            _sibling_config_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                evidence,
+                limit=12,
+            )
+        )
+        evidence.extend(
+            _activity_service_evidence(
+                settings.code_repositories_root,
+                current["project"],
+                evidence,
+                limit=5,
+            )
+        )
         evidence = annotate_hits_with_concepts(evidence, concept_match_terms)
         deduplicated = _deduplicate_evidence(evidence)
         explicit_target_files = _select_explicit_target_files(
@@ -2215,13 +3075,60 @@ async def execute_diagnosis(task_id: str) -> None:
             )
         else:
             deduplicated = []
+        full_config_files = (
+            _full_config_window_files(
+                current["question"],
+                [*deduplicated, *evidence],
+                [*queries, *expanded_terms, *explicit_symbols],
+                {
+                    str(item.get("file") or "").replace("\\", "/").casefold()
+                    for item in deduplicated
+                },
+            )
+            if _needs_full_config_window(current["question"])
+            else set()
+        )
+        # 完整窗口候选可能因证据预算被 `_select_diagnostic_evidence` 提前裁掉
+        # （例如只命中配置文件首行的 `gameRanking`）。这类文件如果正是问题术语
+        # 指向的配置，必须补回一条最小证据项并重新整文件读取，否则名次表和
+        # 奖品定义永远进不了窗口。
+        present_config_keys = {
+            str(item.get("file") or "").replace("\\", "/").casefold()
+            for item in deduplicated
+        }
+        for config_path in full_config_files - present_config_keys:
+            source_item = next(
+                (
+                    item
+                    for item in evidence
+                    if str(item.get("file") or "")
+                    .replace("\\", "/")
+                    .casefold()
+                    == config_path
+                ),
+                None,
+            )
+            if source_item is None:
+                continue
+            deduplicated.append(
+                {
+                    **source_item,
+                    "type": "full_config",
+                    "line": 1,
+                    "score": 0.0,
+                }
+            )
         for item in deduplicated:
             try:
                 start_line, end_line = _method_evidence_range(project_index, item)
-                # 枚举类问题（每个等级/所有档位）需要完整配置文件窗口，按方法
-                # 命中范围截取会只看到前几个等级，导致答案不完整。
+                # 配置类问题需要完整配置文件窗口：按命中行截取会只看到某一个
+                # 数组（例如国旗表），漏掉问题真正指向的奖池、阶段或奖品表。
                 evidence_file = str(item.get("file") or "")
-                if (
+                # `_full_config_window_files` 返回归一化小写路径；真实证据路径
+                # 含 `ageOfDiscovery`、`gameRanking` 等驼峰目录，必须按同一
+                # 归一化口径比较，否则完整配置窗口不会生效。
+                evidence_key = evidence_file.replace("\\", "/").casefold()
+                needs_full_for_file = evidence_key in full_config_files or (
                     (
                         evidence_file.endswith("config.php")
                         or "/config/" in f"/{evidence_file}"
@@ -2230,8 +3137,11 @@ async def execute_diagnosis(task_id: str) -> None:
                         token in current["question"]
                         for token in ("每个", "所有", "全部", "列出", "分别", "各等级")
                     )
-                ):
+                )
+                if needs_full_for_file or item.get("type") == "activity_service":
                     # read_file 单次最多读取 1000 行，这里取允许的最大窗口。
+                    # 服务文件需要完整读取才能在任意位置找到 `existsByVol` 这类
+                    # 防重方法和数据库模型读取。
                     start_line, end_line = 1, 1001
                 context = read_file(
                     settings.code_repositories_root,
@@ -2463,7 +3373,21 @@ async def execute_diagnosis(task_id: str) -> None:
             },
         )
         available_evidence = count_available_evidence(report_result)
-        if should_run_ai(settings, current, available_evidence):
+        if deterministic_findings.get("gap"):
+            # 确定性分析已判定“没有与问题匹配的配置证据”时，不再让模型基于
+            # 检索到的其他活动证据自由发挥；缺口由确定性结论直接说明。
+            warnings.append(
+                "未找到与问题对应的等级/档位配置，已跳过 AI 补充，避免输出其他活动的数值"
+            )
+            await record_trace_span(
+                pool,
+                task_id,
+                "stage.skipped",
+                "ai_narration",
+                "skipped",
+                payload={"reason": "deterministic_gap"},
+            )
+        elif should_run_ai(settings, current, available_evidence):
             await record_trace_span(
                 pool,
                 task_id,

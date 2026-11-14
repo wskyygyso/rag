@@ -53,6 +53,27 @@ _ENUMERATION_WORDS = (
     "逐级",
     "逐档",
     "一一列",
+    "各自",
+    "各自奖励",
+    "哪个",
+    "哪一个",
+    "哪几个",
+    "几档",
+    "几档位",
+    "前三名",
+    "前几名",
+    "日榜",
+    "排名",
+    "哪些",
+    "哪几",
+    "几级",
+    "几轮",
+    "几个",
+    "几种",
+    "几支",
+    "几面",
+    "多少个",
+    "多少次",
 )
 # 配置对象词：说明问题关注的是配置值，而不是业务执行流程。
 _CONFIG_OBJECT_WORDS = (
@@ -64,28 +85,80 @@ _CONFIG_OBJECT_WORDS = (
     "门槛",
     "开关",
     "默认值",
+    "值",
+    "档",
+    "档位",
     "比例",
     "费率",
     "倍率",
     "单价",
+    "奖池",
+    "规则",
+    "阶段",
+    "奖励",
+    "奖品",
+    "库存",
+    "名称",
+    "起止时间",
+    # 活动配置里常见的业务数值对象。加入后，“多少燃料/多少金币/几个阶段”
+    # 这类没有写“配置”二字的问题也能进入配置取值解释器。
+    "燃料",
+    "碎片",
+    "宝箱",
+    "类型",
+    "期数",
+    "金币",
+    "钻石",
+    "魔法石",
+    "礼物",
+    "时间",
+    "数量",
+    "目标值",
+    "投注",
+    "步长",
+    "保底",
+    "限额",
+    "限制",
+    "机制",
+    "区间",
+    "价格",
+    "美元",
+    "表",
+    "结算",
+    "截止",
+    "秒",
 )
 # 取值动作词：与配置对象词共同出现时，进入配置取值解释器。
 _LOOKUP_WORDS = (
     "多少",
     "是多少",
+    "是什么",
+    "分别是什么",
     "什么值",
     "取值",
     "值为",
     "设为",
     "配置为",
     "是否开启",
+    "有没有",
     "有没有开启",
+    "是否有",
+    "有吗",
+    "支持吗",
     "打开了吗",
     "怎么写的",
     "怎么配置",
     "如何配置",
     "配置在哪",
+    "从哪里读取",
     "写法",
+    # “按什么规则投入、怎么配、等于多少”同样是取值类问法，只是没有出现
+    # “是多少”字样；只在同时出现配置对象词时才会进入配置取值解释器。
+    "按什么",
+    "什么规则",
+    "怎么配",
+    "等于多少",
+    "吗",
 )
 # 等级/档位等重复结构词：即使问题没有写“配置”，也允许进入配置枚举。
 _REPEATED_STRUCTURE_WORDS = (
@@ -96,6 +169,13 @@ _REPEATED_STRUCTURE_WORDS = (
     "奖励",
     "奖品",
     "礼包",
+    "阶段",
+    "轮",
+    "排名",
+    "名次",
+    "前三",
+    "日榜",
+    "兜底",
 )
 _FRONTEND_WORDS = ("前端", "页面", "展示", "显示", "客户端", "钱包页")
 _FLOW_WORDS = (
@@ -145,7 +225,13 @@ def _has_config_object(question: str, concepts: Set[str]) -> bool:
         return True
     if any(word in question for word in _CONFIG_OBJECT_WORDS):
         return True
-    return bool(re.search(r"`[A-Za-z_][A-Za-z0-9_.]{2,}`", question))
+    if re.search(r"`[A-Za-z_][A-Za-z0-9_.]{2,}`", question):
+        return True
+    # 未加反引号的点号配置路径（`pool.base`）同样是用户在点名配置键，不能
+    # 因为缺少引号就退回流程分析器。
+    return bool(
+        re.search(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*", question)
+    )
 
 
 def _has_explicit_class(question: str) -> bool:
@@ -164,6 +250,23 @@ def _has_explicit_class(question: str) -> bool:
             continue
         return True
     return False
+
+
+def asks_member_count(question: str) -> bool:
+    """判断问题是否在询问“有多少个成员”而不是某个具体等级值。
+
+    参数:
+        - `question`：用户原始问题，类型为 `str`。
+
+    Returns:
+        出现“多少支/多少种/几支/几种/多少个/哪些”等数量或列举词时返回
+        `True`。调用方据此允许配置图尝试数组成员计数，用于回答国旗数量、
+        监听类型数量等没有等级键的问题。
+    """
+    return any(
+        token in question
+        for token in ("多少支", "多少种", "多少面", "多少个", "多少款", "几支", "几种", "几面", "哪些")
+    )
 
 
 def classify_question(
@@ -191,6 +294,13 @@ def classify_question(
     repeated_structure = any(
         word in question for word in _REPEATED_STRUCTURE_WORDS
     )
+    # “第 2 档/第 3 名/第 2 级”说明用户在点名单个等级或名次。枚举解释器
+    # 会按序号收窄到对应条目，因此这里和“分别/哪些”一样视为重复结构问题。
+    ordinal_structure = bool(
+        re.search(r"第\s*[\d一二三四五六七八九十]+\s*(?:个|档|级|名|项|轮)", question)
+    )
+    if ordinal_structure and _has_config_object(question, normalized_concepts):
+        return QuestionType.CONFIG_ENUMERATION
     if enumeration and (
         _has_config_object(question, normalized_concepts) or repeated_structure
     ):

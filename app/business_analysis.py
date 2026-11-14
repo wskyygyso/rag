@@ -14,6 +14,7 @@ from app.domain.diagnosis.analyzers.common import (
 from app.domain.diagnosis.analyzers.configuration import (
     _configuration_fact_conclusion,
     _configuration_literal_facts,
+    execution_source_facts,
 )
 from app.domain.diagnosis.analyzers.activity import _analyze_spaceship_fragments
 from app.domain.diagnosis.analyzers.display import _analyze_frontend_diamond_display
@@ -42,7 +43,7 @@ from app.domain.diagnosis.config_graph import (
     configuration_env_value_facts,
 )
 from app.query_understanding import detect_semantic_concepts
-from app.question_type import QuestionType, classify_question
+from app.question_type import QuestionType, asks_member_count, classify_question
 
 
 def build_deterministic_findings(
@@ -100,35 +101,156 @@ def build_deterministic_findings(
             str(value)
             for value in (retrieval_plan.get("expanded_code_terms") or [])
         ]
+        # 配置类问题优先走配置图/配置取值。领域分析器（飞船碎片、钻石兑换等）
+        # 解释的是业务流程，不能代替“某个等级门槛/奖励/比例是多少”的配置取值；
+        # 只有非配置问题才交给领域分析器。
+        # 用户直接写出点号配置路径或反引号键时，即使问题缺少“是多少”等取值
+        # 动作词，也属于配置取值问题，必须交给配置解析器而不是流程分析器。
+        mentions_config_key = bool(
+            re.search(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_.]*", question)
+            or re.search(r"`[A-Za-z_][A-Za-z0-9_.:-]+`", question)
+        )
+        config_question = (
+            question_type
+            in {
+                QuestionType.CONFIG_ENUMERATION,
+                QuestionType.CONFIG_LOOKUP,
+            }
+            or asks_member_count(question)
+            or mentions_config_key
+        )
+        # VIP/贵族奖品分析器会把手里的 `PrizeModel` 常量翻译成“贵族卡 x1”
+        # 这类业务名称，比通用配置枚举只输出常量名更可读。问题明确问“奖品/
+        # 奖励”且没有问门槛时，优先使用该分析器；门槛问题继续走配置枚举。
+        reward_intent = any(
+            token in question for token in ("奖品", "奖励", "附赠")
+        )
+        threshold_intent = any(
+            token in question
+            for token in ("门槛", "阈值", "所需积分", "要求积分")
+        )
+        preferred_analyzer_facts = (
+            analyzer.analyze(lines)
+            if analyzer is not None
+            and analyzer.analyzer_id == "vip_prize_levels"
+            and reward_intent
+            and not threshold_intent
+            else []
+        )
+        # “四个等级门槛及头衔奖励”这类问题在问法上不一定被分类成枚举，但
+        # 明确点了等级/阶段，逐级配置图能同时给出名称、门槛和奖励，比只取
+        # 同文件散落字面量更完整。
+        level_intent = any(
+            token in question for token in ("等级", "档位", "级别", "阶段")
+        )
         enumeration_facts = (
             configuration_enumeration_facts(
                 lines,
                 question,
                 expanded_scope_terms,
             )
-            if analyzer is None and question_type == QuestionType.CONFIG_ENUMERATION
+            if config_question
+            and not preferred_analyzer_facts
+            and (
+                question_type == QuestionType.CONFIG_ENUMERATION
+                or asks_member_count(question)
+                or level_intent
+            )
             else []
         )
+        # 用户明确追问“每个等级/档位的门槛”却没有解析出逐级配置时，继续回退
+        # 到任意配置字面量会把其他活动的数值当成答案。这里直接报告证据缺口，
+        # 并标记 `gap` 让上层跳过 AI 补充，避免模型继续输出无关活动。
+        # 只有“确实尝试过逐级枚举”的问题才走缺口门控；普通取值问题
+        # （“四个冒险点的门槛是多少”）按配置字面量回答是正确的，不能误判。
+        enumeration_attempted = config_question and (
+            question_type == QuestionType.CONFIG_ENUMERATION
+            or asks_member_count(question)
+            or level_intent
+        )
+        if enumeration_attempted and threshold_intent and not enumeration_facts:
+            return {
+                "conclusion": "",
+                "facts": [],
+                "evidence_refs": [],
+                "gap": True,
+                "uncertainties": [
+                    "未在已检索证据中找到与问题对应的等级门槛配置；"
+                    "为避免用其他活动的数值作答，本次不输出等级结论。",
+                    "请补充活动名称、配置目录或门槛字段（例如 score/limit）后重新诊断。",
+                ],
+            }
+        # 点名“第 99 名”这类超出配置编号的名次时，奖品表不会有对应条目。
+        # 此时枚举结果为空，必须报告缺口，不能退化为“输出整张名次表”。
+        if (
+            not enumeration_facts
+            and re.search(r"第\s*\d+\s*名", question)
+            and any(
+                token in question for token in ("奖励", "奖品", "奖金", "金币")
+            )
+        ):
+            # 名次表通常位于配置文件中部。若证据里连 `rank_prizes` 都没有，
+            # 更可能是窗口只读到了文件头，而不是该名次真的不存在；文案要
+            # 区分这两种情况，便于验收时定位是检索问题还是配置问题。
+            rank_table_missing = not any(
+                "rank_prizes" in line.content or "top_prizes" in line.content
+                for line in lines
+            )
+            hint = (
+                "已检索到活动配置，但证据窗口未包含 rank_prizes/top_prizes "
+                "名次表，可能是完整配置窗口未生效；请重跑或扩大证据窗口后复核。"
+                if rank_table_missing
+                else "名次表已完整读取，但其中没有该序号对应的奖励配置。"
+            )
+            return {
+                "conclusion": "",
+                "facts": [],
+                "evidence_refs": [],
+                "gap": True,
+                "uncertainties": [
+                    hint
+                    + "为避免用其他名次的数值作答，本次不输出奖励结论。",
+                ],
+            }
         configuration_facts = (
-            _configuration_literal_facts(lines, question)
-            if analyzer is None and not enumeration_facts
+            _configuration_literal_facts(
+                lines,
+                question,
+                scope_terms=expanded_scope_terms,
+            )
+            if config_question and not enumeration_facts
             else []
         )
         # `getByTestMode` 的字符串分支（商户号、开关、默认地址等）不属于
         # 数字/布尔字面量。没有专用分析器时先按通用配置图读取环境分支，避免
         # 每新增一个支付渠道就要补一套取值代码。
+        # 数据来源/结算防重问题看的是活动服务里的数据库模型调用。它优先于
+        # 配置字面量：`config.php` 只剩基础项时，继续回答 title/vol 会掩盖
+        # “期数来自数据库、结算通过 existsByVol 防重”的真正答案。
+        execution_facts = execution_source_facts(lines, question)
         env_value_facts = (
             configuration_env_value_facts(
                 lines,
                 question,
                 expanded_scope_terms,
             )
-            if analyzer is None and not enumeration_facts and not configuration_facts
+            if analyzer is None
+            and not enumeration_facts
+            and not configuration_facts
+            and not execution_facts
             else []
         )
-        if enumeration_facts:
+        if preferred_analyzer_facts:
+            facts = preferred_analyzer_facts
+            topic = "VIP等级附赠奖品"
+            explicit_topic = True
+        elif enumeration_facts:
             facts = enumeration_facts
             topic = "配置枚举"
+            explicit_topic = True
+        elif execution_facts:
+            facts = execution_facts
+            topic = "执行实现"
             explicit_topic = True
         elif env_value_facts:
             facts = env_value_facts

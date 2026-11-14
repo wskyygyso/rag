@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 # 中文术语最大长度，与索引侧抽取保持一致，避免异常注释撑大知识库。
 MAX_TERM_LENGTH = 40
 # 单次批量写入上限，避免一次诊断把超大索引全部写入数据库。
-MAX_KNOWLEDGE_BATCH = 500
+# 单次知识库批量写入上限。注释派生术语覆盖长尾中文业务名，五百条会在大型
+# 活动仓库中提前截断，导致后续问题无法再命中活动别名；两千条仍受数据库批量
+# 写入约束，且每次查询只返回少量候选，不会放大诊断上下文。
+MAX_KNOWLEDGE_BATCH = 2000
 # 结论候选默认有效期，单位天。过期后不再参与检索提示。
 CONCLUSION_TTL_DAYS = 90
 # 敏感字段判定：命中这些键名时只记录结构，不保存任何值。
@@ -282,7 +285,9 @@ async def load_glossary_terms(
             FROM project_glossary
             WHERE project = $1
               AND position(term in $2) > 0
-            ORDER BY confidence DESC, LENGTH(term) DESC, updated_at DESC
+              AND LENGTH(term) <= 12
+              AND (source <> 'llm' OR LENGTH(term) <= 8)
+            ORDER BY LENGTH(term) DESC, confidence DESC, updated_at DESC
             LIMIT $3
             """,
             project,
@@ -339,7 +344,7 @@ async def record_runtime_glossary(
         for anchor in anchors
         if re.search(r"[\u4e00-\u9fff]", anchor)
     ]
-    chinese_terms = [term for term in chinese_terms if 2 <= len(term) <= MAX_TERM_LENGTH][:4]
+    chinese_terms = [term for term in chinese_terms if 3 <= len(term) <= MAX_TERM_LENGTH][:3]
     if not chinese_terms:
         return 0
     rows = [

@@ -14,12 +14,15 @@ class EvidenceLine:
 
     `file` 是项目内相对路径，`line` 是 1 开始的行号，`content` 是该行原始
     文本，`ref` 是报告和 LLM 共用的 `文件:行号` 引用。
+    `score` 是该行所在证据项的检索相关度，只用于多个活动目录同时出现时
+    选择主活动；它不参与业务结论，也不能代替源码字面值。
     """
 
     file: str
     line: int
     content: str
     ref: str
+    score: float = 0.0
 
 _CONTEXT_LINE_PATTERN = re.compile(r"^\s*(\d+):\s?(.*)$")
 
@@ -40,6 +43,12 @@ def _evidence_lines(evidence: Iterable[Dict[str, Any]]) -> List[EvidenceLine]:
         if not file_name:
             continue
         context = str(item.get("context") or "")
+        # 检索相关度用于活动目录排序，必须从证据项带到每一行；缺失时按 0 处理，
+        # 让旧任务和历史报告仍能正常分析。
+        try:
+            item_score = float(item.get("score") or 0.0)
+        except (TypeError, ValueError):
+            item_score = 0.0
         parsed_any = False
         for raw_line in context.splitlines():
             match = _CONTEXT_LINE_PATTERN.match(raw_line)
@@ -55,6 +64,7 @@ def _evidence_lines(evidence: Iterable[Dict[str, Any]]) -> List[EvidenceLine]:
                     line=line_number,
                     content=content,
                     ref=f"{file_name}:{line_number}",
+                    score=item_score,
                 ),
             )
         if parsed_any:
@@ -69,6 +79,7 @@ def _evidence_lines(evidence: Iterable[Dict[str, Any]]) -> List[EvidenceLine]:
                     line=line_number,
                     content=content,
                     ref=f"{file_name}:{line_number}",
+                    score=item_score,
                 ),
             )
     return sorted(lines.values(), key=lambda item: (item.file, item.line))

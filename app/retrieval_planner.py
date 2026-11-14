@@ -829,6 +829,13 @@ def assess_retrieval_support(
             # 若源码使用完全不在目录中的新业务词，item_concepts 为空，仍保留
             # 原来的四字中文锚点路径，避免词表变成业务准入白名单。
             if item_concepts and len(item_domain_concepts) < 2:
+                # 活动配置文件名本身不含中文，但是 `config.php` 内的 pushmsg、
+                # 关卡名会完整出现四字以上活动名。此类命中已经由代码检索验证
+                # 过字面重合，即使概念目录只覆盖一个领域词，也应允许继续读取
+                # 配置和同活动服务，否则“失落的文明”这类新活动永远无法定位。
+                if longest_term >= 4 and file_name.endswith("/config.php"):
+                    direct_anchor_count += 1
+                    continue
                 rejected_generic_anchor_count += 1
                 continue
             direct_anchor_count += 1

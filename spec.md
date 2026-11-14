@@ -1,251 +1,180 @@
-# 阶段 35 规格：自动派生的项目知识库
+# 阶段 37 规格：配置问答长尾修复与题库第一轮全绿
 
 ## 一、目标与边界
 
 ### 目标
 
-为每个已索引项目自动派生三类可重建知识，降低“遇到新业务名/新活动就要改代码或加映射”的频率：
+以 `tests/diagnosis-test-questions.md` 的 A/D/H 共 45 题（`use_ai=false`）为验收集，
+把当前 29/45 的通过数提升到全绿，且修复必须是可复用的通用能力：
 
-1. **项目术语表**：中文业务词 ↔ 真实代码标识（类名、方法名、文件名干、目录名、配置键、运行时模型扩展词）。
-2. **配置结构摘要**：由诊断过程中已读入证据窗口的 PHP 配置自动落库，记录文件、数组路径、键名、值类型、分支和脱敏展示值。
-3. **已验证结论库**：把已完成诊断的确定性结论带证据引用、按问题哈希与代码指纹保存；反馈为“正确”才升级为 `verified`，只作为检索候选提示，**绝不进入新的 `conclusion`**。
+1. 活动配置文件被选入证据后，必须读取完整文件窗口，不能只看命中行附近。
+2. 中文营销名无法在源码中找到同名目录时，仍能按“问题中文片段 + 活动展示词 + 英文目录语义”
+   选择正确活动，不新增“中文名 → 目录”硬编码表。
+3. 配置数组选择必须按问题意图区分：监听类型、第 N 名、个人等级、送礼阶段、奖励引用、
+   布尔开关过滤，不能用同文件名称最多或数字最多的数组抢答。
+4. 奖励 `id` 必须解析到同文件奖品定义表后再渲染，不能只输出 id 或渲染无关等级。
 
-### 硬性边界
+### 边界
 
-- 知识库必须**自动派生、可按代码指纹重建**，不新增人工维护的业务文档。
-- 知识库只影响**检索与术语扩展**，不得改变既有确定性结论的生成逻辑。
-- 配置结构只保存 `config_graph` 已过滤的安全值；密钥、令牌、URL、路径、邮箱一律不落库明文。
-- 任何知识库读写失败都必须静默降级，诊断主流程继续使用现有静态概念与真实源码检索。
-- 所有新增/修改代码、迁移、配置必须带中文注释，满足 AGENTS.md 注释覆盖要求。
+- 结论只输出源码字面值；不输出密钥、令牌、密码、URL、内网地址、文件路径或翻译键。
+- 不写题目 → 答案映射，不写活动中文名 → 目录的固定字典；只允许通用双语词根
+  （`新版 → new`、`旧版 → old`）和通用配置键别名。
+- 不提交 Git，阶段完成后等待用户审阅。
 
-## 二、现状依据（已确认）
+## 二、已确认根因（来自 `/tmp/diag-round1.json` 与源码核对）
 
-| 项目 | 现状 |
-|---|---|
-| 工作区 | `main`，最新提交 `9f5b6dc`，无未提交改动 |
-| 迁移 | `migrations/001..024` 连续编号，下一个为 `025` |
-| 符号索引 | `app/php_index.py::index_repository` 返回 `symbols/references/configs/sql` |
-| 索引缓存 | `app/project_index_cache.py` gzip + Redis，`decode_index` 只保留四类键 |
-| 索引落库 | `app/task_store.py::replace_symbol_index_if_changed`，按项目咨询锁与指纹去重 |
-| 诊断编排 | `app/diagnosis_workflow.py`：约 1939 行加载索引、1967 行术语扩展、2209 行落符号索引、2337 行确定性结论 |
-| 术语扩展 | `app/term_expansion.py::expand_question_terms`，模型候选 + 索引真实性校验 + Redis 缓存 v3 |
-| 配置图 | `app/domain/diagnosis/config_graph.py::parse_config_graph(lines) -> ConfigGraph`，含 `entries/env_values` |
-| 结论路由 | `app/business_analysis.py::build_deterministic_findings`，按 `QuestionType` 分流 |
-| API 惯例 | `request.app.state.db_pool`、`require_project_access`、`APIRouter(prefix=...)`、`main.py` 注册 |
-| 前端 | 单文件 `static/index.html`（约 2355 行），`apiFetch` 调用 `/api/projects` 等 |
-| 反馈 | `diagnostic_feedback` 的 `rating` 含 `correct/inaccurate/insufficient_evidence/escalate` |
+1. **完整配置窗口未生效（首要根因）**
+   `app/diagnosis_workflow.py` 的 `_full_config_window_files()` 返回原始大小写路径，
+   而调用侧用 `evidence_key = file.casefold()` 做成员判断。驼峰目录
+   （`gameRanking`、`giftWeekStarNew`、`lostCivilization`、`guildTreasureHunt`）
+   因此拿到 `config.php:1-1` 的占位证据，`allow_types`、`rank_prizes`、`levels`、
+   `is_can_jump_x`、`year` 都不在窗口内。直接导致 A-12、A-13、D-7、D-8、D-12、
+   H-2、H-3、H-9、H-11 失败。
+2. **同目录配置占位证据没有独立预算**
+   `_sibling_config_evidence()` 只产生 `line=1`、`content="<?php"` 的占位项；
+   即使进入完整窗口逻辑，也容易被 `_select_diagnostic_evidence()` 的通用预算挤掉。
+3. **活动根选择缺少展示词信号**
+   `scoped_config_evidence()` 只用中文锚点、概念词、术语和检索相关度评分。
+   中文营销名（游戏榜、公会寻宝）在活动 `config.php` 中没有同名文本时，多个活动的
+   配置会打平，被行数更多的错误活动抢占。
+4. **枚举/取值选择未覆盖问法**
+   - “监听哪些……类型”没有进入计数/枚举分支，落到配置取值，返回 `stime/test`。
+   - “第 1 名 / 第 6 名”未命中 `rank_prizes`，被 `extra`、`prizes` 数组抢占。
+   - “第 3 个个人等级门槛”被 `day_rank_top_prizes(rank=3)` 抢占。
+   - `rank_prizes` 中的奖品 `id` 未解析到 `prizes[id]` 定义。
+   - “哪些阶段支持跳转 X”未按 `is_can_jump_x=1` 过滤。
+5. **活动服务/数据库证据缺失**
+   A-18 问期数来源、A-19 问结算表与防重，当前证据没有
+   `Logic/giftWeekStarNew/service/GiftWeekStarSettlementService.php`，导致空结论。
 
-## 三、数据模型（`migrations/025_create_project_knowledge.sql`）
+## 三、代码变更清单
 
-### 3.1 `project_glossary`
+### 3.1 `app/diagnosis_workflow.py`
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | BIGSERIAL PK | 主键 |
-| `project` | VARCHAR(100) NOT NULL | 项目标识 |
-| `term` | VARCHAR(200) NOT NULL | 中文业务词（去空白后的原词） |
-| `code_term` | VARCHAR(255) NOT NULL | 真实代码标识或文件名干/目录/配置键 |
-| `term_kind` | VARCHAR(32) NOT NULL | `symbol`/`file`/`directory`/`config_key`/`runtime` |
-| `source` | VARCHAR(32) NOT NULL | `comment`/`symbol`/`path`/`config_key`/`llm` |
-| `evidence_ref` | TEXT | `文件:行号` 或相对路径 |
-| `confidence` | NUMERIC(4,3) NOT NULL | 0.000–1.000，注释与符号 0.8，LLM 沉淀 0.5 |
-| `repository_fingerprint` | CHAR(64) NOT NULL | 生成该条目的代码快照指纹 |
-| `created_at/updated_at` | TIMESTAMPTZ | 审计时间 |
+- `_full_config_window_files(question, evidence)`
+  - 返回值统一归一化：`path.replace("\\", "/").casefold()`，与调用侧
+    `evidence_key` 同一口径；保留最多 3 个文件，优先问题英文标识命中的活动。
+  - 逻辑变化：先按 `_activity_root` 分组配置，再按“问题中英文标识命中目录名 >
+    证据相关度总和 > 文件数量”排序取前 3；不再无条件返回全部配置。
+- `_sibling_config_evidence(...)`
+  - 占位项补 `line_start=1`、`line_end=1`，保留 `type="sibling_config"` 标记；
+    仅在活动目录确实存在 `config.php` 时加入。
+- `_select_diagnostic_evidence(...)`
+  - 新增 `sibling_config` 独立预算（最多 6 条），在通用预算之前保留，
+    避免占位配置被 64 条上限挤掉。
+- 新增 `_activity_service_evidence(root, project, question, evidence, limit=3)`
+  - 当问题命中活动目录、且证据里只有 `config.php` 时，按真实目录补入
+    `service/*.php`、`controller/*.php`、`*Boot.php`（最多 3 个），供 A-18/A-19
+    读取数据库表名、`existsByVol` 等确定性事实；不读取数据库内容。
 
-约束：`UNIQUE (project, term, code_term)`；索引 `(project, term)`、`(project, repository_fingerprint)`。
+### 3.2 `app/domain/diagnosis/analyzers/configuration.py`
 
-### 3.2 `project_config_structure`
+- `_scope_identifier(question, lines)`
+  - 保持现有英文目录匹配；新增：当问题含“新版/旧版”时，把 `新版→new`、`旧版→old`
+    作为通用目录语义提示，参与目录匹配打分。
+- 新增 `_CHINESE_DIRECTORY_HINTS`（仅 `新版/new`、`旧版/old` 两组通用词根）。
+- 新增 `_activity_display_terms(lines) -> Dict[str, Tuple[str, ...]]`
+  - 从每个活动根的证据行中抽取面向用户的展示词：`title`、`app_nick`、`pushmsg`
+    中文串、`name.zh`、同行/上一行中文注释；只保留 2-40 字中文片段，过滤 URL、
+    路径、翻译键、密钥。用于把“公会寻宝”匹配到含“寻宝/公会夺宝赛”的活动。
+- 新增 `_activity_alias_score(question, root_lines) -> int`
+  - 用问题中文双向片段（2-6 字）与活动展示词、目录名、英文配置键做重合打分；
+    四字以上完整片段权重更高；不做任何活动专属映射。
+- `scoped_config_evidence(...)`
+  - 评分改为 `anchor_score + alias_score + concepts + config/other 完整度 +
+    term_hit + relevance`；`alias_score` 仅用于业务相关度，不直接生成事实。
+  - 保留 `qualified` 规则：只有配置文件的目录必须命中中文展示词或术语。
+- `_dominant_activity_lines(...)`
+  - 同步加入 `_activity_alias_score`，与 `scoped_config_evidence` 同一口径。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | BIGSERIAL PK | 主键 |
-| `project` | VARCHAR(100) NOT NULL | 项目标识 |
-| `file` | TEXT NOT NULL | 配置相对路径 |
-| `array_path` | TEXT NOT NULL | 数组路径，如 `prize.1` |
-| `key_name` | VARCHAR(255) NOT NULL | 键名 |
-| `value_kind` | VARCHAR(32) NOT NULL | `numeric`/`bool`/`constant`/`label`/`env_test`/`env_production` |
-| `display_value` | TEXT | 已脱敏安全值；敏感/地址项为空 |
-| `branch` | VARCHAR(16) | `test`/`production`/空 |
-| `line` | INT NOT NULL | 源码行号 |
-| `repository_fingerprint` | CHAR(64) NOT NULL | 代码快照指纹 |
-| `observed_at` | TIMESTAMPTZ | 最近观测时间 |
+### 3.3 `app/domain/diagnosis/config_graph.py`
 
-约束：`UNIQUE (project, file, array_path, key_name, branch)`；索引 `(project, key_name)`、`(project, file)`。
+- `_KEY_INTENT_ALIASES` 增补通用别名：
+  - `类型/监听/发奖 → type/types/allow_types/allow`
+  - `等级/档位/阶段/遗迹 → levels/stage/stages/level`
+  - `跳转 → is_can_jump_x/jump/jump_x`
+  - `奖励/奖品/名次` 保持既有别名，并补 `rank_prizes`。
+- `enumeration_facts(question)`
+  - 计数/枚举门控加入“哪些、哪几、有哪几种、监听哪些”；不再要求出现数字或结构词。
+  - 候选排序新增：
+    - 问题意图键命中数组内键或组注释 `+30`；
+    - 问题“第 N 名”命中数字键 `+25`；
+    - 问题“等级/档”且组内含 `limit`、不含 `rank/top_prizes` 时 `+20`；
+    - 组内成员数等于问题数量约束时 `+25`。
+  - 新增引用解析 `_resolve_prize_references(entries, graph)`：
+    当枚举项含 `id` 且同文件存在以该 id 为键的奖品定义表（`prizes`、`prize`、
+    `goods` 等）时，把 `type/num/name/days/gid` 合并进事实；不写死表名。
+- `_enumeration_candidates(...)`
+  - “第 N 名”使用正则 `第\s*[一二三四五六七八九十\d]+\s*名`，且仅对
+    `rank/top/prizes` 前缀组生效；`第 N 档/级/个` 仅对匿名 `levels` 组生效。
+  - 问题不含“榜/排名/名次”时，排除 `day_rank*`、`top_prizes` 组。
+- `_count_facts(question)`
+  - “哪些/监听哪些”输出数量 + 成员取值（数字或名称，≤12 个）；
+    A-12 输出 `11` 与 `allow_types` 的 11 个类型编码。
+- `_render_levels(...)`
+  - 支持布尔字段过滤：问题含“跳转/支持”，只渲染 `is_can_jump_x=1` 的等级，
+    并输出 `name.zh`；问题含“奖励”，优先解析 `prizes` 引用。
+- `parse_config_graph(...)`
+  - 为匿名 `levels` 列表补充成员总数；保持 1 起连续编号派生逻辑。
 
-### 3.3 `project_verified_conclusions`
+### 3.4 `app/question_type.py`
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | BIGSERIAL PK | 主键 |
-| `project` | VARCHAR(100) NOT NULL | 项目标识 |
-| `question_hash` | CHAR(64) NOT NULL | 规范化问题的 SHA-256 |
-| `question` | TEXT NOT NULL | 原始问题 |
-| `conclusion` | TEXT NOT NULL | 历史确定性结论 |
-| `confirmed_facts` | JSONB NOT NULL DEFAULT '[]' | 事实摘要，不含源码全文 |
-| `evidence_refs` | JSONB NOT NULL DEFAULT '[]' | 证据引用 |
-| `status` | VARCHAR(16) NOT NULL | `candidate`/`verified`/`expired`/`rejected` |
-| `source_task_id` | VARCHAR(64) | 来源任务 |
-| `repository_fingerprint` | CHAR(64) NOT NULL | 生成时代码指纹 |
-| `verified_at` | TIMESTAMPTZ | 反馈确认时间 |
-| `expires_at` | TIMESTAMPTZ | 过期时间，默认 90 天 |
-| `created_at/updated_at` | TIMESTAMPTZ | 审计时间 |
+- `classify_question(...)`：
+  - “哪些/哪几/有哪几种/监听哪些”统一视为 `CONFIG_ENUMERATION`；
+  - “第 N 名”视为枚举；点号键、反引号键仍视为 `CONFIG_LOOKUP`。
 
-约束：`UNIQUE (project, question_hash)`；索引 `(project, status, updated_at DESC)`。
+### 3.5 `tests/test_generic_config_engine.py`
 
-## 四、模块设计
+新增回归（全部使用构造源码，不依赖 waky3 私有数据）：
 
-### 4.1 `app/project_knowledge.py`（新建）
+1. 驼峰目录 `gameRanking/config.php` 完整窗口能枚举 `allow_types` 11 项。
+2. `rank_prizes` + `prizes[id]` 引用解析：第 1 名 100 美元、第 6 名 80000 金币。
+3. 匿名 `levels` 第 3 档 `limit` 不被 `day_rank_top_prizes(rank=3)` 抢占。
+4. `is_can_jump_x=1` 只返回 3 个支持跳转阶段。
+5. `giftWeekStarNew` 与 `giftWeekStar` 同时出现时，“新版”选中 `year=2026`。
+6. 活动展示词评分：中文名只出现在 pushmsg 时仍能选中正确目录。
 
-职责：知识库抽取、落库、指纹失效、查询、结论候选管理；不访问源码正文之外的仓库文件，不调用模型。
+## 四、验收标准
 
-函数清单：
+- `/tmp/run_diag_round1.py` 重跑后：
+  - A/D/H 45 题通过数 ≥ 42，并且以下题必须通过：
+    A-12（11 与 allow_types）、A-13（100/80000/60000）、D-2（0.05）、
+    D-7（100）、D-8（80000）、D-12（2026 与 ACTIVITY_GIFT_WEEK_STAR）、
+    D-14（1500000）、H-2（200000/1000000/2000000/4000000）、
+    H-3（Bubble/Room background/Entrance show）、H-9（五阶段门槛）、
+    H-11（佩特拉古城/长城/吴哥窟）。
+  - 剩余未通过题必须给出明确证据缺口说明，不能出现错误数值。
+- `.venv/bin/python -m pytest -q` 全绿。
+- `python3 scripts/check_comment_coverage.py` 通过。
+- `node scripts/check_frontend_syntax.js` 通过。
+- `git diff --check` 通过。
 
-| 函数 | 行为 | 返回/异常 |
-|---|---|---|
-| `question_hash(question)` | 规范化（小写、去空白）后 SHA-256 | `str` |
-| `extract_glossary(index, project)` | 从 `index["glossary"]` 生成 `GlossaryEntry` 列表，去重、截断超长中文词、置信度 0.8 | `list[GlossaryEntry]` |
-| `replace_project_glossary_if_changed(pool, project, fingerprint, index)` | 咨询锁内比较 `project_glossary` 现有指纹与预计条数；一致则跳过，否则整项目替换（先删后批量 upsert） | `dict`：`updated/entry_count/previous_count/skipped_reason` |
-| `load_glossary_terms(pool, project, question, limit=8)` | 查 `term` 是否为问题子串，按置信度与更新时间排序 | `dict`：`status/terms/entries/reason` |
-| `record_runtime_glossary(pool, project, fingerprint, question, terms)` | 把模型扩展词与问题中文锚点配对，`source='llm'`、`term_kind='runtime'`、置信度 0.5，upsert | `int` 写入条数 |
-| `record_config_structure(pool, project, fingerprint, entries, env_values)` | 把 `ConfigEntry`/`ConfigEnvValue` 转为结构记录并 upsert；敏感键与地址值只存 `value_kind`，不存明文 | `int` 写入条数 |
-| `load_config_structure(pool, project, file="", key="", limit=20)` | 供 API 与检索审计读取结构摘要 | `list[dict]` |
-| `save_candidate_conclusion(pool, project, fingerprint, task_id, question, conclusion, facts, evidence_refs)` | 空结论跳过；upsert `candidate`，指纹变化时重置为 `candidate` 并刷新时间 | `bool` |
-| `load_conclusion_candidates(pool, project, question, fingerprint, limit=3)` | 只返回 `status in ('candidate','verified')`、未过期、指纹一致的结果 | `list[dict]` |
-| `apply_feedback_to_conclusion(pool, project, question, rating)` | `correct` → `verified` 且 `verified_at/expires_at`；`inaccurate` → `rejected`；其余不变 | `str` 新状态或空字符串 |
-
-降级约定：所有 async 函数内部捕获 SQL 异常并返回空结果/0，同时 `logger.warning` 记录 `error_type`，不抛给诊断主流程；仅 `rebuild` 类显式接口允许抛出并转换 503。
-
-### 4.2 `app/php_index.py`（修改）
-
-- `parse_php_source` 新增返回键 `glossary`：识别中文注释与相邻声明/配置键，生成
-  `{"term","code_term","term_kind","source","file","line","confidence"}`。
-- `index_repository` 的默认结果增加 `"glossary": []`，逐文件合并。
-- 判定规则：
-  - 类/接口/trait/function 声明前 3 行或同一行的中文注释 → `term_kind=symbol`；
-  - 目录名或文件名干必须在同一中文注释块中出现 → `term_kind=file/directory`；
-  - `'key' =>` 同行中文注释 → `term_kind=config_key`；
-  - 中文词长度 2–40，去掉注释符号、数字标点与空白后仍含中文才保留；
-  - 单文件最多 200 条，避免超大注释文件撑爆索引。
-
-### 4.3 `app/project_index_cache.py`（修改）
-
-- `decode_index` 增加可选 `glossary` 列表校验：缺失或类型非列表时视为空列表，其余四类仍严格校验。
-- 编码无需改动（`encode_index` 已序列化全部键）。
-
-### 4.4 `app/term_expansion.py`（修改）
-
-- `expand_question_terms` 新增关键字参数 `glossary_terms: Iterable[str] = ()`。
-- 流程改为：
-  1. 先用 `_validation_tokens(project_index)` 校验知识库词，保留真实词；
-  2. 若知识库已验证词非空，返回 `status="glossary_hit"`，不再调用模型；
-  3. 否则沿用现有 Redis 缓存与模型流程；
-  4. 返回值新增 `glossary_term_count`，`reason` 说明命中来源。
-- 兼容性：不改变原有缓存键版本语义，知识库命中不写 Redis。
-
-### 4.5 `app/diagnosis_workflow.py`（修改）
-
-- 加载索引后、术语扩展前：
-  - `await load_glossary_terms(pool, project, question, limit=8)`；
-  - 将 `terms` 传入 `expand_question_terms(..., glossary_terms=...)`；
-  - 知识库查询元数据写入 `expanded_term_summary["glossary"]`。
-- 术语扩展产生 `status=="succeeded"` 且有词时，调用 `record_runtime_glossary`。
-- `replace_symbol_index_if_changed` 成功后调用 `replace_project_glossary_if_changed`，异常写入 `warnings`。
-- 确定性结论生成后：
-  - 用证据行构造 `parse_config_graph`，调用 `record_config_structure`；
-  - 调用 `save_candidate_conclusion`；
-  - `load_conclusion_candidates` 结果只写入 `retrieval_plan["candidate_conclusions"]`，字段含 `not_used_in_conclusion: true`。
-- 所有知识库失败只追加 warning，不改变任务状态。
-
-### 4.6 `app/feedback_api.py`（修改）
-
-- 在反馈成功写入后调用 `apply_feedback_to_conclusion`；异常只记录日志，不影响反馈响应。
-
-### 4.7 `app/knowledge_api.py`（新建）
-
-`APIRouter(prefix="/api/knowledge", tags=["knowledge"])`：
-
-| 方法 | 路径 | 行为 |
-|---|---|---|
-| GET | `/{project}/summary` | 三类知识的条目数、最近指纹、指纹是否与 `project_symbol_indexes` 一致 |
-| GET | `/{project}/glossary` | `term` 模糊过滤、`limit` 1–100 |
-| GET | `/{project}/config` | 按 `file`/`key` 过滤、`limit` 1–100 |
-| GET | `/{project}/conclusions` | 按 `status` 过滤、`limit` 1–50 |
-| POST | `/{project}/rebuild` | 从 `code_symbols` + `project_symbol_indexes` 重建术语表，不扫描仓库 |
-
-- 全部使用 `require_project_access`；数据库缺失返回 503。
-- `rebuild` 需要在 `project_knowledge.py` 增加 `rebuild_glossary_from_code_symbols(pool, project)`：按 `project_symbol_indexes.repository_fingerprint` 把 `code_symbols.symbol_name/file_path` 组装成伪索引后复用 `extract_glossary`。
-
-### 4.8 `app/main.py`（修改）
-
-- 导入并注册 `knowledge_router`。
-
-### 4.9 `app/settings.py` + `.env.example`（修改）
-
-- 新增 `project_knowledge_enabled: bool = True`；关闭时 `load_glossary_terms` 直接返回 `disabled`，不写库。
-- `.env.example` 增加分组注释与示例值。
-
-### 4.10 `static/index.html`（修改）
-
-- 在项目概览卡片下新增“项目知识库”卡片：
-  - 展示术语数、配置结构数、结论数、指纹一致状态；
-  - “刷新知识库”按钮调用 `POST /api/knowledge/{project}/rebuild`；
-  - 术语输入框按中文词查询，结果展示“中文词 → 代码词（类型/来源）”。
-
-### 4.11 `progress.md`（修改）
-
-- 追加“阶段 35”记录：完成范围、验证结果、剩余项、下一步。
-
-## 五、验收标准
-
-1. 迁移 `025` 可被 `apply_migrations` 顺序应用，三张表、唯一键、索引与中文备注齐全。
-2. 索引构建后，`project_glossary` 自动出现注释派生词；同指纹重复运行不重写。
-3. 代码指纹变化后，术语表与结论候选自动失效或重建，不返回旧指纹数据。
-4. 术语扩展命中知识库时状态为 `glossary_hit` 且不调用模型；未命中时保持原 `succeeded/degraded` 语义。
-5. 配置结构只含安全值，敏感键/地址类不出现明文。
-6. `conclusion` 与阶段 34 行为一致；候选结论只出现在 `retrieval_plan.candidate_conclusions`。
-7. 反馈 `correct` 后对应结论为 `verified`；`inaccurate` 后为 `rejected`。
-8. 知识库接口在数据库不可用时返回 503，不导致服务启动失败。
-9. 前端知识库卡片可加载摘要、查询术语、触发重建。
-10. `pytest` 全量通过（新增 `tests/test_project_knowledge.py`），注释覆盖、前端语法、`git diff --check` 通过。
-11. 真实 E2E：waky3 的“游戏榜前 10 名奖励”“VIP 1-12 奖品”“FIFA2026 奖池”“fupay 商户号”结论与阶段 34 一致，且 `retrieval_plan` 出现知识库元数据。
-
-## 六、测试计划
-
-`tests/test_project_knowledge.py`：
-
-- 术语抽取：中文注释 + 类声明、配置键、目录名；长度过滤；单文件上限。
-- 指纹失效：同指纹跳过、不同指纹替换、条数变化替换。
-- 知识库查询：问题子串命中、无命中、数据库异常降级。
-- 术语扩展：`glossary_hit` 跳过模型、知识库词经真实性校验。
-- 配置结构：数字/布尔/常量落库，敏感键与 URL 不落明文。
-- 结论候选：保存、过期过滤、指纹不一致过滤、反馈状态流转。
-- API：summary/glossary/config/conclusions/rebuild，数据库缺失 503。
-- 回归：`build_deterministic_findings` 不读取候选结论。
-
-## 七、验证命令
+## 五、验证命令
 
 ```bash
 .venv/bin/python -m pytest -q
 python3 scripts/check_comment_coverage.py
 node scripts/check_frontend_syntax.js
 git diff --check
+docker compose build api worker
+docker compose up -d api worker
+python3 /tmp/run_diag_round1.py
 ```
 
-E2E 需要重建镜像后执行：
+H-7 单独重跑并记录耗时，确认是队列超时还是配置枚举缺陷；若为超时，调整该题轮询
+与队列并发，不改业务结论。
 
-```bash
-docker compose build api worker && docker compose up -d api worker
-```
+## 六、明确不做
 
-## 八、明确不做
+- 不新增“活动中文名 → 目录”固定映射表。
+- 不为任何单题写 if/else 或预期值。
+- 不把注释中的百分比当作可执行事实。
+- 不输出密钥、URL、路径、翻译键。
+- 不主动 commit。
 
-- 不新增人工维护的业务知识文档或映射表。
-- 不把知识库结论直接拼进 `conclusion`。
-- 不做全仓配置明文落库或密钥缓存。
-- 不为单一业务活动新增专属分析器。
+## 七、风险与回滚
 
-## 九、风险与回滚
-
-- 迁移失败：`025` 仅新增表与索引，可直接回滚（删除三表），不影响既有诊断表。
-- 知识库写入放大：批量插入受单次 500 条与索引条数上限约束；失败静默降级。
-- 指纹误判：复用 `repository_fingerprint`，与现有符号索引保持同一口径。
+- 完整配置窗口上限从“全部”收敛到 3 个，避免证据和耗时膨胀；若误伤，可回退
+  `_full_config_window_files` 的排序部分，保留大小写归一化。
+- `util` 新增展示词评分只在多活动并列时起作用，单活动路径行为不变。
+- 所有改动集中在诊断分析层，不影响任务队列、数据库和前端；回滚按文件粒度即可。
