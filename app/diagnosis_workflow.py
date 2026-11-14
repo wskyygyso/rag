@@ -21,6 +21,7 @@ from app.task_store import (
     update_task,
 )
 from app.task_store import replace_symbol_index_if_changed
+from app.activity_aliases import load_approved_activity_aliases
 from app.business_analysis import build_deterministic_findings
 from app.domain.diagnosis.analyzers.registry import ANALYZER_REGISTRY
 from app.settings import get_settings
@@ -2890,7 +2891,17 @@ async def execute_diagnosis(task_id: str) -> None:
                 str(index_prepare_summary.get("fingerprint") or ""),
             )
             activity_link_payload = {"available": bool(activity_records)}
-            linked = link_activity(current["question"], activity_records)
+            # 人工登记并启用的别名优先于源码启发式：存储层读取失败会返回空映射，
+            # 诊断继续按仓库真实文案链接，不因别名表异常中断主流程。
+            approved_aliases = await load_approved_activity_aliases(
+                pool,
+                current["project"],
+            )
+            linked = link_activity(
+                current["question"],
+                activity_records,
+                approved_aliases=approved_aliases,
+            )
             if linked is not None:
                 known_files = list(
                     dict.fromkeys(
@@ -2911,6 +2922,8 @@ async def execute_diagnosis(task_id: str) -> None:
                     "config_file": linked.record.config_file,
                     "score": linked.score,
                     "matched_terms": list(linked.matched_terms),
+                    # 人工登记别名审计：本次链接命中的中文叫法，未命中时为空。
+                    "feedback_alias": linked.feedback_alias,
                     "ambiguous": linked.ambiguous,
                     "level_key": linked.record.level_key,
                     "level_field": linked.record.level_field,

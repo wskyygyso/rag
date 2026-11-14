@@ -32,12 +32,12 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 | 项目 | 状态 |
 |---|---|
-| 当前阶段 | 阶段 40：扩展活动知识库结构化事实 |
-| 总体进度 | 99%（阶段 0 至 40 已完成；生产 embedding 吞吐待补齐） |
+| 当前阶段 | 阶段 41：可审计的反馈活动别名表 |
+| 总体进度 | 99%（阶段 0 至 41 已完成；生产 embedding 吞吐待补齐） |
 | 最近更新 | 2026-11-15 |
 | 当前负责人 | Codex |
-| 当前阻塞 | 生产 embedding 吞吐仍需更高配额；`鉴定大师` 在 waky3 无中文数据别名，B3 按缺口返回 |
-| 下一步 | 用户审阅阶段 40 工作区改动，确认后使用中文 commit 提交 |
+| 当前阻塞 | 生产 embedding 吞吐仍需更高配额；其余能力已具备生产交付条件 |
+| 下一步 | 进入阶段 42：生产交付前置检查与剩余阻塞收敛 |
 
 ## 阶段进度
 
@@ -84,10 +84,83 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 | 38 | VIP 升级门槛可答、结论可读化与证据缺口门控 | 已完成（含真实 E2E） | 100% |
 | 39 | 项目活动知识库与实体链接 | 已完成（含真实 E2E） | 100% |
 | 40 | 扩展活动知识库结构化事实 | 已完成（含真实 E2E） | 100% |
+| 41 | 可审计的反馈活动别名表 | 已完成（含真实 E2E，24/24） | 100% |
 
 ---
 
 ## 阶段性提交记录
+
+### 2026-11-15：阶段 41 可审计的反馈活动别名表
+
+#### 本次推进
+
+- 新增迁移 `migrations/026_create_project_activity_aliases.sql`：
+  - 表 `project_activity_aliases` 按项目隔离，`UNIQUE (project, alias)` 保证同一
+    叫法只指向一个活动；
+  - 状态只有 `approved`/`rejected`，停用保留记录；来源固定为人工反馈；
+  - 保存 `created_by/updated_by`、说明和时间，并建立 `(project, status)` 索引；
+  - 全部表、字段和索引补充中文备注。
+- 新增 `app/activity_aliases.py`：
+  - `normalize_alias` 只接受 2 至 40 字中文业务叫法，拒绝 URL、图片路径、邮箱、
+    翻译键和通用问句词；`鉴定大师` 去掉“大师”后仍保留“鉴定”，允许登记，
+    `活动等级` 这类纯问句词组合被拒绝；
+  - `normalize_activity_id` 只接受字母、数字、`_ . -`，拒绝路径和上跳；
+  - 登记使用 `ON CONFLICT (project, alias) DO UPDATE` 幂等覆盖并重新启用；
+  - `load_approved_activity_aliases` 只返回启用记录，数据库异常记录告警并返回
+    空映射，不中断诊断。
+- `app/domain/diagnosis/activity_kb.py`：
+  - `ActivityLink` 新增 `feedback_alias` 审计字段；
+  - `link_activity` 新增 `approved_aliases` 参数：先匹配最长人工别名，命中且目标
+    活动存在时直接返回映射活动（同长度指向不同活动时返回歧义）；目标活动已
+    不存在时忽略别名并回退原启发式，未传别名时行为与阶段 40 完全一致。
+- `app/diagnosis_workflow.py`：
+  - 诊断前读取已启用别名并传入 `link_activity`；
+  - `retrieval_plan.activity_link` 新增 `feedback_alias`，真实任务审计显示
+    `activity_id=gemMaster`、`matched_terms=["鉴定大师"]`、`score=232`。
+- `app/knowledge_api.py` 新增接口：
+  - `POST /api/knowledge/{project}/activity-aliases`：登记前校验项目权限、别名
+    格式、知识库可用和目标活动存在，非法或未知目录返回 422，知识库不可用 503；
+  - `GET /api/knowledge/{project}/activity-aliases`：按状态列出，默认 50 条；
+  - `POST /api/knowledge/{project}/activity-aliases/{id}/status`：启用/停用；
+  - `GET /api/knowledge/{project}/activity-candidates`：按关键字返回活动目录、
+    配置路径和前几个中文别名，供前端选择目标活动。
+- `static/index.html`：
+  - 项目知识库面板新增“人工反馈别名”区块，支持查询候选活动、一键填入目标目录、
+    登记别名、查看操作人/时间和启用/停用；
+  - 项目切换和项目数据刷新时同步更新，新增 JavaScript 函数均带 JSDoc 注释。
+- 新增 `tests/test_activity_aliases.py` 9 项测试（规范化、存储参数、读取降级、
+  API 登记/列表/状态/候选、非法与未知目标、知识库不可用拒绝）；
+  `tests/test_activity_kb.py` 新增 4 项人工别名链接测试（命中、目标缺失、同长度
+  冲突、未传参兼容）；`tests/test_migrations.py` 同步为 26 个迁移。
+- `tests/diagnosis-acceptance-round2.md` 的 B3 期望值更新为当前
+  `gemMaster/config.php` 的 `levels[*].limit` 代码字面值
+  （80000/200000/1000000/3000000），并注明以代码字面值为准。
+
+#### 本次验证
+
+- `.venv/bin/python -m pytest -q`：`414 passed`；
+- `python3 scripts/check_comment_coverage.py`：通过；
+- `node scripts/check_frontend_syntax.js`：通过；
+- `git diff --check`：通过；
+- 容器内执行 `scripts/migrate_database.py`：`APPLIED 026_create_project_activity_aliases.sql`；
+- 真实 waky3 候选查询：`gemMaster` 返回 4 个等级、中文别名
+  `珠宝代言人/业余/通晓/资深人士/鉴宝专家`；
+- 通过 API 登记 `鉴定大师 → gemMaster` 后重跑 24 题验收：`24/24`；
+  - B3 由数据缺口转为可答，结论为
+    `业余 80000；通晓 200000；资深人士 1000000；鉴宝专家 3000000`；
+  - 其余 23 题保持通过，E1–E3 仍按缺口返回。
+
+#### 当前状态与缺口
+
+- 阶段 41 完成；人工别名表可登记、可停用、可审计，并只在目标活动真实存在时
+  参与链接。
+- B3 数据缺口已通过人工反馈闭环解决，未引入任何活动中文名硬编码或题目答案映射。
+- 剩余阻塞仅为生产 embedding 吞吐配额，与本阶段无关。
+
+#### 下一步
+
+- 进入阶段 42：生产交付前置检查（发布门禁、迁移检查、监控与备份演练）与
+  剩余阻塞收敛。
 
 ### 2026-11-15：阶段 40 扩展活动知识库结构化事实
 

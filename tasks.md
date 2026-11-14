@@ -1,41 +1,47 @@
-# 阶段 40 任务清单：扩展活动知识库结构化事实
+# 阶段 41 任务清单：可审计的反馈活动别名表
 
-- [x] **T1 知识库结构化解析**
-  - [x] 新增 `ActivityLevel` / `ActivityPrize` dataclass 与 `ActivityRecord` 字段
-  - [x] 解析 `vol`/`year` 及行号
-  - [x] 解析 `levels` / `level` 等级表（序号、门槛、名称、奖励引用）
-  - [x] 解析顶层 `prizes` 奖励定义（id、name、type、num、days、行号）
-  - [x] 注释与安全边界说明同步更新
+- [x] **T1 数据模型与迁移**
+  - [x] 新增 `migrations/026_create_project_activity_aliases.sql`，含表、唯一约束、索引与中文备注
+  - [x] 确认迁移版本连续且能通过 `tests/test_migrations.py`
 
-- [x] **T2 后台活动登记与覆盖**
-  - [x] 枚举 `Logic/<name>/boot/config.php` 活动配置
-  - [x] 按 `crontab > Logic > action_activity > config > conf` 同名去重
-  - [x] 计算 `backend_registered` / `backend_config_file`
+- [x] **T2 存储模块**
+  - [x] 新增 `app/activity_aliases.py`：别名/活动目录规范化与校验
+  - [x] `upsert_activity_alias`、`list_activity_aliases`、`set_activity_alias_status`
+  - [x] `load_approved_activity_aliases` 数据库异常降级为空映射
+  - [x] 中文注释覆盖职责、参数业务含义、返回值与失败条件
 
-- [x] **T3 工作流交接**
-  - [x] `activity_link_payload` 增加期次、等级表、奖励表、后台登记字段
-  - [x] 保持歧义链接不产生可用事实
+- [x] **T3 活动链接接入**
+  - [x] `ActivityLink` 新增 `feedback_alias` 字段
+  - [x] `link_activity` 新增 `approved_aliases` 参数与最长别名优先匹配
+  - [x] 目标活动缺失时忽略别名；同长度冲突返回歧义
 
-- [x] **T4 确定性事实模块**
-  - [x] 新增 `app/domain/diagnosis/analyzers/activity_kb_facts.py`
-  - [x] `activity_structured_facts`：期次、后台登记
-  - [x] `activity_level_table_facts`：等级名称/门槛/奖励名逐级事实
-  - [x] 奖励引用按 `prizes` 快照解析，跳过无名奖励
+- [x] **T4 工作流接入**
+  - [x] 诊断执行前读取已启用别名并传入 `link_activity`
+  - [x] `retrieval_plan.activity_link` 增加 `feedback_alias` 审计字段
+  - [x] 别名读取失败只记录告警，不中断诊断
 
-- [x] **T5 问答接入**
-  - [x] `business_analysis.py` 期次/后台事实分支
-  - [x] 等级枚举为空时用知识库等级表兜底
-  - [x] 门槛缺口门控改为知识库事实存在时不缺口
-  - [x] 结论拼接 `活动结构化事实`
+- [x] **T5 API**
+  - [x] `POST /api/knowledge/{project}/activity-aliases` 登记
+  - [x] `GET /api/knowledge/{project}/activity-aliases` 列表
+  - [x] `POST /api/knowledge/{project}/activity-aliases/{id}/status` 启用/停用
+  - [x] `GET /api/knowledge/{project}/activity-candidates` 候选活动查询
+  - [x] 登记前校验项目权限与目标活动存在，知识库不可用返回 503
 
-- [x] **T6 单测与真实抽样**
-  - [x] `tests/test_activity_kb.py` 新增期次、等级表、奖励引用、后台登记、去重、降级测试
-  - [x] 真实 waky3 抽样：`loveBall` / `gemMaster` / `noble` 字段符合预期
+- [x] **T6 前端**
+  - [x] 项目知识库面板新增“人工反馈别名”区块
+  - [x] 候选活动查询与一键填入目标活动
+  - [x] 别名列表、启用/停用、摘要与错误提示
+  - [x] 项目切换与刷新时同步更新，JSDoc 注释完整
 
-- [x] **T7 回归与进度记录**
-  - [x] `.venv/bin/python -m pytest -q`（401 passed）
+- [x] **T7 测试与回归**
+  - [x] 新增 `tests/test_activity_aliases.py`（规范化、存储、API）
+  - [x] `tests/test_activity_kb.py` 新增别名链接、缺失目标、歧义、未传参兼容
+  - [x] `.venv/bin/python -m pytest -q` 全绿
   - [x] `python3 scripts/check_comment_coverage.py`
   - [x] `node scripts/check_frontend_syntax.js`
   - [x] `git diff --check`
-  - [x] 重建 api/worker 后重跑 24 题验收：`23/24`，唯一失败 B3 为数据缺口
+
+- [x] **T8 真实验收与文档**
+  - [x] 登记 `鉴定大师 → gemMaster` 后重跑 24 题验收（目标 `24/24`）
+  - [x] 抽查 `activity_link.feedback_alias` 审计字段
   - [x] 更新 `progress.md`，等待用户审阅，不主动 commit

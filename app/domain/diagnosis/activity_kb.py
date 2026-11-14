@@ -17,7 +17,7 @@
 from dataclasses import dataclass
 import os
 import re
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 # 单个配置文件读取上限。活动配置通常几十 KB，超过该值的文件多为导出数据或
 # 多语言全量文案，继续读取会显著拖慢一次全仓构建。
@@ -186,13 +186,15 @@ class ActivityLink:
     - `record`：得分最高的活动记录；
     - `score`：链接总分，只用于选择活动，不进入业务结论；
     - `matched_terms`：命中的目录名、别名或等级名，供审计解释；
-    - `ambiguous`：最高分与第二名分差不足时为 `True`，调用方必须按未链接处理。
+    - `ambiguous`：最高分与第二名分差不足时为 `True`，调用方必须按未链接处理；
+    - `feedback_alias`：本次链接由哪条人工登记别名触发，未命中别名时为空字符串。
     """
 
     record: ActivityRecord
     score: int
     matched_terms: Tuple[str, ...] = ()
     ambiguous: bool = False
+    feedback_alias: str = ""
 
 
 # 单进程缓存：`(仓库根, 项目)` → `(代码指纹, 活动记录)`。缓存只保存派生结构，
@@ -1238,12 +1240,79 @@ def _intent_flags(question: str) -> Dict[str, bool]:
     }
 
 
+def _find_activity_record(
+    records: Sequence[ActivityRecord],
+    activity_id: str,
+) -> Optional[ActivityRecord]:
+    """按活动目录名在知识库中查找唯一记录。
+
+    参数:
+        - `records`：当前项目活动知识库记录，类型为 `Sequence[ActivityRecord]`。
+        - `activity_id`：人工别名登记的目标活动目录名，类型为 `str`。
+
+    Returns:
+        目录名完全匹配的记录；大小写不一致时按折叠比较再查一次。为空或不存在
+        时返回 `None`，调用方必须忽略该别名，不能换成其他活动。
+    """
+    target = str(activity_id or "").strip()
+    if not target:
+        return None
+    for record in records:
+        if record.activity_id == target:
+            return record
+    folded = target.casefold()
+    for record in records:
+        if (record.activity_id or "").casefold() == folded:
+            return record
+    return None
+
+
+def _approved_alias_match(
+    question: str,
+    approved_aliases: Mapping[str, str],
+) -> Optional[Tuple[str, str, bool]]:
+    """在问题文本中匹配最长的人工登记别名。
+
+    参数:
+        - `question`：用户原始问题，类型为 `str`；匹配前会去掉空白，避免
+          “鉴定 大师”这类排版差异导致漏命中。
+        - `approved_aliases`：已启用的人工别名映射 `别名 → 活动目录`，类型为
+          `Mapping[str, str]`；只包含数据库 `approved` 记录。
+
+    Returns:
+        `(命中的最长别名, 目标活动目录, 是否冲突)`。没有任何别名命中时返回
+        `None`；多个同长度别名指向不同活动时 `是否冲突` 为 `True`，调用方必须
+        按歧义链接处理。
+    """
+    compact = re.sub(r"\s+", "", question or "")
+    if not compact or not approved_aliases:
+        return None
+    matches: List[Tuple[int, str, str]] = []
+    for alias, activity_id in approved_aliases.items():
+        cleaned = str(alias or "").strip()
+        if len(cleaned) < 2 or cleaned not in compact:
+            continue
+        matches.append((len(cleaned), cleaned, str(activity_id or "")))
+    if not matches:
+        return None
+    longest = max(item[0] for item in matches)
+    best = sorted(
+        (item for item in matches if item[0] == longest),
+        key=lambda item: (item[2], item[1]),
+    )
+    alias = best[0][1]
+    activity_id = best[0][2]
+    ambiguous = len({item[2] for item in best}) > 1
+    return alias, activity_id, ambiguous
+
+
 def link_activity(
     question: str,
     records: Sequence[ActivityRecord],
     *,
     min_score: int = 12,
     min_margin: float = 1.3,
+    approved_aliases: Optional[Mapping[str, str]] = None,
 ) -> Optional[ActivityLink]:
     """把用户问题链接到唯一活动记录。
 
@@ -1253,14 +1322,35 @@ def link_activity(
         - `min_score`：可接受的最低链接得分，类型为 `int`；低于该值返回 `None`。
         - `min_margin`：最高分与第二名的倍率门槛，类型为 `float`；用于拒绝
           分差不足的歧义链接。
+        - `approved_aliases`：人工登记并启用的别名映射，类型为
+          `Optional[Mapping[str, str]]`；问题命中时优先作为确定性链接输入，
+          目标活动必须存在于 `records`，否则忽略该别名并回退启发式打分。
 
     Returns:
-        最高分记录及其解释项。最高分不足 `min_score` 时返回 `None`；分差不足时
-        返回 `ambiguous=True` 的结果，调用方必须按“未链接”处理，不能据此读取
-        该活动配置。
+        最高分记录及其解释项。命中已启用人工别名时直接返回映射活动，
+        `feedback_alias` 记录命中的别名；最高分不足 `min_score` 时返回 `None`；
+        分差不足或同长度别名冲突时返回 `ambiguous=True` 的结果，调用方必须按
+        “未链接”处理，不能据此读取该活动配置。
     """
     if not records:
         return None
+    if approved_aliases:
+        match = _approved_alias_match(question, approved_aliases)
+        if match is not None:
+            alias, activity_id, ambiguous = match
+            record = _find_activity_record(records, activity_id)
+            if record is not None:
+                # 人工登记别名是显式业务知识，分数只用于审计展示，不再参与
+                # 与启发式候选的分差比较；同长度冲突时仍按歧义返回。
+                return ActivityLink(
+                    record=record,
+                    score=200 + len(alias) * 8,
+                    matched_terms=(alias,),
+                    ambiguous=ambiguous,
+                    feedback_alias=alias,
+                )
+            # 映射目标已从知识库消失（目录改名或删除）：忽略该别名，继续按
+            # 仓库真实文案做启发式链接，避免使用过期映射。
     folded_question = (question or "").casefold()
     grams = _question_zh_grams(question)
     flags = _intent_flags(question)

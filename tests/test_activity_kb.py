@@ -620,3 +620,86 @@ def test_missing_structured_data_degrades_to_empty(tmp_path: Path) -> None:
     payload = _linked_payload(record)
     assert activity_structured_facts(payload, "这个活动是第几期？") == []
     assert activity_level_table_facts(payload, "每个等级的门槛是多少？") == []
+
+
+def test_feedback_alias_links_mapped_activity(tmp_path: Path) -> None:
+    """验证人工登记别名可作为确定性链接输入。
+
+    参数:
+        - `tmp_path`：pytest 提供的临时目录，类型为 `Path`。
+
+    Returns:
+        无返回值。仓库中没有“鉴定大师”文案时，登记映射仍能把问题链接到
+        `gemMaster`，并记录命中的别名用于审计。
+    """
+    _write(tmp_path, "waky3_miyouactivity/crontab/gemMaster/config.php", _OTHER_ACTIVITY_CONFIG)
+    _write(tmp_path, "waky3_miyouactivity/crontab/loveBall/config.php", _LOVE_BALL_CONFIG)
+    records = _build(tmp_path)
+    link = link_activity(
+        "鉴定大师活动四个等级的中文名称和门槛分别是什么？",
+        records,
+        approved_aliases={"鉴定大师": "gemMaster"},
+    )
+    assert link is not None
+    assert link.record.activity_id == "gemMaster"
+    assert link.feedback_alias == "鉴定大师"
+    assert link.ambiguous is False
+
+
+def test_feedback_alias_ignored_when_target_missing(tmp_path: Path) -> None:
+    """验证目标活动已不存在时忽略别名，避免使用过期映射。
+
+    参数:
+        - `tmp_path`：pytest 提供的临时目录，类型为 `Path`。
+
+    Returns:
+        无返回值。映射目标不在知识库时不得凭空构造记录，链接只能来自仓库真实
+        文案或既有启发式，且 `feedback_alias` 必须为空。
+    """
+    _write(tmp_path, "waky3_miyouactivity/crontab/loveBall/config.php", _LOVE_BALL_CONFIG)
+    link = link_activity(
+        "鉴定大师活动四个等级的中文名称和门槛分别是什么？",
+        _build(tmp_path),
+        approved_aliases={"鉴定大师": "removedActivity"},
+    )
+    assert link is None or (
+        link.feedback_alias == "" and link.record.activity_id != "removedActivity"
+    )
+
+
+def test_feedback_alias_conflict_returns_ambiguous(tmp_path: Path) -> None:
+    """验证同长度别名指向不同活动时按歧义处理。
+
+    参数:
+        - `tmp_path`：pytest 提供的临时目录，类型为 `Path`。
+
+    Returns:
+        无返回值。两个四字叫法同时出现在问题中时，链接结果必须标记歧义，
+        调用方不得读取任一活动配置。
+    """
+    _write(tmp_path, "waky3_miyouactivity/crontab/alpha/config.php", _OTHER_ACTIVITY_CONFIG)
+    _write(tmp_path, "waky3_miyouactivity/crontab/beta/config.php", _OTHER_ACTIVITY_CONFIG)
+    link = link_activity(
+        "甲乙丙丁和戊己庚辛两个活动分别是什么？",
+        _build(tmp_path),
+        approved_aliases={"甲乙丙丁": "alpha", "戊己庚辛": "beta"},
+    )
+    assert link is not None
+    assert link.ambiguous is True
+
+
+def test_link_without_feedback_aliases_keeps_previous_behavior(tmp_path: Path) -> None:
+    """验证不传人工别名时链接行为与阶段 40 完全一致。
+
+    参数:
+        - `tmp_path`：pytest 提供的临时目录，类型为 `Path`。
+
+    Returns:
+        无返回值。问题通过仓库中文文案链接到 `loveBall`，`feedback_alias` 为空。
+    """
+    _write(tmp_path, "waky3_miyouactivity/crontab/loveBall/config.php", _LOVE_BALL_CONFIG)
+    _write(tmp_path, "waky3_miyouactivity/crontab/other/config.php", _OTHER_ACTIVITY_CONFIG)
+    link = link_activity("心动的旋律五个等级的门槛和奖励是什么？", _build(tmp_path))
+    assert link is not None
+    assert link.record.activity_id == "loveBall"
+    assert link.feedback_alias == ""

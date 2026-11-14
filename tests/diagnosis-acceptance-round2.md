@@ -29,7 +29,7 @@
 | --- | --- | --- | --- |
 | B1 | 魔法炼金屋任务送礼阶段共几档？每档门槛和奖励是什么？ | 共 3 档：100000 → Shining dusk*7 days；550000 → Shining Venus*7 days、King style*7 days；1500000 → Magical Alchemy House*10 days、Purple crown*10 days | `crontab/magicAlchemyHouse/config.php` |
 | B2 | 魔法炼金屋第 3 档需要多少贡献值？ | 1500000 | 同上 |
-| B3 | 鉴定大师活动四个等级的中文名称和门槛分别是什么？ | 业余 100000；通晓 1000000；资深人士 2500000；鉴宝专家 4000000 | `crontab/gemMaster/config.php` |
+| B3 | 鉴定大师活动四个等级的中文名称和门槛分别是什么？ | 业余 80000；通晓 200000；资深人士 1000000；鉴宝专家 3000000（以当前 `gemMaster/config.php` 的 `levels[*].limit` 代码字面值为准） | `crontab/gemMaster/config.php` 的 `levels` |
 | B4 | 鉴定大师第 4 档奖励是什么？ | Lv.4 Appraiser - Car (10 day) | `gemMaster/config.php:55` |
 | B5 | 苍穹霸主五个等级的英文名和门槛是什么？ | Falcon egg 20000；Young falcon 150000；Mature falcon 400000；Elite falcon 1400000；Desert King 3000000 | `crontab/skyDominator/config.php:66-72` |
 | B6 | 苍穹霸主升到 Desert King 能拿哪些奖励？ | LV5 Eagle - chat box(10 days)、Little Eagle-Medal(10 days)、Sky Overlord-Entrance show(10 days)、Flame Motorcycle-car(10 days) | `skyDominator/config.php` 的 `prizes[500-503]` |

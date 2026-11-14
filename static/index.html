@@ -514,6 +514,22 @@
                 <div id="knowledge-glossary" class="history-list"><div class="empty-copy">输入中文词查看对应代码标识。</div></div>
               </div>
             </details>
+            <details class="subsection">
+              <summary><span><strong>人工反馈别名</strong><span>把问题里的叫法绑定到真实活动目录</span></span></summary>
+              <div class="subsection-body">
+                <p id="activity-alias-summary" class="quality-copy">已启用别名：正在加载…</p>
+                <div class="actions compact">
+                  <input id="activity-alias-term" type="text" maxlength="40" placeholder="问题中的叫法，例如 鉴定大师" />
+                  <input id="activity-alias-target" type="text" maxlength="100" placeholder="活动目录，例如 gemMaster" />
+                  <input id="activity-alias-comment" type="text" maxlength="500" placeholder="反馈说明（可选）" />
+                  <button id="activity-alias-add" class="secondary" type="button">登记别名</button>
+                  <button id="activity-alias-search" class="quiet" type="button">查询候选活动</button>
+                </div>
+                <span id="activity-alias-message" class="status-text" role="status">别名只影响活动链接，不改变源码事实</span>
+                <div id="activity-alias-candidates" class="history-list"></div>
+                <div id="activity-alias-list" class="history-list"><div class="empty-copy">尚未登记别名。</div></div>
+              </div>
+            </details>
             <p id="project-summary" class="quality-copy">项目反馈摘要：暂无数据</p>
             <p id="ai-quality" class="quality-copy">AI 质量摘要：暂无数据</p>
           </div>
@@ -1025,6 +1041,167 @@
           $("knowledge-message").textContent = friendlyError(error, "知识库重建失败");
         } finally {
           $("knowledge-rebuild").disabled = false;
+        }
+      }
+
+      /**
+       * 加载当前项目的人工反馈别名，并渲染启用状态、操作人和更新时间。
+       * @returns {Promise<void>} 列表与摘要写入页面后完成。
+       */
+      async function loadActivityAliases() {
+        const project = encodeURIComponent($("project").value.trim());
+        const container = $("activity-alias-list");
+        try {
+          const response = await apiFetch(`/api/knowledge/${project}/activity-aliases?limit=100`);
+          if (!response.ok) throw new Error(await readApiError(response, `别名列表获取失败（${response.status}）`));
+          const data = await response.json();
+          container.replaceChildren();
+          const approved = data.aliases.filter((item) => item.status === "approved").length;
+          $("activity-alias-summary").textContent =
+            `已启用别名 ${approved} 条，共 ${data.aliases.length} 条记录；停用后不再参与活动链接`;
+          if (!data.aliases.length) {
+            container.appendChild(createElement("div", "empty-copy", "尚未登记别名。"));
+            return;
+          }
+          data.aliases.forEach((item) => {
+            const row = createElement("div", "list-row main");
+            const copy = createElement("div");
+            copy.append(
+              createElement("strong", "", `${item.alias} → ${item.activity_id}`),
+              createElement(
+                "small",
+                "",
+                `${item.status === "approved" ? "启用中" : "已停用"} · ${item.updated_by || "未记录操作人"} · ${formatDateTime(item.updated_at)}${item.evidence ? ` · ${item.evidence}` : ""}`,
+              ),
+            );
+            row.appendChild(copy);
+            const toggle = createElement("button", "quiet", item.status === "approved" ? "停用" : "启用");
+            toggle.type = "button";
+            toggle.addEventListener("click", () =>
+              updateActivityAliasStatus(
+                item.id,
+                item.status === "approved" ? "rejected" : "approved",
+              ),
+            );
+            row.appendChild(toggle);
+            container.appendChild(row);
+          });
+        } catch (error) {
+          container.replaceChildren(createElement("div", "empty-copy", friendlyError(error, "别名列表获取失败")));
+          $("activity-alias-summary").textContent = "已启用别名：获取失败";
+        }
+      }
+
+      /**
+       * 按别名关键字查询候选活动，并提供一键填入目标活动目录。
+       * @returns {Promise<void>} 候选列表写入页面后完成。
+       */
+      async function searchActivityCandidates() {
+        const project = encodeURIComponent($("project").value.trim());
+        const query = $("activity-alias-term").value.trim();
+        const container = $("activity-alias-candidates");
+        container.replaceChildren();
+        $("activity-alias-message").textContent = "正在查询候选活动…";
+        try {
+          const response = await apiFetch(
+            `/api/knowledge/${project}/activity-candidates?q=${encodeURIComponent(query)}&limit=20`,
+          );
+          if (!response.ok) throw new Error(await readApiError(response, `候选活动查询失败（${response.status}）`));
+          const data = await response.json();
+          if (!data.candidates.length) {
+            container.appendChild(
+              createElement("div", "empty-copy", "没有候选活动，请确认项目仓库已挂载且索引可用。"),
+            );
+            $("activity-alias-message").textContent = "未命中候选活动";
+            return;
+          }
+          data.candidates.forEach((item) => {
+            const row = createElement("div", "list-row main");
+            const copy = createElement("div");
+            const aliases = item.aliases_zh.length ? item.aliases_zh.join("、") : "无数据别名";
+            copy.append(
+              createElement("strong", "", `${item.activity_id} · ${item.level_count} 个等级`),
+              createElement("small", "", `${item.config_file} · 中文别名：${aliases}`),
+            );
+            row.appendChild(copy);
+            const use = createElement("button", "quiet", "使用");
+            use.type = "button";
+            use.addEventListener("click", () => {
+              $("activity-alias-target").value = item.activity_id;
+              $("activity-alias-message").textContent = `已选择 ${item.activity_id}，确认叫法后登记`;
+            });
+            row.appendChild(use);
+            container.appendChild(row);
+          });
+          $("activity-alias-message").textContent = `候选 ${data.total} 个，展示前 ${data.candidates.length} 个`;
+        } catch (error) {
+          container.appendChild(createElement("div", "empty-copy", friendlyError(error, "候选活动查询失败")));
+          $("activity-alias-message").textContent = "候选活动查询失败";
+        }
+      }
+
+      /**
+       * 登记一条“问题叫法 → 活动目录”的人工反馈别名。
+       * @returns {Promise<void>} 登记结果写入页面并刷新列表后完成。
+       */
+      async function registerActivityAlias() {
+        const project = encodeURIComponent($("project").value.trim());
+        const alias = $("activity-alias-term").value.trim();
+        const activityId = $("activity-alias-target").value.trim();
+        if (!alias || !activityId) {
+          $("activity-alias-message").textContent = "请先填写问题中的叫法和目标活动目录";
+          return;
+        }
+        $("activity-alias-add").disabled = true;
+        $("activity-alias-message").textContent = "正在登记别名…";
+        try {
+          const response = await apiFetch(`/api/knowledge/${project}/activity-aliases`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              alias,
+              activity_id: activityId,
+              comment: $("activity-alias-comment").value.trim() || null,
+            }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `别名登记失败（${response.status}）`);
+          $("activity-alias-message").textContent =
+            `已登记：${body.alias.alias} → ${body.alias.activity_id}`;
+          await loadActivityAliases();
+        } catch (error) {
+          $("activity-alias-message").textContent = friendlyError(error, "别名登记失败");
+        } finally {
+          $("activity-alias-add").disabled = false;
+        }
+      }
+
+      /**
+       * 启用或停用一条人工反馈别名；停用后该叫法不再参与活动链接。
+       * @param {number} aliasId 别名记录主键。
+       * @param {"approved"|"rejected"} status 目标状态。
+       * @returns {Promise<void>} 状态请求与列表刷新完成后结束。
+       */
+      async function updateActivityAliasStatus(aliasId, status) {
+        const project = encodeURIComponent($("project").value.trim());
+        $("activity-alias-message").textContent =
+          status === "approved" ? "正在启用别名…" : "正在停用别名…";
+        try {
+          const response = await apiFetch(
+            `/api/knowledge/${project}/activity-aliases/${aliasId}/status`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status }),
+            },
+          );
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.detail || `别名状态更新失败（${response.status}）`);
+          $("activity-alias-message").textContent =
+            status === "approved" ? "别名已启用" : "别名已停用";
+          await loadActivityAliases();
+        } catch (error) {
+          $("activity-alias-message").textContent = friendlyError(error, "别名状态更新失败");
         }
       }
 
@@ -2145,6 +2322,7 @@
           loadProjectOverview(),
           loadIndexHistory(),
           loadKnowledgeSummary(),
+          loadActivityAliases(),
           loadTaskBoard(),
           loadHistory(false),
         ];
@@ -2356,6 +2534,15 @@
         }
       });
       $("knowledge-rebuild").addEventListener("click", () => rebuildKnowledge());
+      // 人工反馈别名：查询候选活动、登记别名，并在叫法输入框中支持回车查询。
+      $("activity-alias-search").addEventListener("click", () => searchActivityCandidates());
+      $("activity-alias-add").addEventListener("click", () => registerActivityAlias());
+      $("activity-alias-term").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          searchActivityCandidates();
+        }
+      });
 
       // 批量取消看板中选中的运行任务。
       $("cancel-selected").addEventListener("click", async () => {
