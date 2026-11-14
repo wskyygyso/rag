@@ -33,7 +33,7 @@
 | B4 | 鉴定大师第 4 档奖励是什么？ | Lv.4 Appraiser - Car (10 day) | `gemMaster/config.php:55` |
 | B5 | 苍穹霸主五个等级的英文名和门槛是什么？ | Falcon egg 20000；Young falcon 150000；Mature falcon 400000；Elite falcon 1400000；Desert King 3000000 | `crontab/skyDominator/config.php:66-72` |
 | B6 | 苍穹霸主升到 Desert King 能拿哪些奖励？ | LV5 Eagle - chat box(10 days)、Little Eagle-Medal(10 days)、Sky Overlord-Entrance show(10 days)、Flame Motorcycle-car(10 days) | `skyDominator/config.php` 的 `prizes[500-503]` |
-| B7 | 心动的旋律五个等级的门槛和奖励是什么？ | 100000 bubble box*5 days；600000 Entrance show*5 days；1200000 Avatar frame*7 days（两个性别各一份）；2000000 Room background*7 days；3000000 Car*10 days | `crontab/loveBall/config.php:64-70` |
+| B7 | 心动的旋律五个等级的门槛和奖励是什么？ | 100000 bubble box*5 days；600000 Entrance show*5 days；1200000 Avatar frame*7 days（两个性别各一份）；2000000 Room background*7 days；3000000 Car*10 days | `crontab/loveBall/config.php` 的 `levels` |
 | B8 | 心动的旋律第 3 档为什么有两个奖励？ | 该档按性别分别配置 `sex=1` 和 `sex=0` 两个奖励，并列出对应名称 | `loveBall/config.php:67` |
 | B9 | 家族城堡五个等级的建设门槛和等级奖励是什么？ | 0 无奖励；1000000 → LV.2 Castle *7 days；3000000 → LV.3 Castle *7 days；6000000 → LV.4 Castle *10 days；10000000 → LV.5 Castle *10 days | `crontab/familyCastle/config.php:43-49` |
 | B10 | 家族城堡第 5 档的 top1 奖励是什么？ | Car *10 days（`top1_prizes` 引用 151） | `familyCastle/config.php:48` |

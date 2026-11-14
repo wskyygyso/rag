@@ -1,180 +1,292 @@
-# 阶段 37 规格：配置问答长尾修复与题库第一轮全绿
+# 阶段 39 规格：项目活动知识库与实体链接
 
-## 一、目标与边界
+## 一、背景与目标
+
+当前配置问答在“中文活动名 → 真实活动目录”这一步依赖若干分散的补丁式启发式：
+`_activity_alias_score` 的中文片段打分、`_activity_structure_score` 的结构加分、
+`_full_config_window_files` 的按题排序，以及散落在 `config_graph` 里的活动名推断。
+这些逻辑彼此重复、相互覆盖，无法解释“为什么选中这个活动”，也无法保证未知活动
+得到明确缺口。
+
+本阶段把“活动”变成一等知识对象：离线从仓库数据构建活动知识库，在线只做一件事——
+把问题链接到唯一活动；随后证据窗口优先该活动的配置与相关实现文件，事实仍由现有
+确定性配置解析器读取源码字面值产生。
 
 ### 目标
 
-以 `tests/diagnosis-test-questions.md` 的 A/D/H 共 45 题（`use_ai=false`）为验收集，
-把当前 29/45 的通过数提升到全绿，且修复必须是可复用的通用能力：
-
-1. 活动配置文件被选入证据后，必须读取完整文件窗口，不能只看命中行附近。
-2. 中文营销名无法在源码中找到同名目录时，仍能按“问题中文片段 + 活动展示词 + 英文目录语义”
-   选择正确活动，不新增“中文名 → 目录”硬编码表。
-3. 配置数组选择必须按问题意图区分：监听类型、第 N 名、个人等级、送礼阶段、奖励引用、
-   布尔开关过滤，不能用同文件名称最多或数字最多的数组抢答。
-4. 奖励 `id` 必须解析到同文件奖品定义表后再渲染，不能只输出 id 或渲染无关等级。
+1. 新增全仓活动知识库，从真实数据提取：活动目录、配置文件、中文展示名/别名、期次
+   时间窗、等级表数量与字段、名次/类型/惊喜/跳转等结构标记、同活动实现文件。
+2. 新增实体链接器：问题 → 唯一活动（或明确未链接），不写“中文名 → 目录”固定表，
+   不写“题目 → 答案”映射。
+3. 链接成功后：该活动 `config.php` 强制进入完整配置窗口，同活动入口/服务文件进入
+   证据预算，供现有分析器产生事实。
+4. 链接失败且问题显式点名某个中文活动时：返回明确证据缺口，禁止用其他活动数值
+   抢答。
+5. 24 题验收题库重跑，除“仓库中不存在中文别名”的数据缺口外全部通过。
 
 ### 边界
 
-- 结论只输出源码字面值；不输出密钥、令牌、密码、URL、内网地址、文件路径或翻译键。
-- 不写题目 → 答案映射，不写活动中文名 → 目录的固定字典；只允许通用双语词根
-  （`新版 → new`、`旧版 → old`）和通用配置键别名。
-- 不提交 Git，阶段完成后等待用户审阅。
+- 知识库只读仓库源码与语言包，不读业务数据库、Redis、日志或线上服务。
+- 别名只能来自数据：目录名、配置文件中文文案（`name.zh`、`title`、`pushmsg`）、
+  `php/lang/zh/*.php` 对应语言包、中文注释；不得新增活动专属硬编码字典。
+- 结论只输出源码字面值；不输出密钥、令牌、URL、内网地址、文件路径或翻译键。
+- 不主动 commit，阶段完成后等待用户审阅。
 
-## 二、已确认根因（来自 `/tmp/diag-round1.json` 与源码核对）
+## 二、验收口径与已知数据缺口
 
-1. **完整配置窗口未生效（首要根因）**
-   `app/diagnosis_workflow.py` 的 `_full_config_window_files()` 返回原始大小写路径，
-   而调用侧用 `evidence_key = file.casefold()` 做成员判断。驼峰目录
-   （`gameRanking`、`giftWeekStarNew`、`lostCivilization`、`guildTreasureHunt`）
-   因此拿到 `config.php:1-1` 的占位证据，`allow_types`、`rank_prizes`、`levels`、
-   `is_can_jump_x`、`year` 都不在窗口内。直接导致 A-12、A-13、D-7、D-8、D-12、
-   H-2、H-3、H-9、H-11 失败。
-2. **同目录配置占位证据没有独立预算**
-   `_sibling_config_evidence()` 只产生 `line=1`、`content="<?php"` 的占位项；
-   即使进入完整窗口逻辑，也容易被 `_select_diagnostic_evidence()` 的通用预算挤掉。
-3. **活动根选择缺少展示词信号**
-   `scoped_config_evidence()` 只用中文锚点、概念词、术语和检索相关度评分。
-   中文营销名（游戏榜、公会寻宝）在活动 `config.php` 中没有同名文本时，多个活动的
-   配置会打平，被行数更多的错误活动抢占。
-4. **枚举/取值选择未覆盖问法**
-   - “监听哪些……类型”没有进入计数/枚举分支，落到配置取值，返回 `stime/test`。
-   - “第 1 名 / 第 6 名”未命中 `rank_prizes`，被 `extra`、`prizes` 数组抢占。
-   - “第 3 个个人等级门槛”被 `day_rank_top_prizes(rank=3)` 抢占。
-   - `rank_prizes` 中的奖品 `id` 未解析到 `prizes[id]` 定义。
-   - “哪些阶段支持跳转 X”未按 `is_can_jump_x=1` 过滤。
-5. **活动服务/数据库证据缺失**
-   A-18 问期数来源、A-19 问结算表与防重，当前证据没有
-   `Logic/giftWeekStarNew/service/GiftWeekStarSettlementService.php`，导致空结论。
+24 题题库为 `tests/diagnosis-acceptance-round2.md`，验收脚本为 `/tmp/run_acceptance.py`。
 
-## 三、代码变更清单
+- A/B/C/D 类：结论非空、无缺口、期望关键数值/日期/币种全部出现；不得出现其他活动
+  的数值。
+- E 类：必须返回缺口（`gap=true`）。
+- **已知数据缺口 B3**：`鉴定大师` 在 `waky3` 仓库中不存在任何中文文案（已全仓检索
+  `鉴定大师`、`鉴定`、`Appraiser`、`gemMaster` 的 lang/admin/SQL 均无中文名），
+  因此知识库无法从数据建立该别名。本阶段要求 B3 返回明确缺口，禁止答成其他活动；
+  不要求 B3 通过。目标通过数 ≥ 23/24，且唯一失败项必须是 B3 且为缺口。
+- 该缺口的后续解法（不在本阶段）：用户确认反馈后把“问题中文片段 → 活动”写回知识库，
+  形成可审计的学习型别名，而非代码硬编码。
 
-### 3.1 `app/diagnosis_workflow.py`
+## 三、数据模型
 
-- `_full_config_window_files(question, evidence)`
-  - 返回值统一归一化：`path.replace("\\", "/").casefold()`，与调用侧
-    `evidence_key` 同一口径；保留最多 3 个文件，优先问题英文标识命中的活动。
-  - 逻辑变化：先按 `_activity_root` 分组配置，再按“问题中英文标识命中目录名 >
-    证据相关度总和 > 文件数量”排序取前 3；不再无条件返回全部配置。
-- `_sibling_config_evidence(...)`
-  - 占位项补 `line_start=1`、`line_end=1`，保留 `type="sibling_config"` 标记；
-    仅在活动目录确实存在 `config.php` 时加入。
-- `_select_diagnostic_evidence(...)`
-  - 新增 `sibling_config` 独立预算（最多 6 条），在通用预算之前保留，
-    避免占位配置被 64 条上限挤掉。
-- 新增 `_activity_service_evidence(root, project, question, evidence, limit=3)`
-  - 当问题命中活动目录、且证据里只有 `config.php` 时，按真实目录补入
-    `service/*.php`、`controller/*.php`、`*Boot.php`（最多 3 个），供 A-18/A-19
-    读取数据库表名、`existsByVol` 等确定性事实；不读取数据库内容。
+新增 `app/domain/diagnosis/activity_kb.py`，模块职责：离线构建/缓存活动记录、在线
+实体链接、为链接结果选择相关实现文件。所有解析只接受注入的文件读取函数，便于单测
+使用构造源码。
 
-### 3.2 `app/domain/diagnosis/analyzers/configuration.py`
+### `ActivityRecord`（frozen dataclass）
 
-- `_scope_identifier(question, lines)`
-  - 保持现有英文目录匹配；新增：当问题含“新版/旧版”时，把 `新版→new`、`旧版→old`
-    作为通用目录语义提示，参与目录匹配打分。
-- 新增 `_CHINESE_DIRECTORY_HINTS`（仅 `新版/new`、`旧版/old` 两组通用词根）。
-- 新增 `_activity_display_terms(lines) -> Dict[str, Tuple[str, ...]]`
-  - 从每个活动根的证据行中抽取面向用户的展示词：`title`、`app_nick`、`pushmsg`
-    中文串、`name.zh`、同行/上一行中文注释；只保留 2-40 字中文片段，过滤 URL、
-    路径、翻译键、密钥。用于把“公会寻宝”匹配到含“寻宝/公会夺宝赛”的活动。
-- 新增 `_activity_alias_score(question, root_lines) -> int`
-  - 用问题中文双向片段（2-6 字）与活动展示词、目录名、英文配置键做重合打分；
-    四字以上完整片段权重更高；不做任何活动专属映射。
-- `scoped_config_evidence(...)`
-  - 评分改为 `anchor_score + alias_score + concepts + config/other 完整度 +
-    term_hit + relevance`；`alias_score` 仅用于业务相关度，不直接生成事实。
-  - 保留 `qualified` 规则：只有配置文件的目录必须命中中文展示词或术语。
-- `_dominant_activity_lines(...)`
-  - 同步加入 `_activity_alias_score`，与 `scoped_config_evidence` 同一口径。
+| 字段 | 含义 | 来源 |
+| --- | --- | --- |
+| `activity_id` | 活动目录名或全局配置文件名干 | 真实路径 |
+| `marker` | `Logic` / `crontab` / `action_activity` / `config` / `conf` | 真实路径 |
+| `config_file` | 项目内相对路径 | 真实路径 |
+| `aliases_zh` | 高置信中文展示词（`title`、`name.zh`、`【】`/`#…#` 文案） | 配置正文 |
+| `context_zh` | 低置信中文片段（注释与普通文案），最多 200 个 | 配置正文 |
+| `aliases_en` | 目录 CamelCase 词根、英文标题词 | 目录名/配置正文 |
+| `level_names` | 等级中文/英文名称 | `name.zh` / `name.en` |
+| `level_count` | 等级条目数量 | `'limit'`、`LEVEL_* => [` 计数 |
+| `level_key` | 等级数组键名（`level` / `levels`） | 配置正文 |
+| `level_field` | 等级门槛字段（`score` / `limit` / `value`） | 配置正文 |
+| `stime` / `etime` | 起止时间字面量（`YYYY-MM-DD HH:MM:SS`） | `modify()` / `getTimestamp()` |
+| `has_rank_prizes` | 是否含 `rank_prizes`/`top_prizes` | 配置正文 |
+| `has_allow_types` | 是否含 `allow_types` | 配置正文 |
+| `has_surprise` | 是否含 `surprise` 数组 | 配置正文 |
+| `has_jump_switch` | 是否含 `is_can_jump_x` | 配置正文 |
+| `env_pair_count` | `getByTestMode(` 成对配置数量 | 配置正文 |
+| `source_refs` | `文件:行号` 审计引用，最多 6 条 | 配置正文 |
 
-### 3.3 `app/domain/diagnosis/config_graph.py`
+### `ActivityLink`（frozen dataclass）
 
-- `_KEY_INTENT_ALIASES` 增补通用别名：
-  - `类型/监听/发奖 → type/types/allow_types/allow`
-  - `等级/档位/阶段/遗迹 → levels/stage/stages/level`
-  - `跳转 → is_can_jump_x/jump/jump_x`
-  - `奖励/奖品/名次` 保持既有别名，并补 `rank_prizes`。
-- `enumeration_facts(question)`
-  - 计数/枚举门控加入“哪些、哪几、有哪几种、监听哪些”；不再要求出现数字或结构词。
-  - 候选排序新增：
-    - 问题意图键命中数组内键或组注释 `+30`；
-    - 问题“第 N 名”命中数字键 `+25`；
-    - 问题“等级/档”且组内含 `limit`、不含 `rank/top_prizes` 时 `+20`；
-    - 组内成员数等于问题数量约束时 `+25`。
-  - 新增引用解析 `_resolve_prize_references(entries, graph)`：
-    当枚举项含 `id` 且同文件存在以该 id 为键的奖品定义表（`prizes`、`prize`、
-    `goods` 等）时，把 `type/num/name/days/gid` 合并进事实；不写死表名。
-- `_enumeration_candidates(...)`
-  - “第 N 名”使用正则 `第\s*[一二三四五六七八九十\d]+\s*名`，且仅对
-    `rank/top/prizes` 前缀组生效；`第 N 档/级/个` 仅对匿名 `levels` 组生效。
-  - 问题不含“榜/排名/名次”时，排除 `day_rank*`、`top_prizes` 组。
-- `_count_facts(question)`
-  - “哪些/监听哪些”输出数量 + 成员取值（数字或名称，≤12 个）；
-    A-12 输出 `11` 与 `allow_types` 的 11 个类型编码。
-- `_render_levels(...)`
-  - 支持布尔字段过滤：问题含“跳转/支持”，只渲染 `is_can_jump_x=1` 的等级，
-    并输出 `name.zh`；问题含“奖励”，优先解析 `prizes` 引用。
-- `parse_config_graph(...)`
-  - 为匿名 `levels` 列表补充成员总数；保持 1 起连续编号派生逻辑。
+`record`、`score`、`matched_terms`、`ambiguous`（是否因分差不足放弃链接）。
 
-### 3.4 `app/question_type.py`
+## 四、代码变更清单
 
-- `classify_question(...)`：
-  - “哪些/哪几/有哪几种/监听哪些”统一视为 `CONFIG_ENUMERATION`；
-  - “第 N 名”视为枚举；点号键、反引号键仍视为 `CONFIG_LOOKUP`。
+### 4.1 新增 `app/domain/diagnosis/activity_kb.py`
 
-### 3.5 `tests/test_generic_config_engine.py`
+公共函数：
 
-新增回归（全部使用构造源码，不依赖 waky3 私有数据）：
+```python
+def build_activity_knowledge(
+    root: str,
+    project: str,
+    *,
+    read_text: Optional[Callable[[str], str]] = None,
+    max_activities: int = 240,
+) -> Tuple[ActivityRecord, ...]
 
-1. 驼峰目录 `gameRanking/config.php` 完整窗口能枚举 `allow_types` 11 项。
-2. `rank_prizes` + `prizes[id]` 引用解析：第 1 名 100 美元、第 6 名 80000 金币。
-3. 匿名 `levels` 第 3 档 `limit` 不被 `day_rank_top_prizes(rank=3)` 抢占。
-4. `is_can_jump_x=1` 只返回 3 个支持跳转阶段。
-5. `giftWeekStarNew` 与 `giftWeekStar` 同时出现时，“新版”选中 `year=2026`。
-6. 活动展示词评分：中文名只出现在 pushmsg 时仍能选中正确目录。
+def load_activity_knowledge(
+    root: str,
+    project: str,
+    fingerprint: str = "",
+    *,
+    read_text: Optional[Callable[[str], str]] = None,
+) -> Tuple[ActivityRecord, ...]
 
-## 四、验收标准
+def link_activity(
+    question: str,
+    records: Sequence[ActivityRecord],
+    *,
+    min_score: int = 12,
+    min_margin: float = 1.3,
+) -> Optional[ActivityLink]
 
-- `/tmp/run_diag_round1.py` 重跑后：
-  - A/D/H 45 题通过数 ≥ 42，并且以下题必须通过：
-    A-12（11 与 allow_types）、A-13（100/80000/60000）、D-2（0.05）、
-    D-7（100）、D-8（80000）、D-12（2026 与 ACTIVITY_GIFT_WEEK_STAR）、
-    D-14（1500000）、H-2（200000/1000000/2000000/4000000）、
-    H-3（Bubble/Room background/Entrance show）、H-9（五阶段门槛）、
-    H-11（佩特拉古城/长城/吴哥窟）。
-  - 剩余未通过题必须给出明确证据缺口说明，不能出现错误数值。
-- `.venv/bin/python -m pytest -q` 全绿。
-- `python3 scripts/check_comment_coverage.py` 通过。
-- `node scripts/check_frontend_syntax.js` 通过。
-- `git diff --check` 通过。
+def select_related_files(
+    record: ActivityRecord,
+    known_files: Sequence[str],
+    *,
+    limit: int = 6,
+) -> List[str]
+```
 
-## 五、验证命令
+实现要点：
+
+1. **发现范围**：项目根 + 一级子项目；marker 为 `Logic`、`crontab`、
+   `action_activity` 下含 `config.php` 的活动目录；另含 `php/config/*.php`、
+   `php/conf/*.php` 全局配置（`marker=config/conf`，`activity_id` 为文件名干）。
+   跳过 `vendor`、`lib`、`tests`、`.git` 目录。
+2. **读取注入**：`read_text(relative_path)` 返回 UTF-8 文本；默认实现按
+   `os.path.join(root, project, *path.split("/"))` 读取，文件超过 400KB 时跳过。
+3. **别名提取**：
+   - 高置信：`'title'\s*=>\s*'…'`、`'app_nick'`、`'zh'\s*=>\s*'…'`、
+     `【[^】]{2,20}】`、`#[^#]{2,20}#`；
+   - 低置信：所有 2–40 字中文连续片段（注释/文案），上限 200；
+   - 英文：目录 CamelCase 词根（长度 ≥ 4）、ASCII `title` 词；
+   - 统一去掉 `%s`、`#`、空白与首尾标点；排除含 `http`、`://`、`.png`、`@` 的片段。
+4. **全局配置语言包**：对 `php/config/noble.php` 这类文件，额外读取同名的
+   `php/lang/zh/<stem>.php`，把中文值（如 `VIP 1`）并入 `aliases_en` 与
+   `aliases_zh`，使 `VIP` 由数据建立，不写死。
+5. **时间窗**：正则捕获 `'stime'`/`'etime'` 后最近一次
+   `modify('YYYY-MM-DD HH:MM:SS')` 或 `getTimestamp('…')`。
+6. **等级结构**：`level_count` 统计 `'limit'\s*=>` 与
+   `\\Model\\\w+::LEVEL_\w+\s*=>\s*\[`；`level_key` 优先 `level`（含 `score`/`value`），
+   否则 `levels`；`level_field` 优先 `score`、`value`、`limit`。
+7. **缓存**：模块级 `Dict[Tuple[str, str], Tuple[str, Tuple[ActivityRecord, ...]]]`；
+   `load_activity_knowledge` 仅在 `fingerprint` 非空且与缓存一致时复用，否则重建。
+   单进程缓存，不写数据库。
+8. **实体链接评分**（只用于选择活动，不生成事实）：
+   - 目录/配置名全词命中问题：`+120`；
+   - 高置信中文别名与问题的最长公共片段：`6 × 长度`（≥2 字）；
+   - 低置信中文片段：`2 × 长度`（≥3 字）；
+   - 英文词根命中：`+25`（长度 ≥ 4）；
+   - 等级名称命中：`+40`；
+   - 结构意图：等级意图且 `level_count>0` `+20`；环境意图且
+     `env_pair_count>0` `+25`；时间意图且 `stime` 非空 `+30`；
+     名次意图且 `has_rank_prizes` `+30`；类型意图且 `has_allow_types` `+25`；
+     惊喜/区间意图且 `has_surprise` `+25`；跳转意图且 `has_jump_switch` `+25`。
+   - 通用词过滤：`活动/等级/门槛/奖励/配置/时间/开始/结束/什么/多少/分别/哪些/
+     所有/每个/阶段/档位/排名/名次/金币/美元/测试/正式/环境` 不参与中文别名得分。
+   - 选择：`top >= min_score` 且 `top >= second * min_margin`；否则返回
+     `None`，并标记 `ambiguous=True` 供审计。**分差不足必须放弃，不得猜。**
+9. **相关实现文件**：
+   - 活动目录：只取该目录及其 `service/`、`controller/`、`services/` 下的 `.php`，
+     优先级 `*Boot.php` > `*Control.php` > `service/*` > 其他，`config.php` 排除。
+   - 全局配置：文件名（basename）包含配置名干的文件，优先级
+     `*Service.php` > `*Control.php` > `*Model.php` > 其他。
+   - 统一排除 `vendor`、`lib`、`tests`、`phpunit` 路径。
+
+### 4.2 `app/diagnosis_workflow.py`
+
+1. 在 `_select_diagnostic_evidence`（约 L1512）新增两个独立预算：
+   - `type == "activity_kb_config"`：最多 3 条；
+   - `type == "activity_kb_entry"`：最多 6 条。
+   两者均先于通用预算追加，避免占位证据被 64 条上限挤出。
+2. 在 `_full_config_window_files` 调用（约 L3080）：
+   - 先计算 `linked_activity`；
+   - `full_config_files.add(linked_activity.config_file.casefold())`；
+   - 证据读取条件（约 L3133）增加：
+     `or item.get("type") == "activity_kb_config"`、
+     `or item.get("type") == "activity_kb_entry"`（后者整文件读到 1001 行）。
+3. 在证据后处理前（约 L3041，`annotate_hits_with_concepts` 之前）：
+   - 调用 `load_activity_knowledge(settings.code_repositories_root, current["project"],
+     index_prepare_summary.get("fingerprint") or "")`；
+   - `link_activity(current["question"], records)`；
+   - 链接成功时追加：
+     - 一条 `type="activity_kb_config"`、`file=config_file`、`line=1`、
+       `content="<?php"`、`score=0.9`；
+     - 若干 `type="activity_kb_entry"`（`select_related_files`，最多 6 个），
+       `content="<?php"`；
+   - 把链接摘要写入 `report_result["retrieval_plan"]["activity_link"]`：
+     `{activity_id, config_file, score, matched_terms, ambiguous, related_files}`。
+4. 构建流程用 `try/except Exception` 包裹知识库构建；失败时记录
+   `warnings.append("活动知识库降级: …")`，不得中断诊断。
+
+### 4.3 `app/domain/diagnosis/analyzers/configuration.py`
+
+新增 `activity_decision_source_facts(lines, question, activity_link)`：
+
+- 触发词：`判定`、`逻辑`、`按什么字段`、`怎么算`、`如何计算`、`入口`、`在哪`。
+- 输入：`activity_link` 提供 `activity_id`、`level_key`、`level_field`、
+  `config_file`、`related_files`。
+- 逻辑：在链接到的相关实现文件证据行中查找
+  `Config::get('<activity_id>.<level_key>')`、`-><level_key>`、
+  `$v['<level_field>']` 等读取点；取同文件最近的前置 `function <name>` 与
+  `class <name>`，生成一条事实：
+  `"等级判定入口为 `<Class>::<method>`，按配置 `<activity_id>.<level_key>` 的
+  `<level_field>` 门槛计算。"`
+- 证据引用包含读取点、方法声明、类声明三个 `文件:行号`。
+- 找不到类/方法时返回空列表，由上层报告缺口；不得用其他活动的服务文件代替。
+
+### 4.4 `app/business_analysis.py`
+
+在 `build_deterministic_findings` 中：
+
+1. 读取 `retrieval_plan.get("activity_link") or {}`。
+2. 若 `activity_decision_source_facts` 返回事实，则作为最高优先结论分支
+   （`topic="等级判定入口"`，`explicit_topic=True`）。
+3. 新增“未链接活动门控”：当 `activity_link` 为空或 `ambiguous=True`，且问题命中
+   `([\u4e00-\u9fff]{2,12})活动` 时，直接返回：
+   - `conclusion=""`
+   - `facts=[]`
+   - `uncertainties=["未在项目知识库中定位到活动「X」，已停止用其他活动配置推断。"]`
+   - `gap=true`
+   该门控保证 B3 返回缺口而不是其他活动的等级表。
+4. 门控只作用于显式点名“X活动”的问题，不影响普通代码/流程问题。
+
+### 4.5 `tests/test_activity_kb.py`（新增）
+
+全部使用构造源码与注入读取函数，不依赖 waky3 私有数据：
+
+1. **别名只来自数据**：`title`、`name.zh`、`【】`、`#…#` 能生成别名；
+   `鉴定大师` 这类未出现在数据中的词不会凭空产生映射。
+2. **链接命中**：问题 `心动的旋律五个等级的门槛是什么？` 在两条记录中只命中含
+   `#心动的旋律#` 的记录。
+3. **分差不足放弃**：两条记录都有 `等级` 结构但无中文别名时返回 `None`。
+4. **全局配置语言包别名**：`php/config/noble.php` + `php/lang/zh/noble.php`
+   使 `VIP 3 的升级门槛` 链接到 `noble`。
+5. **时间窗**：`stime`/`etime` 从 `modify('…')` 正确提取。
+6. **相关文件选择**：活动目录只返回同目录 Boot/Control/service；全局配置按
+   `Service > Control > Model` 排序且排除 `vendor/lib/tests`。
+7. **确定性决策事实**：构造 `class S { function getLevel(){ Config::get('noble.level'); $v['score']; } }`
+   证据，断言输出包含 `S::getLevel` 与 `noble.level`。
+
+同时更新 `tests/test_generic_config_engine.py` 中受 `_full_config_window_files`
+签名或行为变化影响的断言，保持既有 389 项测试全绿。
+
+## 五、验收标准
+
+1. `python3 -m pytest -q` 全绿（含新增 7 项知识库测试）。
+2. `python3 scripts/check_comment_coverage.py` 通过。
+3. `node scripts/check_frontend_syntax.js` 通过。
+4. `git diff --check` 通过。
+5. 重建并重启 `rag-api`、`rag-worker` 后，`python3 /tmp/run_acceptance.py`：
+   - 通过数 ≥ 23/24；
+   - 唯一失败项为 B3，且 `gap=true`，结论不出现任何其他活动数值；
+   - A1/A3/A4/A5/A7、B1/B2/B5/B6/B7/B9、C1–C3、D1–D3、E1–E3 全部通过；
+   - 不得有题目出现“期望有答案但返回缺口”（B3 除外）。
+6. `progress.md` 顶部新增“2026-11-15：阶段 39 项目活动知识库与实体链接”记录，
+   包含完成范围、验证结果、B3 数据缺口与下一步。
+
+## 六、验证命令
 
 ```bash
-.venv/bin/python -m pytest -q
+python3 -m pytest -q
 python3 scripts/check_comment_coverage.py
 node scripts/check_frontend_syntax.js
 git diff --check
 docker compose build api worker
 docker compose up -d api worker
-python3 /tmp/run_diag_round1.py
+python3 /tmp/run_acceptance.py
 ```
 
-H-7 单独重跑并记录耗时，确认是队列超时还是配置枚举缺陷；若为超时，调整该题轮询
-与队列并发，不改业务结论。
+## 七、明确不做
 
-## 六、明确不做
-
-- 不新增“活动中文名 → 目录”固定映射表。
-- 不为任何单题写 if/else 或预期值。
-- 不把注释中的百分比当作可执行事实。
-- 不输出密钥、URL、路径、翻译键。
+- 不新增“中文活动名 → 目录”固定映射表；
+- 不为任何单题写 if/else 或预期值；
+- 不把 `_activity_alias_score` 的分数直接复制进知识库，知识库只保存数据事实；
+- 不在本阶段实现“用户反馈驱动的别名学习”（B3 数据缺口的后续阶段）；
+- 不删除既有分析器，只让知识库链接优先于分散的目录猜测；
 - 不主动 commit。
 
-## 七、风险与回滚
+## 八、风险与回滚
 
-- 完整配置窗口上限从“全部”收敛到 3 个，避免证据和耗时膨胀；若误伤，可回退
-  `_full_config_window_files` 的排序部分，保留大小写归一化。
-- `util` 新增展示词评分只在多活动并列时起作用，单活动路径行为不变。
-- 所有改动集中在诊断分析层，不影响任务队列、数据库和前端；回滚按文件粒度即可。
+- 知识库全仓扫描只在缓存未命中时发生；单次最多 240 个活动、单文件 400KB，
+  避免拖慢首个诊断请求。若耗时异常，可调低 `max_activities` 并保留缓存。
+- 链接采用“最低分 + 分差”双门控，误链接风险低于现有逐题打分；出现误链接时
+  可直接回退 4.2 的“证据追加 + 完整窗口”两步，不影响既有分析器。
+- 决策事实分析器只在问题含判定/逻辑意图且链接成功时触发，普通配置问答行为不变。
+- 所有改动集中在诊断分析层，不修改任务队列、数据库迁移与前端；按文件粒度回滚。
+
+## 九、需确认事项
+
+- 本轮接受 B3（`鉴定大师`）作为“仓库无中文别名的数据缺口”返回缺口，而不是
+  用硬编码或猜测答成 `gemMaster`；若要求 B3 必须通过，需要额外确认是否允许
+  引入“反馈别名表”或 LLM 实体链接。

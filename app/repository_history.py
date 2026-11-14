@@ -130,6 +130,17 @@ def is_history_question(question: str) -> bool:
         命中“哪个版本开始”“何时引入”等时间线语义时返回 `True`。该判断只决定
         是否启用只读 Git 通道，不把问题文本直接映射成某个提交或版本答案。
     """
+    # “活动什么时候开始/结束”问的是配置里的起止时间，不是功能首次引入版本。
+    # 只有同时出现版本/引入/上线等词时才继续走 Git 历史通道。
+    if re.search(
+        r"(?:开始|结束|起止|开放|截止).*(?:时间|日期)"
+        r"|活动.*(?:开始|结束|起止)",
+        question or "",
+    ) and not re.search(
+        r"版本|首次|最早|引入|上线|提交|发布",
+        question or "",
+    ):
+        return False
     return _HISTORY_INTENT_PATTERN.search(question or "") is not None
 
 

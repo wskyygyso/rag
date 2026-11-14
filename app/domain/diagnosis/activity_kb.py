@@ -1,0 +1,915 @@
+"""项目活动知识库的离线构建、实体链接与相关实现文件选择。
+
+模块职责：
+- 从被诊断仓库的真实目录、活动配置和中文语言包派生活动记录；
+- 把用户问题链接到唯一活动，或明确返回未链接/歧义；
+- 为链接结果挑选同活动服务、控制器与全局配置实现文件。
+
+边界与安全约束：
+- 只读取活动 `config.php`、`php/config/*.php`、`php/conf/*.php` 及同名
+  `php/lang/zh/*.php` 语言包，不访问业务数据库、Redis、日志或线上服务；
+- 别名只能来自真实数据：目录名、配置文件中文文案和语言包值，禁止写入活动专属
+  硬编码映射；
+- 知识库只保存结构标记和匹配词，不保存密钥、URL、图片地址或完整源码；
+- 链接分差不足时返回歧义结果，调用方必须按“未链接”处理，不能猜测活动。
+"""
+
+from dataclasses import dataclass
+import os
+import re
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+# 单个配置文件读取上限。活动配置通常几十 KB，超过该值的文件多为导出数据或
+# 多语言全量文案，继续读取会显著拖慢一次全仓构建。
+MAX_CONFIG_BYTES = 400 * 1024
+# 每个活动保留的低置信中文片段上限，避免异常长配置文件撑大内存。
+MAX_CONTEXT_ZH = 200
+# 每个活动保留的审计引用条数。
+MAX_SOURCE_REFS = 6
+# 全仓最多构建的活动记录数；活动目录和全局配置文件合计通常不超过 350 个。
+MAX_ACTIVITIES = 400
+# 活动目录标记。它们是仓库中承载活动配置与实现的真实目录名。
+ACTIVITY_MARKERS = ("Logic", "crontab", "action_activity")
+# 全局配置目录标记。贵族、支付等配置没有活动目录，按文件名干单独成组。
+CONFIG_MARKERS = ("config", "conf")
+# 构建时跳过的目录，避免把第三方库、测试和版本库内容当作活动。
+SKIP_DIR_NAMES = {"vendor", "lib", "tests", "test", "phpunit", ".git", "node_modules"}
+# 中文展示词：连续中文片段，长度 2 至 40。
+_ZH_PHRASE_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,40}")
+# 方括号或井号包裹的活动文案，例如 `【魔法炼金屋】`、`#心动的旋律#`。
+_BRACKET_ALIAS_PATTERN = re.compile(r"【([^】\n]{2,20})】|#([^#\n]{2,20})#")
+# 配置中的显式中文标题字段。
+_TITLE_PATTERN = re.compile(
+    r"['\"](?:title|app_nick)['\"]\s*=>\s*['\"]([^'\"\n]{2,60})['\"]"
+)
+# 等级名称字段：`'name' => ['zh' => '业余', 'en' => 'amateur']`。
+_LEVEL_NAME_PATTERN = re.compile(
+    r"['\"](?:zh|en)['\"]\s*=>\s*['\"]([^'\"\n]{1,40})['\"]"
+)
+# 通用中文停用词。它们只表达问句结构，不指向任何活动；命中时不得给活动加分。
+GENERIC_ZH_TERMS = {
+    "活动", "等级", "门槛", "奖励", "配置", "时间", "日期", "开始", "结束",
+    "什么", "多少", "分别", "哪些", "所有", "每个", "阶段", "档位", "排名",
+    "名次", "金币", "美元", "测试", "正式", "环境", "开放", "截止", "用户",
+    "玩家", "系统", "数据", "说明", "内容", "名称", "中文", "英文", "几个",
+    "几级", "几档", "一次", "支持", "需要", "获得", "查看", "详情",
+    # 泛化称谓：只说明角色，不指向具体活动。`鉴定大师` 若因“大师”命中某个
+    # 活动，会把未知活动答成错误配置，因此这类片段不参与别名得分。
+    "大师", "专家", "达人", "代言人", "榜单",
+}
+# 英文停用词：语言包里大量普通英文，不参与活动目录匹配。
+GENERIC_EN_TERMS = {
+    "the", "and", "for", "with", "you", "your", "this", "that", "from",
+    "have", "has", "are", "not", "all", "can", "will", "info", "error",
+    "success", "lang", "config", "conf", "php", "html", "http", "https",
+}
+
+
+@dataclass(frozen=True)
+class ActivityRecord:
+    """描述一个可从仓库数据重建的活动或全局配置分组。
+
+    属性说明：
+    - `activity_id`：活动目录名或全局配置文件名干，是链接和文件选择的主键；
+    - `marker`：`Logic`/`crontab`/`action_activity`/`config`/`conf`，说明来源布局；
+    - `config_file`：项目内相对路径，完整窗口和事实引用都以它为准；
+    - `aliases_zh`：高置信中文展示词，来自标题、等级名称和方括号/井号文案；
+    - `context_zh`：低置信中文片段，来自注释和普通文案；
+    - `aliases_en`：目录词根和语言包中的英文标识，例如 `noble`、`VIP`；
+    - `level_names`：等级中文/英文名称，用于“某等级叫什么”类问题；
+    - `level_count`：等级条目数量，只用于意图匹配，不直接生成结论；
+    - `level_key`：等级数组键名（`level` 或 `levels`）；
+    - `level_field`：等级门槛字段（`score`、`value` 或 `limit`）；
+    - `stime`/`etime`：配置中的起止时间字面量；
+    - 其余布尔字段表示配置中是否存在对应结构，用于与问题意图对齐；
+    - `source_refs`：`文件:行号` 审计引用，供报告展示链接依据。
+    """
+
+    activity_id: str
+    marker: str
+    config_file: str
+    aliases_zh: Tuple[str, ...] = ()
+    context_zh: Tuple[str, ...] = ()
+    aliases_en: Tuple[str, ...] = ()
+    level_names: Tuple[str, ...] = ()
+    level_count: int = 0
+    level_key: str = ""
+    level_field: str = ""
+    stime: str = ""
+    etime: str = ""
+    has_rank_prizes: bool = False
+    has_allow_types: bool = False
+    has_surprise: bool = False
+    has_jump_switch: bool = False
+    env_pair_count: int = 0
+    source_refs: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ActivityLink:
+    """描述一次“问题 → 活动”的链接结果。
+
+    属性说明：
+    - `record`：得分最高的活动记录；
+    - `score`：链接总分，只用于选择活动，不进入业务结论；
+    - `matched_terms`：命中的目录名、别名或等级名，供审计解释；
+    - `ambiguous`：最高分与第二名分差不足时为 `True`，调用方必须按未链接处理。
+    """
+
+    record: ActivityRecord
+    score: int
+    matched_terms: Tuple[str, ...] = ()
+    ambiguous: bool = False
+
+
+# 单进程缓存：`(仓库根, 项目)` → `(代码指纹, 活动记录)`。缓存只保存派生结构，
+# 不保存源码正文；代码指纹变化后整组重建。
+_KNOWLEDGE_CACHE: Dict[Tuple[str, str], Tuple[str, Tuple[ActivityRecord, ...]]] = {}
+
+
+def _default_read_text(root: str, project: str) -> Callable[[str], str]:
+    """创建默认的只读文件读取函数。
+
+    参数:
+        - `root`：被诊断仓库白名单根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`；对应根目录下的项目子目录。
+
+    Returns:
+        接收项目内相对路径并返回 UTF-8 文本的函数。文件不存在或超过
+        `MAX_CONFIG_BYTES` 时抛出 `OSError`/`ValueError`，由调用方跳过该文件，
+        避免异常配置中断整个知识库构建。
+    """
+
+    base = os.path.join(root, project)
+
+    def read_text(relative_path: str) -> str:
+        """读取一个项目内相对路径的 UTF-8 文本。
+
+        参数:
+            - `relative_path`：项目内相对路径，类型为 `str`；不接受绝对路径。
+
+        Returns:
+            文件完整文本。文件不是普通文件、超出大小上限或编码损坏时抛出异常，
+            由构建函数按单文件降级。
+        """
+        candidate = relative_path.replace("\\", "/").strip("/")
+        if not candidate or candidate.startswith("..") or os.path.isabs(candidate):
+            raise ValueError("非法知识库读取路径")
+        full_path = os.path.join(base, *candidate.split("/"))
+        if not os.path.isfile(full_path):
+            raise OSError("知识库文件不存在")
+        if os.path.getsize(full_path) > MAX_CONFIG_BYTES:
+            raise ValueError("知识库文件超过读取上限")
+        with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+
+    return read_text
+
+
+def _normalize_zh_alias(value: str) -> str:
+    """把配置文案规范化为可比较的中文别名。
+
+    参数:
+        - `value`：来自配置或语言包的原始文案，类型为 `str`。
+
+    Returns:
+        去掉 `%s`、`#`、方括号和首尾标点后只保留中英文与数字的片段；含 URL、
+        图片路径、邮箱或翻译键的文本返回空字符串，避免扩大敏感信息暴露面。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.casefold()
+    for fragment in ("http", "://", ".png", ".jpg", ".jpeg", ".gif", "@", "lang_map"):
+        if fragment in lowered:
+            return ""
+    cleaned = re.sub(r"%[sd]", "", text)
+    cleaned = re.sub(r"[#【】\[\]（）()：:，,。.！!？?\-_/\\|]", "", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned)
+    if not re.search(r"[\u4e00-\u9fff]", cleaned):
+        return ""
+    if len(cleaned) < 2 or len(cleaned) > 40:
+        return ""
+    return cleaned
+
+
+def _extract_english_tokens(text: str) -> set:
+    """从语言包或标题中提取可比较的英文标识。
+
+    参数:
+        - `text`：配置或语言包文本，类型为 `str`。
+
+    Returns:
+        长度至少三个字符、非通用停用词的英文标识集合。全部大写的缩写（如
+        `VIP`）保留，方便由数据建立业务别名；普通英文只保留长度不少于四个
+        字符的词，避免噪声。
+    """
+    tokens = set()
+    for raw in re.findall(r"[A-Za-z][A-Za-z0-9]{2,40}", text or ""):
+        folded = raw.casefold()
+        if folded in GENERIC_EN_TERMS:
+            continue
+        if len(folded) >= 4 or (raw.isupper() and len(folded) >= 3):
+            tokens.add(folded)
+    return tokens
+
+
+def _line_number(text: str, index: int) -> int:
+    """把文本偏移转换为 1 开始的行号。
+
+    参数:
+        - `text`：完整配置文本，类型为 `str`。
+        - `index`：目标字符偏移，类型为 `int`；负数按 0 处理。
+
+    Returns:
+        该偏移所在行号；偏移越界时返回 1，保证审计引用始终是合法行号。
+    """
+    if index < 0:
+        return 1
+    return text.count("\n", 0, min(index, len(text))) + 1
+
+
+def _array_block(text: str, key: str) -> str:
+    """提取指定键对应数组的源码片段。
+
+    参数:
+        - `text`：完整配置文本，类型为 `str`。
+        - `key`：配置数组键名，例如 `levels` 或 `level`，类型为 `str`。
+
+    Returns:
+        从 `'key' => [` 开始到配对右括号为止的片段；找不到该键或括号不配对时
+        返回空字符串。只做字符级括号计数，不执行 PHP 代码。
+    """
+    match = re.search(
+        rf"['\"]{re.escape(key)}['\"]\s*=>\s*\[", text or ""
+    )
+    if not match:
+        return ""
+    start = match.end() - 1
+    depth = 0
+    for position in range(start, len(text)):
+        char = text[position]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start:position + 1]
+    return ""
+
+
+def _extract_alias_data(
+    text: str,
+    activity_id: str,
+    config_file: str,
+) -> Dict[str, object]:
+    """从单个配置文件提取别名、时间窗和结构标记。
+
+    参数:
+        - `text`：配置文件完整文本，类型为 `str`。
+        - `activity_id`：活动目录名或配置文件名干，类型为 `str`；用于生成英文
+          目录词根。
+        - `config_file`：项目内相对路径，类型为 `str`；只用于生成审计引用。
+
+    Returns:
+        包含 `aliases_zh`、`context_zh`、`aliases_en`、`level_names`、
+        `level_count`、`level_key`、`level_field`、`stime`、`etime`、结构布尔
+        标记和 `source_refs` 的字典。所有值只来自传入文本，不读取其他文件。
+    """
+    primary_zh: List[str] = []
+    bracket_values = []
+    for match in _BRACKET_ALIAS_PATTERN.finditer(text or ""):
+        candidate = _normalize_zh_alias(match.group(1) or match.group(2) or "")
+        if candidate:
+            bracket_values.append(candidate)
+            primary_zh.append(candidate)
+    for match in _TITLE_PATTERN.finditer(text or ""):
+        candidate = _normalize_zh_alias(match.group(1))
+        if candidate:
+            primary_zh.append(candidate)
+
+    # 等级名称和 `name.zh` 都是面向用户的真实中文名，属于高置信别名。
+    level_key = ""
+    level_field = ""
+    level_names: List[str] = []
+    for key in ("level", "levels"):
+        block = _array_block(text, key)
+        if not block:
+            continue
+        names = [
+            _normalize_zh_alias(match.group(1))
+            for match in _LEVEL_NAME_PATTERN.finditer(block)
+        ]
+        names = [name for name in names if name]
+        if names:
+            level_names.extend(names)
+        if key == "level" and ("'score'" in block or "'value'" in block):
+            level_key, level_field = key, ("score" if "'score'" in block else "value")
+            break
+        if key == "levels":
+            if not level_key:
+                level_key = "levels"
+                level_field = "score" if "'score'" in block else "limit"
+    if level_key and not level_names:
+        level_names = []
+    count_level_limits = len(re.findall(r"['\"]limit['\"]\s*=>", text or ""))
+    count_level_constants = len(re.findall(r"::LEVEL_[A-Z0-9_]+\s*=>\s*\[", text or ""))
+    level_count = max(count_level_limits, count_level_constants)
+    if len(level_names) > level_count:
+        level_count = len(level_names)
+
+    primary_zh.extend(level_names)
+    unique_primary = tuple(dict.fromkeys(primary_zh))[:120]
+    context_zh = tuple(
+        dict.fromkeys(
+            candidate
+            for match in _ZH_PHRASE_PATTERN.finditer(text or "")
+            if (candidate := _normalize_zh_alias(match.group(0)))
+        )
+    )[:MAX_CONTEXT_ZH]
+
+    # 目录名拆出的英文词根与语言包英文标识一起参与链接；目录名本身最关键，
+    # 但仍由问题中出现该词才得分，不做任何映射。
+    directory_tokens = {
+        token.casefold()
+        for token in re.findall(
+            r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+",
+            activity_id or "",
+        )
+        if len(token) >= 4
+    }
+    # 英文别名只取目录词根和显式标题，不从整份配置正文抽取；否则普通字段名
+    # 会让任意英文提问误命中多个活动。
+    title_text = " ".join(match.group(1) for match in _TITLE_PATTERN.finditer(text or ""))
+    english_tokens = set(directory_tokens)
+    english_tokens |= _extract_english_tokens(title_text)
+
+    def date_for(name: str) -> str:
+        """读取指定时间键附近的日期字面量。
+
+        参数:
+            - `name`：`stime` 或 `etime`，类型为 `str`。
+
+        Returns:
+            `YYYY-MM-DD HH:MM:SS` 形式的字面量；没有日期时返回空字符串。
+            只接受字符串字面量，不执行 `DateTime` 表达式。
+        """
+        match = re.search(
+            rf"['\"]{name}['\"]\s*=>\s*[^\n]{{0,120}}?"
+            r"(?:modify|getTimestamp)\s*\(\s*['\"]"
+            r"(\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?)['\"]",
+            text or "",
+        )
+        if not match:
+            match = re.search(
+                rf"['\"]{name}['\"]\s*=>[\s\S]{{0,160}}?"
+                r"['\"](\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?)['\"]",
+                text or "",
+            )
+        return match.group(1) if match else ""
+
+    refs: List[str] = []
+    for needle in ("'stime'", "'level'", "'levels'", "'rank_prizes'"):
+        index = (text or "").find(needle)
+        if index >= 0:
+            refs.append(f"{config_file}:{_line_number(text or '', index)}")
+    return {
+        "aliases_zh": unique_primary,
+        "context_zh": context_zh,
+        "aliases_en": tuple(sorted(english_tokens)),
+        "level_names": tuple(dict.fromkeys(level_names))[:60],
+        "level_count": level_count,
+        "level_key": level_key,
+        "level_field": level_field,
+        "stime": date_for("stime"),
+        "etime": date_for("etime"),
+        "has_rank_prizes": bool(
+            re.search(r"['\"](?:rank_prizes|top_prizes)['\"]\s*=>\s*\[", text or "")
+        ),
+        "has_allow_types": "'allow_types'" in (text or ""),
+        "has_surprise": bool(
+            re.search(r"['\"]surprise['\"]\s*=>\s*\[", text or "")
+        ),
+        "has_jump_switch": "'is_can_jump_x'" in (text or ""),
+        "env_pair_count": len(re.findall(r"getByTestMode\s*\(", text or "")),
+        "source_refs": tuple(refs[:MAX_SOURCE_REFS]),
+    }
+
+
+def _iter_marker_dirs(base_path: str) -> Iterable[Tuple[str, str]]:
+    """枚举活动与全局配置目录，返回 `(marker, 绝对目录)` 序列。
+
+    参数:
+        - `base_path`：项目仓库绝对根目录，类型为 `str`。
+
+    Returns:
+        项目根、一级子项目及 `php/` 子目录下所有活动/配置标记目录。只返回真实
+        存在的目录；目录枚举失败时跳过该前缀，不能中断构建。
+    """
+    prefixes = [""]
+    try:
+        prefixes.extend(
+            name
+            for name in sorted(os.listdir(base_path))
+            if os.path.isdir(os.path.join(base_path, name))
+            and name.casefold() not in SKIP_DIR_NAMES
+        )
+    except OSError:
+        return
+    seen: set = set()
+    for prefix in prefixes:
+        for marker in (*ACTIVITY_MARKERS, *CONFIG_MARKERS):
+            for relative in (marker, f"php/{marker}"):
+                candidate = os.path.join(base_path, *([prefix] if prefix else []), *relative.split("/"))
+                if candidate in seen or not os.path.isdir(candidate):
+                    continue
+                seen.add(candidate)
+                yield marker, candidate
+
+
+def _extract_lang_package(
+    config_file: str,
+    read_text: Callable[[str], str],
+) -> str:
+    """读取全局配置对应的中文语言包文本。
+
+    参数:
+        - `config_file`：全局配置相对路径，例如 `waky3_miyouphp/php/config/noble.php`。
+        - `read_text`：项目内只读文本读取函数，类型为 `Callable[[str], str]`。
+
+    Returns:
+        同路径 `php/lang/zh/<文件名>` 的文本；不是全局配置或文件不存在时返回
+        空字符串。语言包只用于补充别名，不参与数值事实。
+    """
+    match = re.search(r"/(?:config|conf)/([^/]+)\.php$", config_file or "")
+    if not match:
+        return ""
+    lang_file = re.sub(
+        r"/(?:config|conf)/[^/]+\.php$",
+        f"/lang/zh/{match.group(1)}.php",
+        config_file,
+    )
+    if lang_file == config_file:
+        return ""
+    try:
+        return read_text(lang_file)
+    except (OSError, ValueError):
+        return ""
+
+
+def build_activity_knowledge(
+    root: str,
+    project: str,
+    *,
+    read_text: Optional[Callable[[str], str]] = None,
+    max_activities: int = MAX_ACTIVITIES,
+) -> Tuple[ActivityRecord, ...]:
+    """从真实仓库构建活动知识库。
+
+    参数:
+        - `root`：被诊断仓库白名单根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `read_text`：可注入的项目内只读文本读取函数，类型为
+          `Optional[Callable[[str], str]]`；单测用构造内容替换真实仓库读取。
+        - `max_activities`：最多构建的记录数，类型为 `int`；用于限制全仓扫描
+          成本。
+
+    Returns:
+        去重后的活动记录元组。活动目录必须有 `config.php`；全局配置按
+        `php/config`、`php/conf` 下的 `.php` 文件建立。读取失败的文件跳过，
+        不影响其他活动；没有任何可读文件时返回空元组。
+    """
+    reader = read_text or _default_read_text(root, project)
+    base_path = os.path.join(root, project)
+    if not os.path.isdir(base_path):
+        return ()
+    records: List[ActivityRecord] = []
+    seen: set = set()
+    for marker, marker_path in _iter_marker_dirs(base_path):
+        try:
+            entries = sorted(os.listdir(marker_path))
+        except OSError:
+            continue
+        for entry in entries:
+            full_path = os.path.join(marker_path, entry)
+            if marker in ACTIVITY_MARKERS:
+                config_path = os.path.join(full_path, "config.php")
+                if not os.path.isdir(full_path) or not os.path.isfile(config_path):
+                    continue
+                activity_id = entry
+                relative = "/".join(
+                    part
+                    for part in (
+                        os.path.relpath(full_path, base_path).replace("\\", "/"),
+                        "config.php",
+                    )
+                    if part
+                )
+            elif marker in CONFIG_MARKERS:
+                if not entry.endswith(".php") or not os.path.isfile(full_path):
+                    continue
+                activity_id = entry[:-4]
+                relative = os.path.relpath(full_path, base_path).replace("\\", "/")
+            else:
+                continue
+            normalized_relative = relative.replace("\\", "/")
+            if not normalized_relative or normalized_relative.casefold() in seen:
+                continue
+            try:
+                text = reader(normalized_relative)
+            except (OSError, ValueError):
+                continue
+            if not text:
+                continue
+            seen.add(normalized_relative.casefold())
+            data = _extract_alias_data(text, activity_id, normalized_relative)
+            # 只保留有业务信号的文件：没有任何别名、等级表、时间窗或结构标记的
+            # 配置文件无法被链接，继续保存只会占用记录上限并增加噪声。
+            if not (
+                data["aliases_zh"]
+                or data["aliases_en"]
+                or int(data["level_count"]) > 0
+                or data["stime"]
+                or data["has_rank_prizes"]
+                or data["has_allow_types"]
+            ):
+                continue
+            # 全局配置补充同名中文语言包：`noble.php` 的 `VIP 1` 来自语言包，
+            # 不写死在代码里。
+            lang_text = _extract_lang_package(normalized_relative, reader)
+            if lang_text:
+                lang_zh = []
+                lang_values = []
+                for match in re.finditer(
+                    r"=>\s*['\"]([^'\"\n]{1,60})['\"]",
+                    lang_text,
+                ):
+                    lang_values.append(match.group(1))
+                    candidate = _normalize_zh_alias(match.group(1))
+                    if candidate:
+                        lang_zh.append(candidate)
+                data["aliases_zh"] = tuple(
+                    dict.fromkeys([*data["aliases_zh"], *lang_zh])
+                )[:160]
+                # 英文别名只取语言包值中的大写缩写（例如 `VIP 1` 的 `VIP`），
+                # 不取键名或普通英文词；否则 `horn_level`、`last_noble` 这类
+                # 文案词会让任意英文提问误命中多个活动。
+                uppercase_tokens = {
+                    raw.casefold()
+                    for value in lang_values
+                    for raw in re.findall(r"[A-Z]{2,12}", value)
+                    if len(raw) >= 3
+                }
+                data["aliases_en"] = tuple(
+                    dict.fromkeys([*data["aliases_en"], *uppercase_tokens])
+                )[:120]
+            records.append(
+                ActivityRecord(
+                    activity_id=activity_id,
+                    marker=marker,
+                    config_file=normalized_relative,
+                    aliases_zh=tuple(data["aliases_zh"]),
+                    context_zh=tuple(data["context_zh"]),
+                    aliases_en=tuple(data["aliases_en"]),
+                    level_names=tuple(data["level_names"]),
+                    level_count=int(data["level_count"]),
+                    level_key=str(data["level_key"]),
+                    level_field=str(data["level_field"]),
+                    stime=str(data["stime"]),
+                    etime=str(data["etime"]),
+                    has_rank_prizes=bool(data["has_rank_prizes"]),
+                    has_allow_types=bool(data["has_allow_types"]),
+                    has_surprise=bool(data["has_surprise"]),
+                    has_jump_switch=bool(data["has_jump_switch"]),
+                    env_pair_count=int(data["env_pair_count"]),
+                    source_refs=tuple(data["source_refs"]),
+                )
+            )
+            if len(records) >= max_activities:
+                return tuple(records)
+    return tuple(records)
+
+
+def load_activity_knowledge(
+    root: str,
+    project: str,
+    fingerprint: str = "",
+    *,
+    read_text: Optional[Callable[[str], str]] = None,
+) -> Tuple[ActivityRecord, ...]:
+    """按代码指纹读取或重建活动知识库。
+
+    参数:
+        - `root`：被诊断仓库白名单根目录，类型为 `str`。
+        - `project`：项目标识，类型为 `str`。
+        - `fingerprint`：当前项目代码快照指纹，类型为 `str`；为空时强制重建，
+          避免在索引尚未完成时复用陈旧记录。
+        - `read_text`：可注入的只读文本读取函数，类型为
+          `Optional[Callable[[str], str]]`；测试使用。
+
+    Returns:
+        活动记录元组。指纹一致时直接复用进程缓存；否则重建并更新缓存。
+        构建失败返回空元组，由调用方按“知识库不可用”降级。
+    """
+    cache_key = (root, project)
+    if fingerprint:
+        cached = _KNOWLEDGE_CACHE.get(cache_key)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+    try:
+        records = build_activity_knowledge(
+            root,
+            project,
+            read_text=read_text,
+        )
+    except Exception:
+        return ()
+    if fingerprint:
+        _KNOWLEDGE_CACHE[cache_key] = (fingerprint, records)
+    return records
+
+
+def _question_zh_grams(question: str) -> Dict[str, int]:
+    """生成问题中的中文片段及其长度。
+
+    参数:
+        - `question`：用户原始问题，类型为 `str`。
+
+    Returns:
+        `片段 → 长度` 映射，片段长度为 2 至 8 个汉字。用于与活动别名做包含
+        匹配；停用词片段不会进入映射，避免所有活动因“活动/等级”等词得分。
+    """
+    grams: Dict[str, int] = {}
+    for run in _ZH_PHRASE_PATTERN.findall(question or ""):
+        limit = min(8, len(run))
+        for size in range(2, limit + 1):
+            for start in range(0, len(run) - size + 1):
+                value = run[start:start + size]
+                # 含通用提问词的片段一律不参与匹配：“名奖励”“的等级”这类
+                # 组合会让无关活动靠问句结构得分。
+                if any(term in value for term in GENERIC_ZH_TERMS):
+                    continue
+                grams[value] = size
+    return grams
+
+
+def _best_gram(grams: Dict[str, int], aliases: Sequence[str]) -> Tuple[int, str]:
+    """计算问题片段与一组别名的最大包含长度。
+
+    参数:
+        - `grams`：问题中文片段映射，类型为 `Dict[str, int]`。
+        - `aliases`：活动别名序列，类型为 `Sequence[str]`。
+
+    Returns:
+        `(最长命中长度, 命中片段)`；没有命中时返回 `(0, "")`。只做字符串包含，
+        不使用编辑距离或同义词，保证链接可解释。
+    """
+    best_length = 0
+    best_value = ""
+    for alias in aliases:
+        if not alias:
+            continue
+        for gram, length in grams.items():
+            if length <= best_length:
+                continue
+            if gram in alias:
+                best_length, best_value = length, gram
+    return best_length, best_value
+
+
+def _intent_flags(question: str) -> Dict[str, bool]:
+    """识别问题中的业务意图，供活动结构对齐使用。
+
+    参数:
+        - `question`：用户原始问题，类型为 `str`。
+
+    Returns:
+        包含 `level`、`environment`、`time`、`rank`、`type`、`surprise`、
+        `jump` 的布尔字典。意图只用于选择活动，不能替代源码事实。
+    """
+    folded = (question or "").casefold()
+    return {
+        "level": any(
+            token in folded
+            for token in ("等级", "档位", "档", "级别", "阶段", "几级", "vip")
+        ),
+        "environment": any(
+            token in folded for token in ("测试", "正式", "生产", "环境")
+        ),
+        "time": any(
+            token in folded
+            for token in ("开始", "结束", "起止", "时间", "日期", "截止", "开放")
+        ),
+        "rank": bool(
+            re.search(
+                r"前\s*[一二三四五六七八九十\d]+\s*名|第\s*[一二三四五六七八九十\d]+\s*名",
+                question or "",
+            )
+            or any(token in folded for token in ("名次", "排名", "日榜", "周榜", "月榜"))
+        ),
+        "type": any(token in folded for token in ("类型", "监听", "发奖")),
+        "surprise": any(token in folded for token in ("惊喜", "区间", "保底")),
+        "jump": "跳转" in folded,
+    }
+
+
+def link_activity(
+    question: str,
+    records: Sequence[ActivityRecord],
+    *,
+    min_score: int = 12,
+    min_margin: float = 1.3,
+) -> Optional[ActivityLink]:
+    """把用户问题链接到唯一活动记录。
+
+    参数:
+        - `question`：用户原始业务问题，类型为 `str`。
+        - `records`：活动知识库记录，类型为 `Sequence[ActivityRecord]`。
+        - `min_score`：可接受的最低链接得分，类型为 `int`；低于该值返回 `None`。
+        - `min_margin`：最高分与第二名的倍率门槛，类型为 `float`；用于拒绝
+          分差不足的歧义链接。
+
+    Returns:
+        最高分记录及其解释项。最高分不足 `min_score` 时返回 `None`；分差不足时
+        返回 `ambiguous=True` 的结果，调用方必须按“未链接”处理，不能据此读取
+        该活动配置。
+    """
+    if not records:
+        return None
+    folded_question = (question or "").casefold()
+    grams = _question_zh_grams(question)
+    flags = _intent_flags(question)
+    scored: List[Tuple[int, ActivityRecord, Tuple[str, ...]]] = []
+    for record in records:
+        score = 0
+        matched: List[str] = []
+        directory = (record.activity_id or "").casefold()
+        if len(directory) >= 4 and directory in folded_question:
+            score += 120
+            matched.append(record.activity_id)
+        primary_length, primary_value = _best_gram(grams, record.aliases_zh)
+        if primary_length >= 3:
+            score += primary_length * 6
+            # 完整命中活动展示名（而不是长文案中的一个三字片段）说明问题直接
+            # 点名该活动，额外加权以高于“只是提到同一个词”的活动。
+            if primary_value in record.aliases_zh:
+                score += 15
+            matched.append(primary_value)
+        context_length, context_value = _best_gram(grams, record.context_zh)
+        if context_length >= 4 and context_length > primary_length:
+            score += context_length * 2
+            matched.append(context_value)
+        level_length, level_value = _best_gram(grams, record.level_names)
+        if level_length >= 2:
+            score += 40
+            matched.append(level_value)
+        for token in record.aliases_en:
+            if len(token) >= 3 and token in folded_question:
+                score += 25
+                matched.append(token)
+        if flags["level"] and record.level_count > 0:
+            score += 20
+        if flags["environment"] and record.env_pair_count > 0:
+            score += 25
+        if flags["time"] and record.stime:
+            score += 30
+        if flags["rank"] and record.has_rank_prizes:
+            score += 30
+        if flags["type"] and record.has_allow_types:
+            score += 25
+        if flags["surprise"] and record.has_surprise:
+            score += 25
+        if flags["jump"] and record.has_jump_switch:
+            score += 25
+        if score > 0:
+            scored.append((score, record, tuple(dict.fromkeys(matched))))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1].activity_id))
+    top = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0
+    if top[0] < min_score:
+        return None
+    if second_score > 0 and top[0] < second_score * min_margin:
+        return ActivityLink(
+            record=top[1],
+            score=top[0],
+            matched_terms=top[2],
+            ambiguous=True,
+        )
+    return ActivityLink(record=top[1], score=top[0], matched_terms=top[2])
+
+
+def _path_priority(
+    relative_path: str,
+    tokens: Sequence[str],
+    global_config: bool,
+    level_field: str = "",
+) -> Tuple[int, int, int, str]:
+    """计算相关实现文件的排序键。
+
+    参数:
+        - `relative_path`：项目内相对路径，类型为 `str`。
+        - `tokens`：活动名或配置名干，类型为 `Sequence[str]`。
+        - `global_config`：是否为全局配置分组，类型为 `bool`；全局配置按
+          服务/控制器/模型排序，活动目录按同目录入口优先。
+        - `level_field`：等级门槛字段（`score`/`limit`），类型为 `str`；文件名
+          含该字段的实现在“按什么字段计算”问题中优先读取。
+
+    Returns:
+        `(领域优先, 角色优先, 路径)` 元组，数值越小越优先。排序只使用文件名和
+        路径，不读取文件内容。
+    """
+    folded = relative_path.replace("\\", "/").casefold()
+    basename = folded.rsplit("/", 1)[-1]
+    domain = 0
+    for token in tokens:
+        if token and token in basename:
+            domain = 1
+            break
+    field_bonus = 1 if level_field and level_field in basename else 0
+    role = 9
+    if global_config:
+        if "service" in basename:
+            role = 0
+        elif "control" in basename:
+            role = 1
+        elif "model" in basename:
+            role = 2
+    else:
+        if basename.endswith("boot.php"):
+            role = 0
+        elif "control" in basename:
+            role = 1
+        elif "service" in basename:
+            role = 2
+    return (-domain, -field_bonus, role, folded)
+
+
+def select_related_files(
+    record: ActivityRecord,
+    known_files: Sequence[str],
+    *,
+    limit: int = 6,
+) -> List[str]:
+    """为链接到的活动选择同活动实现文件。
+
+    参数:
+        - `record`：已链接的活动记录，类型为 `ActivityRecord`。
+        - `known_files`：项目符号索引中的真实文件路径，类型为
+          `Sequence[str]`；只从中选择，不扫描仓库。
+        - `limit`：最多返回的文件数，类型为 `int`。
+
+    Returns:
+        同活动服务、控制器或全局配置实现文件的相对路径列表。排除
+        `vendor/lib/tests/phpunit` 和配置文件本身；没有候选时返回空列表。
+    """
+    if limit < 1:
+        return []
+    global_config = record.marker in CONFIG_MARKERS
+    directory = record.config_file.rsplit("/", 1)[0] if "/" in record.config_file else ""
+    tokens = [(record.activity_id or "").casefold()]
+    candidates: List[str] = []
+    for path in known_files:
+        normalized = str(path or "").replace("\\", "/")
+        folded = normalized.casefold()
+        if not normalized or not folded.endswith(".php"):
+            continue
+        if any(
+            f"/{part}/" in f"/{folded}/"
+            for part in ("vendor", "lib", "tests", "phpunit")
+        ):
+            continue
+        basename = folded.rsplit("/", 1)[-1]
+        if global_config:
+            # 全局配置只接受实现文件，不能把其他 `php/config/*.php` 也当实现。
+            if "/config/" in f"/{folded}/" or "/conf/" in f"/{folded}/":
+                continue
+            if not any(
+                token and token in basename
+                for token in tokens
+            ):
+                continue
+        else:
+            if folded.endswith("/config.php"):
+                continue
+            same_directory = bool(
+                directory and folded.startswith(f"{directory.casefold()}/")
+            )
+            same_activity = bool(
+                record.activity_id
+                and record.activity_id.casefold() in basename
+            )
+            if not same_directory and not same_activity:
+                continue
+        candidates.append(normalized)
+    ordered = sorted(
+        dict.fromkeys(candidates),
+        key=lambda path: _path_priority(
+            path,
+            tokens,
+            global_config,
+            record.level_field,
+        ),
+    )
+    return ordered[:limit]

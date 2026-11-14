@@ -32,12 +32,12 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 | 项目 | 状态 |
 |---|---|
-| 当前阶段 | 阶段 38：VIP 升级门槛可答、结论可读化与证据缺口门控 |
-| 总体进度 | 99%（阶段 0 至 38 已完成；生产 embedding 吞吐待补齐） |
-| 最近更新 | 2026-11-13 |
+| 当前阶段 | 阶段 39：项目活动知识库与实体链接 |
+| 总体进度 | 99%（阶段 0 至 39 已完成；生产 embedding 吞吐待补齐） |
+| 最近更新 | 2026-11-15 |
 | 当前负责人 | Codex |
-| 当前阻塞 | 生产 embedding 吞吐仍需更高配额；无其他功能阻塞 |
-| 下一步 | 用户审阅阶段 36/37 工作区改动，确认后使用中文 commit 提交 |
+| 当前阻塞 | 生产 embedding 吞吐仍需更高配额；`鉴定大师` 在 waky3 无中文数据别名，B3 按缺口返回 |
+| 下一步 | 用户审阅阶段 39 工作区改动，确认后使用中文 commit 提交 |
 
 ## 阶段进度
 
@@ -82,10 +82,71 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 | 36 | 配置问答通用能力修复与题库第一轮验收 | 已完成（A/D/H 45/45 通过） | 100% |
 | 37 | 配置问答长尾修复与活动目录别名定位 | 已完成（含真实 E2E） | 100% |
 | 38 | VIP 升级门槛可答、结论可读化与证据缺口门控 | 已完成（含真实 E2E） | 100% |
+| 39 | 项目活动知识库与实体链接 | 已完成（含真实 E2E） | 100% |
 
 ---
 
 ## 阶段性提交记录
+
+### 2026-11-15：阶段 39 项目活动知识库与实体链接
+
+#### 本次推进
+
+- 新增 `app/domain/diagnosis/activity_kb.py`：
+  - `ActivityRecord` 保存活动目录、配置路径、中文展示词、等级名称与字段、起止
+    时间、名次/类型/惊喜/跳转结构标记、`getByTestMode` 成对数量和审计引用；
+  - `build_activity_knowledge` 只扫描活动目录与 `php/config`、`php/conf`，支持
+    注入 `read_text`；别名来自 `title`、`name.zh`、`【】`/`#…#` 文案和同名
+    `php/lang/zh/*.php` 语言包，不写活动专属映射；
+  - `link_activity` 按目录名、中文别名、等级名、英文缩写和问题结构意图打分，
+    采用“最低分 + 1.3 倍分差”双门控；分差不足返回 `ambiguous=True`；
+  - `select_related_files` 为链接活动选择同目录 Boot/Control/service，或为全局
+    配置选择 Service/Control/Model，排除 `config.php`、`vendor/lib/tests`。
+- `app/diagnosis_workflow.py`：
+  - `_select_diagnostic_evidence` 新增 `activity_kb_config`（3 条）与
+    `activity_kb_entry`（6 条）独立预算；
+  - 诊断证据后处理前构建知识库并链接活动，链接成功时追加配置占位证据和相关
+    实现文件；链接配置强制进入完整配置窗口并整文件读取；
+  - `retrieval_plan.activity_link` 记录 `available/activity_id/config_file/score/
+    matched_terms/ambiguous/level_key/level_field/related_files`；知识库异常时
+    记录降级告警，不中断诊断。
+- `app/domain/diagnosis/analyzers/configuration.py`：
+  - 新增 `activity_decision_source_facts`：只在问题询问判定/逻辑/入口时触发，
+    从链接活动实现文件定位 `Config::get('<活动>.<等级键>')`，优先选择方法名含
+    `level` 的入口（如 `getLevel`），输出类、方法、配置路径和行号引用。
+- `app/business_analysis.py`：
+  - 判定入口事实形成独立结论；新增“未链接活动”门控：知识库可用但问题点名的
+    `X活动` 未链接或链接歧义时直接返回 `gap=true`，不读取其他活动配置；
+  - 修复问题开头连续中文把“游戏榜第”误当活动名的证据门控，去掉尾部序号词后
+    再判断活动名长度。
+- 新增 `tests/test_activity_kb.py` 7 项构造源码测试，覆盖别名来源、中文活动链接、
+    歧义放弃、语言包 VIP 别名、时间窗、相关文件边界和判定入口。
+
+#### 本次验证
+
+- `.venv/bin/python -m pytest -q`：`396 passed`；
+- `python3 scripts/check_comment_coverage.py`：通过；
+- `node scripts/check_frontend_syntax.js`：通过；
+- `git diff --check`：通过；
+- 重建 `rag-api`、`rag-worker` 后运行 24 题验收：`23/24` 通过；
+  - A1/A2/A3/A4/A5、B1/B2/B4–B10、C1–C3、D1–D3、E1–E3 全部通过；
+  - A4 返回 `NewNobleScoreServices::getLevel` 与 `noble.level` 的 `score` 门槛；
+  - B7 通过知识库链接到 `loveBall`，返回五个等级门槛与奖励；
+  - D1–D3 通过链接活动配置返回 `stime/etime`；
+  - B3 `鉴定大师活动四个等级的中文名称和门槛` 返回 `gap=true` 且结论为空。
+
+#### 当前状态与缺口
+
+- 阶段目标与验收项完成，唯一失败项 B3 是数据缺口：`鉴定大师` 在 waky3 仓库的
+  配置、语言包、后台与 SQL 中均不存在中文文案，知识库无法从数据建立别名；
+  本轮按要求返回缺口，不使用硬编码或猜测答成 `gemMaster`。
+- 后续可选方案：用户确认反馈后把“问题中文片段 → 活动目录”写入可审计的反馈
+  别名表，或在 `use_ai=true` 时由 LLM 在候选活动列表中做实体链接。
+
+#### 下一步
+
+- 等待用户审阅本阶段工作区改动；确认后使用中文 commit 提交。
+- 如需 B3 通过，先确认是否允许引入反馈别名表或 LLM 实体链接。
 
 ### 2026-11-13：阶段 38 VIP 升级门槛可答、结论可读化与证据缺口门控
 
@@ -145,6 +206,21 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 - 真实 E2E：第 6 名 → `80000金币`，前 3 名 → 100/60/40 美元，第 10 名 →
   `30000金币`，第 99 名 → 明确缺口；
 - 单测新增 2 条（候选上限、前三名过滤），全量 `389 passed`。
+
+### 验收回归修复
+
+- `repository_history.is_history_question` 不再把“活动什么时候开始/结束”判为
+  Git 历史问题，起止时间回到配置 `stime/etime`；
+- `config_question` 增加活动起止时间意图，完整窗口增加时间/日期词；
+- `scoped_config_evidence` 增加“目录名包含在术语中”加分和 `VIP→noble`
+  同义词加分，A1/A3 稳定落在 `config/noble`；
+- 等级题排除纯 `prizes` 奖品明细表，避免商品编号冒充等级；
+- 中文活动名未在任何证据行中出现时，逐级枚举结果作废并报告缺口；
+- 结论为空时统一设置 `gap=true`，不再静默返回空字符串。
+
+复测：D1-D3 返回配置起止时间；A1 输出 12 级 VIP 门槛；A3 输出 VIP 10
+测试/正式门槛；B9 输出家族城堡 0/100万/300万/600万/1000万；
+B7、B3、A4 仍需继续修复（见验收记录）。
 
 #### 当前状态
 

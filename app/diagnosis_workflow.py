@@ -53,6 +53,11 @@ from app.repository_history import (
     search_repository_history,
 )
 from app.domain.diagnosis.config_graph import parse_config_graph
+from app.domain.diagnosis.activity_kb import (
+    link_activity,
+    load_activity_knowledge,
+    select_related_files,
+)
 from app.domain.diagnosis.analyzers.common import _evidence_lines
 from app.domain.diagnosis.analyzers.configuration import _activity_root
 from app.question_type import QuestionType, classify_question
@@ -160,6 +165,8 @@ def _needs_full_config_window(question: str) -> bool:
             # 奖励/名次问题需要读到同文件的 `rank_prizes`、`prizes` 奖品表；
             # 只给命中行窗口时，名次表和奖品定义往往都在窗口之外。
             "奖励", "奖品", "名次", "排名", "金币", "美元", "瓜分",
+            # 起止时间通常写在活动配置的 `stime`/`etime`，不在命中行附近。
+            "时间", "日期", "开始", "结束",
         )
     )
 
@@ -1633,6 +1640,28 @@ def _select_diagnostic_evidence(
         if activity_service_count >= 5 or len(selected) >= limit:
             break
 
+    # 活动知识库链接到的配置占位证据同样没有业务锚点，需要独立名额；它负责把
+    # 用户点名的活动配置带进完整窗口，不能依赖通用检索词命中。
+    activity_kb_config_count = 0
+    for item in evidence:
+        if item.get("type") != "activity_kb_config":
+            continue
+        append(item)
+        activity_kb_config_count += 1
+        if activity_kb_config_count >= 3 or len(selected) >= limit:
+            break
+
+    # 知识库为链接活动补入的服务/控制器文件也只有首行占位；独立预算保证
+    # 判定逻辑、结算和防重实现不会被通用候选挤出。
+    activity_kb_entry_count = 0
+    for item in evidence:
+        if item.get("type") != "activity_kb_entry":
+            continue
+        append(item)
+        activity_kb_entry_count += 1
+        if activity_kb_entry_count >= 6 or len(selected) >= limit:
+            break
+
     # 中文锚点与英文常量共现推导出的活动配置同样只有首行占位，需要独立名额。
     alias_config_count = 0
     for item in evidence:
@@ -2471,6 +2500,10 @@ async def execute_diagnosis(task_id: str) -> None:
             "conclusion_candidate": False,
             "candidate_count": 0,
         }
+        # 活动实体链接摘要。`available` 表示知识库是否成功构建；`ambiguous`
+        # 或空 `activity_id` 时，业务分析层必须按未链接处理并报告缺口。
+        activity_link_payload: dict = {"available": False}
+        activity_link = None
         try:
             initial_terms = list(
                 dict.fromkeys(
@@ -3037,6 +3070,74 @@ async def execute_diagnosis(task_id: str) -> None:
                 limit=5,
             )
         )
+        # 活动知识库链接优先于上述分散的目录猜测：先在真实仓库目录、配置文案
+        # 和语言包中建立活动记录，再把问题链接到唯一活动。分差不足或未命中时
+        # 不追加任何证据，由业务分析层返回缺口，避免用其他活动配置抢答。
+        try:
+            activity_records = load_activity_knowledge(
+                settings.code_repositories_root,
+                current["project"],
+                str(index_prepare_summary.get("fingerprint") or ""),
+            )
+            activity_link_payload = {"available": bool(activity_records)}
+            linked = link_activity(current["question"], activity_records)
+            if linked is not None:
+                known_files = list(
+                    dict.fromkeys(
+                        str(item.get("file") or "")
+                        for key in ("symbols", "configs", "references", "sql")
+                        for item in (project_index.get(key) or [])
+                        if str(item.get("file") or "")
+                    )
+                )
+                related_files = select_related_files(
+                    linked.record,
+                    known_files,
+                    limit=6,
+                )
+                activity_link_payload = {
+                    "available": True,
+                    "activity_id": linked.record.activity_id,
+                    "config_file": linked.record.config_file,
+                    "score": linked.score,
+                    "matched_terms": list(linked.matched_terms),
+                    "ambiguous": linked.ambiguous,
+                    "level_key": linked.record.level_key,
+                    "level_field": linked.record.level_field,
+                    "related_files": related_files,
+                }
+                if not linked.ambiguous:
+                    activity_link = linked
+                    evidence.append(
+                        {
+                            "project": current["project"],
+                            "type": "activity_kb_config",
+                            "query": "活动知识库配置",
+                            "file": linked.record.config_file,
+                            "line": 1,
+                            "line_start": 1,
+                            "line_end": 1,
+                            "content": "<?php",
+                            "score": 0.9,
+                        }
+                    )
+                    evidence.extend(
+                        {
+                            "project": current["project"],
+                            "type": "activity_kb_entry",
+                            "query": "活动知识库实现文件",
+                            "file": related_file,
+                            "line": 1,
+                            "line_start": 1,
+                            "line_end": 1,
+                            "content": "<?php",
+                            "score": 0.6,
+                        }
+                        for related_file in related_files
+                    )
+        except Exception as exc:
+            activity_link_payload = {"available": False}
+            warnings.append(f"活动知识库降级: {type(exc).__name__}")
         evidence = annotate_hits_with_concepts(evidence, concept_match_terms)
         deduplicated = _deduplicate_evidence(evidence)
         explicit_target_files = _select_explicit_target_files(
@@ -3088,6 +3189,12 @@ async def execute_diagnosis(task_id: str) -> None:
             if _needs_full_config_window(current["question"])
             else set()
         )
+        # 知识库链接到的活动配置必须整文件读取，即使问题问法没有命中
+        # `_needs_full_config_window` 的枚举词（例如“判定逻辑在哪里”）。
+        if activity_link is not None and not activity_link.ambiguous:
+            full_config_files.add(
+                activity_link.record.config_file.replace("\\", "/").casefold()
+            )
         # 完整窗口候选可能因证据预算被 `_select_diagnostic_evidence` 提前裁掉
         # （例如只命中配置文件首行的 `gameRanking`）。这类文件如果正是问题术语
         # 指向的配置，必须补回一条最小证据项并重新整文件读取，否则名次表和
@@ -3138,7 +3245,11 @@ async def execute_diagnosis(task_id: str) -> None:
                         for token in ("每个", "所有", "全部", "列出", "分别", "各等级")
                     )
                 )
-                if needs_full_for_file or item.get("type") == "activity_service":
+                if needs_full_for_file or item.get("type") in {
+                    "activity_service",
+                    "activity_kb_config",
+                    "activity_kb_entry",
+                }:
                     # read_file 单次最多读取 1000 行，这里取允许的最大窗口。
                     # 服务文件需要完整读取才能在任意位置找到 `existsByVol` 这类
                     # 防重方法和数据库模型读取。
@@ -3292,6 +3403,7 @@ async def execute_diagnosis(task_id: str) -> None:
                 "term_search": term_search_summary,
                 "retrieval_channels": retrieval_channel_summaries,
                 "symbol_persistence": symbol_sync_summary,
+                "activity_link": dict(activity_link_payload),
             },
             "evidence": deduplicated,
             "symbols": symbol_summary["symbols"],

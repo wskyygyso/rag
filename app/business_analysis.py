@@ -14,6 +14,7 @@ from app.domain.diagnosis.analyzers.common import (
 from app.domain.diagnosis.analyzers.configuration import (
     _configuration_fact_conclusion,
     _configuration_literal_facts,
+    activity_decision_source_facts,
     execution_source_facts,
 )
 from app.domain.diagnosis.analyzers.activity import _analyze_spaceship_fragments
@@ -46,6 +47,29 @@ from app.query_understanding import detect_semantic_concepts
 from app.question_type import QuestionType, asks_member_count, classify_question
 
 
+def _unresolved_activity_name(
+    question: str,
+    activity_link: Dict[str, Any],
+) -> str:
+    """识别知识库未能链接的显式中文活动名。
+
+    参数:
+        - `question`：用户原始业务问题，类型为 `str`。
+        - `activity_link`：工作流写入的实体链接摘要，类型为 `Dict[str, Any]`；
+          `available` 表示知识库是否成功构建，`ambiguous` 表示分差不足。
+
+    Returns:
+        问题中 `X活动` 形式的未链接活动名；知识库不可用、已成功链接或问题未
+        显式点名活动时返回空字符串。该名称只用于报告缺口，不参与事实生成。
+    """
+    if not activity_link.get("available"):
+        return ""
+    if activity_link.get("activity_id") and not activity_link.get("ambiguous"):
+        return ""
+    match = re.search(r"([\u4e00-\u9fff]{2,12})活动", question or "")
+    return match.group(1) if match else ""
+
+
 def build_deterministic_findings(
     question: str,
     result: Dict[str, Any],
@@ -72,9 +96,40 @@ def build_deterministic_findings(
         concept.name for concept in detect_semantic_concepts(question)
     }
     history_facts = analyze_history_events(lines, history_events)
+    # 显式类名只在通用分支填充；知识库链接或缺口分支提前返回时也要保证
+    # 后续报告组装能安全读取该变量。
+    explicit_classes: list[str] = []
+    activity_link = retrieval_plan.get("activity_link") or {}
+    unresolved_activity = _unresolved_activity_name(question, activity_link)
     if history_facts:
         facts = history_facts
         topic = "功能版本历史"
+        explicit_topic = False
+    elif unresolved_activity:
+        # 知识库明确未能把“X活动”链接到唯一活动时，禁止继续读取证据中的
+        # 其他活动配置；否则未知活动会被答成恰好同在证据窗口的活动数值。
+        return {
+            "conclusion": "",
+            "facts": [],
+            "evidence_refs": [],
+            "uncertainties": [
+                f"未在项目知识库中定位到活动「{unresolved_activity}」，"
+                "已停止用其他活动配置推断。",
+                "请确认活动中文名是否出现在配置、语言包或后台文案中。",
+            ],
+            "gap": True,
+        }
+    elif (
+        decision_facts := activity_decision_source_facts(
+            lines,
+            question,
+            activity_link,
+        )
+    ):
+        facts = decision_facts
+        topic = "等级判定入口"
+        # 判定入口事实已经包含类名、方法名和配置路径，不需要再套用显式目标类
+        # 的通用段落，避免结论出现“等级判定入口包括 `等级判定入口为 …`”。
         explicit_topic = False
     elif (
         retrieval_support.get("grounded") is False
@@ -118,6 +173,15 @@ def build_deterministic_findings(
             }
             or asks_member_count(question)
             or mentions_config_key
+            # 活动起止时间来自活动配置的 `stime`/`etime`，属于配置取值，
+            # 不能因为“什么时候开始”的问法被当成流程或历史问题。
+            or bool(
+                re.search(
+                    r"活动.*(?:开始|结束|起止)"
+                    r"|(?:开始|结束|开放|截止).*(?:时间|日期)",
+                    question,
+                )
+            )
         )
         # VIP/贵族奖品分析器会把手里的 `PrizeModel` 常量翻译成“贵族卡 x1”
         # 这类业务名称，比通用配置枚举只输出常量名更可读。问题明确问“奖品/
@@ -141,7 +205,8 @@ def build_deterministic_findings(
         # 明确点了等级/阶段，逐级配置图能同时给出名称、门槛和奖励，比只取
         # 同文件散落字面量更完整。
         level_intent = any(
-            token in question for token in ("等级", "档位", "级别", "阶段")
+            token in question.casefold()
+            for token in ("等级", "档位", "级别", "阶段", "vip")
         )
         enumeration_facts = (
             configuration_enumeration_facts(
@@ -158,6 +223,36 @@ def build_deterministic_findings(
             )
             else []
         )
+        # 问题以中文活动名开头时，该名称必须真实出现在证据里；否则当前候选
+        # 属于其他活动。宁可报告缺口，也不能拿别的活动等级表作答。
+        activity_prefix = re.match(r"[\u4e00-\u9fff]{4,}", question.strip())
+        if enumeration_facts and activity_prefix:
+            # 去掉“测试环境/每个/当前”这类问法外壳，剩下的前四个字才当作
+            # 活动名；若剩余部分仍是“等级/阶段/奖励”等泛化词，则不启用
+            # 名称门控，避免把正常的通用枚举问题误判成缺口。
+            name_candidate = re.sub(
+                r"^(?:测试环境|正式环境|生产环境|线上环境|当前|所有|每个|全部"
+                r"|各个|活动|中|里|下)+",
+                "",
+                activity_prefix.group(0),
+            )
+            # 问题开头的连续中文会把“游戏榜第/家族城堡前”这类问法结构一起
+            # 截进来；去掉尾部序号词后再判断是否真的是活动名，避免把
+            # “游戏榜第 6 名”误判成需要四个字活动名的证据缺口。
+            name_candidate = re.sub(
+                r"(?:第|前|中|里|下|的|共|有|是|为|多|少|几|个|名|档|级|轮)+$",
+                "",
+                name_candidate,
+            )
+            generic_head = any(
+                name_candidate.startswith(token)
+                for token in ("每个", "等级", "阶段", "奖励", "门槛",
+                              "环境", "测试", "所有", "全部", "各个")
+            )
+            if not generic_head and len(name_candidate) >= 4:
+                evidence_text = " ".join(line.content for line in lines)
+                if name_candidate[:4] not in evidence_text:
+                    enumeration_facts = []
         # 用户明确追问“每个等级/档位的门槛”却没有解析出逐级配置时，继续回退
         # 到任意配置字面量会把其他活动的数值当成答案。这里直接报告证据缺口，
         # 并标记 `gap` 让上层跳过 AI 补充，避免模型继续输出无关活动。
@@ -318,6 +413,7 @@ def build_deterministic_findings(
             "conclusion": "",
             "facts": [],
             "evidence_refs": [],
+            "gap": True,
             "uncertainties": [f"未从已检索源码中定位到{topic}对应的明确业务控制点"],
         }
 
@@ -347,6 +443,14 @@ def build_deterministic_findings(
         # 通用配置图已按等级/档位逐条解析，直接拼接已验证的配置行，不推断
         # 证据之外的奖励名称或业务标签。
         conclusion = configuration_enumeration_conclusion(facts)
+    elif topic == "等级判定入口":
+        # 知识库已把问题链接到活动，并定位到读取该活动等级配置的类和方法；
+        # 这里直接复用事实中的可读语句，不额外推断调用顺序。
+        conclusion = "；".join(
+            str(item.get("statement") or "") for item in facts
+        )
+        if conclusion and not conclusion.endswith("。"):
+            conclusion += "。"
     elif topic == "环境配置值":
         conclusion = configuration_env_value_conclusion(facts)
     elif topic == "活动配置值":
@@ -639,6 +743,9 @@ def build_deterministic_findings(
         "facts": facts,
         "evidence_refs": evidence_refs,
         "uncertainties": uncertainties,
+        # 有事实但拼不出可读结论时同样视为证据缺口，禁止返回空结论却不标记，
+        # 否则前端会把空字符串展示成“已确认”。
+        "gap": not conclusion.strip(),
     }
 
 

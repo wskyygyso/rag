@@ -1286,6 +1286,20 @@ class ConfigGraph:
                         for token in ("day_rank", "top_prizes", "rank_prizes")
                     ):
                         continue
+                    # 等级题的同文件普通奖品明细表（`prizes[100..502]`）没有
+                    # 等级门槛字段，不能靠更多条目压过真正的 `levels` 表。
+                    if (
+                        level_intent
+                        and not rank_intent
+                        and prefix_folded.strip().endswith("prizes")
+                        and not any(
+                            token in prefix_folded
+                            for token in ("level", "stage", "tier", "grade", "common")
+                        )
+                    ):
+                        # 纯奖品明细表不是等级表，等级题直接排除，避免用
+                        # `prizes[100..502]` 的商品编号冒充等级门槛。
+                        continue
                     is_level_group = (
                         any(
                             entry.key.casefold() in {"limit", "value", "target"}
@@ -1638,6 +1652,9 @@ class ConfigGraph:
         # 问题只问门槛时不再输出价格、折扣、图片等无关字段，让每个等级只剩
         # 用户真正要的数值；问题没有点名类别时保留全部可见字段。
         focus_keys = _question_focus_keys(question)
+        # 同时问“门槛和奖励”时不能只保留门槛键，否则奖励会被过滤掉。
+        if any(token in question for token in ("奖励", "奖品", "奖励内容")):
+            focus_keys = None
         # 用户点名“第 3 个等级”时只渲染该等级，避免把整张配置表当成答案。
         ordinal = _question_ordinal(question)
         levels = sorted(by_level)[:_MAX_ENUMERATED_LEVELS]

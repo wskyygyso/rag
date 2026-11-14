@@ -827,6 +827,11 @@ def scoped_config_evidence(
         }
         if concepts.intersection(root_segments):
             score += 40
+        # `VIP` 是业务侧对贵族体系的常用叫法，配置目录使用 `noble`。
+        # 这里只按领域同义词加分，帮助贵族门槛题稳定落在 `config/noble`，
+        # 不改变其他活动的排序。
+        if "vip" in question.casefold() and "noble" in root_segments:
+            score += 25
         # 展示词评分与锚点评分同一口径：只使用活动自身的中文文案和目录语义，
         # 让“公会寻宝”“游戏榜”这类营销名在多活动并列时仍能落到真实目录。
         score += _activity_alias_score(question, root_lines)
@@ -856,6 +861,18 @@ def scoped_config_evidence(
         )
         if term_hit:
             score += 15
+        # 目录名/配置文件名本身就是术语的一部分时（`noble` 出现在
+        # `NewNobleScoreServices`、`loveBall` 出现在 `LoveBallLogic`），说明
+        # 问题术语直接指向该配置。单独加权，避免中文展示词缺失时贵族、
+        # 家族城堡这类全局配置被其他活动抢占。
+        root_token = re.sub(
+            r"[^a-z0-9]", "", root.rsplit("/", 1)[-1].casefold()
+        )
+        if len(root_token) >= 4 and any(
+            root_token in re.sub(r"[^a-z0-9]", "", str(term).casefold())
+            for term in normalized_terms
+        ):
+            score += 25
         # 检索相关度是区分“同名背景下真正被问到活动”的稳定信号：多个活动
         # 都有送礼阶段、奖池和配置注释时，中文锚点会打平。这里取单行最高
         # 相关度而不是求和：完整配置窗口会把同活动几十行低相关度证据加总，
@@ -1739,6 +1756,123 @@ def _configuration_literal_facts(
             }
         )
     return facts
+
+
+_DECISION_INTENT_TOKENS = ("判定", "逻辑", "按什么字段", "怎么算", "如何计算", "入口", "在哪")
+_DECISION_FUNCTION_PATTERN = re.compile(r"\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)")
+_DECISION_CLASS_PATTERN = re.compile(r"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def activity_decision_source_facts(
+    lines: Sequence[EvidenceLine],
+    question: str,
+    activity_link: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """从已链接活动的实现代码提取等级判定入口。
+
+    参数:
+        - `lines`：当前诊断证据展开后的源码行，类型为 `Sequence[EvidenceLine]`；
+          需要包含活动知识库补入的服务/控制器完整内容。
+        - `question`：用户原始业务问题，类型为 `str`；只有询问判定逻辑、入口或
+          按什么字段计算时才生成事实。
+        - `activity_link`：实体链接摘要，类型为 `Optional[Dict[str, Any]]`；
+          需提供 `activity_id`、`level_key`、`level_field` 和 `related_files`。
+          为空时表示未链接，直接返回空列表，不能用其他活动服务代替。
+
+    Returns:
+        最多一条事实，说明读取 `<活动>.<等级键>` 的类与方法入口；找不到类、
+        方法或配置文件读取点时返回空列表，由上层报告证据缺口。事实只包含
+        类名、方法名和配置路径，不写入方法入参值或源码正文。
+    """
+    if not activity_link:
+        return []
+    if not any(token in (question or "") for token in _DECISION_INTENT_TOKENS):
+        return []
+    activity_id = str(activity_link.get("activity_id") or "").strip()
+    level_key = str(activity_link.get("level_key") or "").strip()
+    level_field = str(activity_link.get("level_field") or "").strip()
+    if not activity_id or not level_key:
+        return []
+    related = {
+        str(path or "").replace("\\", "/").casefold()
+        for path in (activity_link.get("related_files") or [])
+    }
+
+    def reads_level_config(item: EvidenceLine) -> bool:
+        """判断证据行是否读取链接活动等级配置。
+
+        参数:
+            - `item`：一条源码证据，类型为 `EvidenceLine`。
+
+        Returns:
+            行内出现 `Config::get('<活动>.<等级键>')`，或同时出现等级键与门槛
+            字段时返回 `True`。只做字面匹配，不执行 PHP 表达式。
+        """
+        content = item.content or ""
+        if re.search(
+            rf"Config::get\(\s*['\"]{re.escape(activity_id)}\s*\.\s*"
+            rf"{re.escape(level_key)}['\"]",
+            content,
+        ):
+            return True
+        if not re.search(rf"['\"]{re.escape(level_key)}['\"]", content):
+            return False
+        if not level_field:
+            return True
+        return bool(re.search(rf"['\"]{re.escape(level_field)}['\"]", content))
+
+    candidates = [
+        item
+        for item in sorted(lines, key=lambda row: (row.file, row.line))
+        if (not related or item.file.replace("\\", "/").casefold() in related)
+        and reads_level_config(item)
+    ]
+    for read in candidates[:3]:
+        file_lines = [item for item in lines if item.file == read.file]
+        class_item = next(
+            (
+                item
+                for item in file_lines
+                if _DECISION_CLASS_PATTERN.search(item.content or "")
+            ),
+            None,
+        )
+        methods = [
+            (item, match.group(1))
+            for item in file_lines
+            if (match := _DECISION_FUNCTION_PATTERN.search(item.content or ""))
+        ]
+        if class_item is None or not methods:
+            continue
+        class_name = _DECISION_CLASS_PATTERN.search(class_item.content or "").group(1)
+        # 入口方法优先选择名字包含等级键（`getLevel`），避免把初始化用的
+        # `initCfg` 当成用户询问的判定入口。
+        preferred = next(
+            (
+                (item, name)
+                for item, name in methods
+                if level_key.removesuffix("s") in name.casefold()
+            ),
+            None,
+        )
+        method_item, method_name = preferred or methods[0]
+        target = f"{activity_id}.{level_key}"
+        statement = (
+            f"等级判定入口为 `{class_name}::{method_name}`，按配置 `{target}` 的 "
+            f"`{level_field or '门槛'}` 门槛计算。"
+        )
+        return [
+            {
+                "category": "等级判定入口",
+                "statement": statement,
+                "evidence_refs": [
+                    read.ref,
+                    method_item.ref,
+                    class_item.ref,
+                ],
+            }
+        ]
+    return []
 
 
 def _configuration_fact_conclusion(facts: Sequence[Dict[str, Any]]) -> str:
