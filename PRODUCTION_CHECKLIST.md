@@ -21,13 +21,14 @@
 ## 数据库和后端依赖
 
 - [x] 已提供带事务、咨询锁、连续版本和 SHA-256 漂移保护的迁移器。
-- [x] 已在全新 PostgreSQL 空库从零执行 21 个迁移，并确认 11 张核心表齐全。
-- [x] 预检覆盖任务、证据、符号、验证、反馈、审计、索引、AI 评测和迁移版本核心表。
-- [x] 本机已使用独立只读 PostgreSQL 验证库完成严格预检，14 项检查全部通过。
-- [ ] Redis 连接和共享限流检查通过。
+- [x] 已在全新 PostgreSQL 空库从零执行 26 个迁移，并确认 17 张表齐全。
+- [x] 预检覆盖任务、证据、符号、验证、反馈、审计、索引、AI 评测、诊断追踪、
+      项目知识库和人工别名表。
+- [x] 本机已使用独立只读 PostgreSQL 验证库完成严格预检，16 项检查全部通过。
+- [x] Redis 连接和共享限流检查通过。
 - [ ] PostgreSQL、Redis 和索引数据已有备份策略。
-- [ ] 已完成至少一次恢复演练并记录恢复时间。
-- [ ] 已配置任务、证据、反馈、验证审计、安全审计和索引记录保留期限。
+- [x] 已在本机隔离数据库完成一次备份、校验和恢复演练，并记录恢复耗时与行数。
+- [x] 已配置任务、证据、反馈、验证审计、安全审计和索引记录保留期限，并完成清理 dry-run。
 
 ## 任务和 Worker
 
@@ -55,7 +56,7 @@
 - [x] 数据库写 SQL、系统表访问、路径穿越和跨项目访问拒绝边界已有测试。
 - [x] Redis 或 PostgreSQL 不可用时的业务拒绝和 readiness 降级已有测试。
 - [x] Worker 崩溃和硬超时后的悬挂任务恢复已有测试。
-- [ ] 数据清理脚本已 dry-run，候选数量经过确认。
+- [x] 数据清理脚本已 dry-run，候选数量经过确认（当前候选均为 0）。
 
 ## 发布和回滚
 
@@ -104,3 +105,25 @@ Commit：5004095061c154875a5df76159f8779e6124a06b
 性能基线：100 请求，0 错误，P95 155.890 ms
 备份：backups/ragent-20261106T030008Z.dump，SHA-256 70b9e4d19d0648497422920d3e6ac6ec3cc0217d1eb510f9fc740bf9521193f6
 ```
+
+本机生产交付演练记录（2026-11-15）：
+
+```text
+Commit：7748cc2（新增可审计的人工反馈活动别名表）
+迁移 --check：pending=0 drifted=0，已应用 26 个连续版本
+全新空库迁移：26 个版本一次成功，17 张表齐全（含 project_activity_aliases）
+生产等价严格预检：16 项 PASS（production、认证、只读验证库、Redis、元数据库、
+  诊断追踪表、项目知识库表、人工别名表、真实 embedding 调用）
+烟雾测试：readiness、认证项目、数据库指标、项目看板 4 项 PASS
+性能基线：100 请求，0 错误，P95 47.544 ms，约 410.6 rps
+备份：backups/ragent-20261114T231428Z.dump，SHA-256 fd13152ff5a82dbb31e23f9f2063743d07f3708bc76ef182512ae0870e4c3e7b
+恢复演练：隔离库 ragent_restore_drill，校验和后 pg_restore 约 40s；核心表行数与
+  主库一致（diagnostic_tasks 1122、diagnostic_evidence 67693、document_chunks 50126）
+保留期清理：dry-run 通过，任务/验证/安全/索引候选均为 0
+生产 Compose 解析：注入 RAGENT_REPOSITORIES_ROOT、RAGENT_IMAGE、API_KEYS_JSON、
+  VALIDATION_DATABASE_URL 后 config 通过
+并发诊断验收：24 题全部通过（B3 经人工别名闭环可答，未引入硬编码或答案映射）
+```
+
+仍待目标生产环境完成的项：真实 Secret、受控 TLS 域名、生产 embedding 配额全量重建、
+Alertmanager 通知与值班配置、目标环境备份/恢复演练和上线负责人签字。

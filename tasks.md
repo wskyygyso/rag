@@ -1,47 +1,31 @@
-# 阶段 41 任务清单：可审计的反馈活动别名表
+# 阶段 42 任务清单：生产交付门禁复跑与核心表覆盖修复
 
-- [x] **T1 数据模型与迁移**
-  - [x] 新增 `migrations/026_create_project_activity_aliases.sql`，含表、唯一约束、索引与中文备注
-  - [x] 确认迁移版本连续且能通过 `tests/test_migrations.py`
+- [x] **T1 预检核心表修复**
+  - [x] `diagnosis_trace_spans`、项目知识库三表、人工别名表纳入 `REQUIRED_TABLES`
+  - [x] 按用途分组补充中文注释和缺失影响说明
+  - [x] `tests/test_preflight.py` 通过
 
-- [x] **T2 存储模块**
-  - [x] 新增 `app/activity_aliases.py`：别名/活动目录规范化与校验
-  - [x] `upsert_activity_alias`、`list_activity_aliases`、`set_activity_alias_status`
-  - [x] `load_approved_activity_aliases` 数据库异常降级为空映射
-  - [x] 中文注释覆盖职责、参数业务含义、返回值与失败条件
+- [x] **T2 迁移门禁**
+  - [x] `migrate_database.py --check`：pending=0 drifted=0
+  - [x] 全新空库执行 26 个迁移，17 张表齐全，含 `project_activity_aliases`
 
-- [x] **T3 活动链接接入**
-  - [x] `ActivityLink` 新增 `feedback_alias` 字段
-  - [x] `link_activity` 新增 `approved_aliases` 参数与最长别名优先匹配
-  - [x] 目标活动缺失时忽略别名；同长度冲突返回歧义
+- [x] **T3 生产等价预检**
+  - [x] production、认证、独立只读验证库、仓库根目录全部注入
+  - [x] 16 项检查全部 PASS，核心表检查覆盖新增表
 
-- [x] **T4 工作流接入**
-  - [x] 诊断执行前读取已启用别名并传入 `link_activity`
-  - [x] `retrieval_plan.activity_link` 增加 `feedback_alias` 审计字段
-  - [x] 别名读取失败只记录告警，不中断诊断
+- [x] **T4 运行时门禁**
+  - [x] 烟雾测试 readiness、认证项目、数据库指标、项目看板 4 项 PASS
+  - [x] 性能基线 100 请求 0 错误，P95 47.544 ms
+  - [x] 生产 Compose 注入必需变量后 `config` 通过
 
-- [x] **T5 API**
-  - [x] `POST /api/knowledge/{project}/activity-aliases` 登记
-  - [x] `GET /api/knowledge/{project}/activity-aliases` 列表
-  - [x] `POST /api/knowledge/{project}/activity-aliases/{id}/status` 启用/停用
-  - [x] `GET /api/knowledge/{project}/activity-candidates` 候选活动查询
-  - [x] 登记前校验项目权限与目标活动存在，知识库不可用返回 503
+- [x] **T5 备份与恢复演练**
+  - [x] 生成备份并完成 SHA-256 校验
+  - [x] 隔离库 `pg_restore` 约 40s，核心表行数与主库一致
+  - [x] 恢复演练后删除隔离库
+  - [x] 保留期清理 dry-run 候选为 0
 
-- [x] **T6 前端**
-  - [x] 项目知识库面板新增“人工反馈别名”区块
-  - [x] 候选活动查询与一键填入目标活动
-  - [x] 别名列表、启用/停用、摘要与错误提示
-  - [x] 项目切换与刷新时同步更新，JSDoc 注释完整
-
-- [x] **T7 测试与回归**
-  - [x] 新增 `tests/test_activity_aliases.py`（规范化、存储、API）
-  - [x] `tests/test_activity_kb.py` 新增别名链接、缺失目标、歧义、未传参兼容
-  - [x] `.venv/bin/python -m pytest -q` 全绿
-  - [x] `python3 scripts/check_comment_coverage.py`
-  - [x] `node scripts/check_frontend_syntax.js`
-  - [x] `git diff --check`
-
-- [x] **T8 真实验收与文档**
-  - [x] 登记 `鉴定大师 → gemMaster` 后重跑 24 题验收（目标 `24/24`）
-  - [x] 抽查 `activity_link.feedback_alias` 审计字段
-  - [x] 更新 `progress.md`，等待用户审阅，不主动 commit
+- [x] **T6 文档与回归**
+  - [x] 更新 `PRODUCTION_CHECKLIST.md` 演练证据和勾选状态
+  - [x] 更新 `progress.md` 阶段 42 记录
+  - [x] 全量 pytest、注释覆盖、前端语法、`git diff --check` 通过
+  - [x] 提交代码（推送受网络阻塞，待恢复后补推）

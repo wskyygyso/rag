@@ -32,12 +32,12 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 | 项目 | 状态 |
 |---|---|
-| 当前阶段 | 阶段 41：可审计的反馈活动别名表 |
-| 总体进度 | 99%（阶段 0 至 41 已完成；生产 embedding 吞吐待补齐） |
+| 当前阶段 | 阶段 42：生产交付门禁复跑与核心表覆盖修复 |
+| 总体进度 | 100%（代码与本地生产门禁全部通过；目标环境外部验收见上线清单） |
 | 最近更新 | 2026-11-15 |
 | 当前负责人 | Codex |
-| 当前阻塞 | 生产 embedding 吞吐仍需更高配额；其余能力已具备生产交付条件 |
-| 下一步 | 进入阶段 42：生产交付前置检查与剩余阻塞收敛 |
+| 当前阻塞 | 仓库内无阻塞；生产 embedding 配额、真实 Secret/TLS 域名与 Alertmanager 属于目标环境前置条件 |
+| 下一步 | 目标环境发布演练：注入真实 Secret、执行迁移、烟雾测试、监控告警与备份验证 |
 
 ## 阶段进度
 
@@ -85,10 +85,60 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 | 39 | 项目活动知识库与实体链接 | 已完成（含真实 E2E） | 100% |
 | 40 | 扩展活动知识库结构化事实 | 已完成（含真实 E2E） | 100% |
 | 41 | 可审计的反馈活动别名表 | 已完成（含真实 E2E，24/24） | 100% |
+| 42 | 生产交付门禁复跑与核心表覆盖修复 | 已完成（本地生产等价演练） | 100% |
 
 ---
 
 ## 阶段性提交记录
+
+### 2026-11-15：阶段 42 生产交付门禁复跑与核心表覆盖修复
+
+#### 本次推进
+
+- `app/preflight.py`：
+  - `REQUIRED_TABLES` 补充 `diagnosis_trace_spans`、`project_glossary`、
+    `project_config_structure`、`project_verified_conclusions`、
+    `project_activity_aliases`，按用途分组补充中文注释；
+  - 修复“预检通过但 Trace、知识库或人工别名接口运行时报错”的生产风险。
+- 迁移门禁：`migrate_database.py --check` 返回 `pending=0 drifted=0`，26 个连续版本；
+- 全新空库演练：26 个迁移一次成功，17 张表齐全，`project_activity_aliases`
+  字段、唯一约束、状态约束和索引符合设计；
+- 生产等价严格预检：注入 `APP_ENV=production`、认证、独立只读验证库、仓库根目录
+  后 16 项全部 PASS，核心表检查覆盖新增 5 张表；
+- 运行时门禁：
+  - 烟雾测试 4 项 PASS（readiness、认证项目、数据库指标、项目看板）；
+  - 性能基线 100 请求、10 并发、0 错误，P95 47.544 ms，约 410.6 rps；
+  - 生产 Compose 在注入 `RAGENT_REPOSITORIES_ROOT`、`RAGENT_IMAGE`、
+    `API_KEYS_JSON`、`VALIDATION_DATABASE_URL` 后解析通过。
+- 备份与恢复演练：
+  - 生成 `backups/ragent-20261114T231428Z.dump`，SHA-256 校验通过；
+  - 隔离库 `ragent_restore_drill` 恢复约 40s，`diagnostic_tasks` 1122、
+    `diagnostic_evidence` 67693、`document_chunks` 50126，与主库一致；
+  - 演练后删除隔离库和验证库，不覆盖主库；
+  - 保留期清理 dry-run 通过，任务/验证/安全/索引候选均为 0。
+- 更新 `PRODUCTION_CHECKLIST.md`：迁移数、核心表数、预检项数、烟雾测试、性能
+  基线、备份恢复和清理结果全部刷新为 2026-11-15 演练记录，并列出仍待目标生产
+  环境完成的外部项。
+
+#### 本次验证
+
+- `.venv/bin/python -m pytest -q`：`414 passed`；
+- `python3 scripts/check_comment_coverage.py`：通过；
+- `node scripts/check_frontend_syntax.js`：通过；
+- `git diff --check`：通过；
+- 生产等价预检 16/16 PASS；烟雾测试 4/4 PASS；性能基线 `passed=true`。
+
+#### 当前状态与缺口
+
+- 仓库内功能、迁移、预检、烟雾、性能、备份恢复和清理门禁全部通过，具备生产
+  交付条件。
+- 目标环境仍需完成：真实 Secret 注入、受控 TLS 域名、生产 embedding 配额全量
+  重建、Alertmanager 通知与值班配置、目标环境备份恢复演练和上线签字。
+
+#### 下一步
+
+- 在目标生产环境按 `RELEASE.md` 和 `PRODUCTION_CHECKLIST.md` 执行发布演练；
+  若生产 embedding 配额受限，先保持确定性检索可用并记录索引时限偏差。
 
 ### 2026-11-15：阶段 41 可审计的反馈活动别名表
 

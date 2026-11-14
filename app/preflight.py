@@ -15,6 +15,7 @@ from app.llm_diagnosis import validate_llm_settings
 from app.settings import Settings
 
 REQUIRED_TABLES = {
+    # 诊断任务、证据、符号索引与验证审计：诊断主链路和发布门禁的最小依赖。
     "diagnostic_tasks",
     "diagnostic_evidence",
     "code_symbols",
@@ -27,6 +28,15 @@ REQUIRED_TABLES = {
     "document_index_runs",
     "ai_evaluation_runs",
     "schema_migrations",
+    # 诊断追踪表：Trace 查询接口直接依赖，缺少时报告页会返回 500。
+    "diagnosis_trace_spans",
+    # 自动派生知识库表：术语、配置结构和历史结论候选，缺少时知识库接口和
+    # 反馈闭环会降级或失败。
+    "project_glossary",
+    "project_config_structure",
+    "project_verified_conclusions",
+    # 人工反馈活动别名表：活动链接在诊断执行时读取，缺少时新版本无法启动完整链路。
+    "project_activity_aliases",
 }
 
 
