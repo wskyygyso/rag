@@ -91,6 +91,26 @@ Git 提交约定：每项工作完成后默认不主动 commit，先等待用户
 
 ## 阶段性提交记录
 
+### 2026-11-15：文档索引测试语料重新生成
+
+#### 本次推进
+
+- 新增 `scripts/generate_document_test_corpus.py`，按固定模板生成 13 篇中文业务
+  Markdown 文档，覆盖活动、VIP、提现、设备、配置、故障、FAQ、部署、数据字典、
+  安全与版本记录；重复生成内容一致，并只清理带生成标记的旧文档。
+- 新增 `tests/fixtures/document-test-repo/` 测试语料，供文档分块、索引和检索
+  回归使用；内容全部为合成示例，不含真实密钥或业务答案。
+- 新增 `tests/test_document_test_corpus.py` 5 项测试：生成确定性、路径越界拒绝、
+  清理边界、文档分块合法性和中文业务关键词覆盖。
+- `scripts/index_document_repository.py document-test-repo --dry-run` 扫描到
+  13 个文档分块。
+
+#### 本次验证
+
+- `.venv/bin/python -m pytest -q`：`419 passed`；
+- `python3 scripts/check_comment_coverage.py`：通过；
+- `git diff --check`：通过。
+
 ### 2026-11-15：阶段 42 生产交付门禁复跑与核心表覆盖修复
 
 #### 本次推进
