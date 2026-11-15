@@ -5,18 +5,17 @@ Secret Manager、Prometheus/Alertmanager 和对象存储备份属于部署环境
 
 ## 当前交付状态
 
-仓库内生产交付资产已于 2026-11-06 完成本机生产等价演练：锁定依赖镜像以非 root UID `10001` 启动，
-只读根文件系统、`cap_drop: ALL` 和 `no-new-privileges` 下 API 与 Worker 均可运行；全新空库可从 001 一次迁移到 021，
-11 张核心表齐全且无漂移；
-严格预检、认证烟雾测试、项目看板、数据库指标、诊断任务和性能基线均通过。
+仓库内生产交付资产已于 2026-11-15 完成本机生产等价演练：锁定依赖镜像以非 root UID `10001` 启动，
+只读根文件系统、`cap_drop: ALL` 和 `no-new-privileges` 下 API、诊断 Worker 和索引 Worker 均可运行；
+全新空库可从 001 一次迁移到 026，17 张表齐全且无漂移；
+生产等价严格预检 16 项、认证烟雾测试、项目看板、数据库指标、性能基线和 24 题诊断验收均通过。
 
 这不代表目标生产环境已经上线。正式放量前仍必须由责任人提供并验证真实生产域名与 TLS、Secret Manager、
 托管 PostgreSQL/Redis、独立只读业务库、只读代码仓库、Prometheus/Alertmanager、镜像仓库写权限、远端
 SBOM/Trivy 结果、隔离恢复演练和上线签字。上述外部项完成前，只能把当前版本定义为“可部署候选版本”。
 
-当前本机候选镜像：runtime commit `5004095061c154875a5df76159f8779e6124a06b`，镜像 digest
-`sha256:bf928ebe63ade155780bca95ea66e59edd16440cf445477e836072f6569f7578`。远端发布时仍以镜像仓库
-重新推送后的 digest 和 Release gate 结果为准。
+当前本机候选版本：runtime commit `9d73048`。远端发布时以镜像仓库重新推送后的 digest 和
+Release gate 结果为准；部署前逐项执行 `docs/PRODUCTION_DEPLOYMENT_FINAL_CHECKLIST.md`。
 
 ## 1. 发布前置条件
 

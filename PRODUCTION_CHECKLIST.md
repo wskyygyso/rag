@@ -5,6 +5,7 @@
 - `[x]`：仓库内能力、自动化检查或发布资产已完成并通过本地验收；
 - `[ ]`：必须在目标生产环境、Secret Manager 或发布平台上由责任人现场验证；
 - 本清单不能替代 `RELEASE.md` 中的备份、迁移、烟雾测试、监控和签字流程。
+- 部署当天按 `docs/PRODUCTION_DEPLOYMENT_FINAL_CHECKLIST.md` 的 G0–G8 顺序逐项执行并归档证据。
 
 ## 配置和安全
 
